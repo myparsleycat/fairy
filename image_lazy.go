@@ -78,6 +78,6 @@ func (l *lazyImage) decodeFull() (*Image, error) {
 	l.cache.mu.Lock()
 	wic := l.cache.wic
 	l.cache.mu.Unlock()
-	img, _, err := in.DecodePixels(imaging.Bound{}, 0, true, wic, nil)
+	img, _, err := in.DecodePixels(imaging.Bound{}, 0, 0, true, wic, nil)
 	return wrapImage(img), err
 }

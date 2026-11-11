@@ -126,7 +126,7 @@ func TestWICDecodeJPEGAppliesOrientation(t *testing.T) {
 	if _, _, ok := jpegDCTSize(517, 389, 96, 72); !ok {
 		t.Fatal("the bound does not exercise the DCT-scaled decode")
 	}
-	img, usedWIC, err := in.DecodePixels(bound, 0, false, DecodeWIC, nil)
+	img, usedWIC, err := in.DecodePixels(bound, 0, 0, false, DecodeWIC, nil)
 	if err != nil || !usedWIC {
 		t.Fatalf("WIC did not decode the eligible JPEG: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"maps"
 	"math"
 	"os"
 	"runtime"
@@ -25,6 +26,7 @@ type ImageCache struct {
 	bytes    int64
 	entries  map[imageKey]*list.Element
 	lru      list.List // of *imageEntry, most recently used first
+	evicted  map[imageKey]evictedImage
 	loading  map[imageKey]*imageLoad
 	reusable map[string]map[*imageEntry]struct{}
 	seq      uint64 // numbers loads and direct requests, in order
@@ -222,6 +224,14 @@ type imageEntry struct {
 	direct bool
 }
 
+// evictedImage remembers an evicted entry while something else may still
+// hold its image, as Glide keeps active resources apart from its memory cache.
+type evictedImage struct {
+	img        weak.Pointer[Image]
+	sourceSize image.Point
+	direct     bool
+}
+
 // Images is the default cache, with a budget of two screens of pixels for
 // the monitors attached when it is first used, between 64 and 256 MiB.
 var Images = NewImageCache(0, 0)
@@ -232,6 +242,17 @@ const (
 	maxImageEntries    = 1024
 	maxImageFailures   = 256
 )
+
+// maxAnimationKeepBytes caps the decoded frames one animation keeps, as
+// Firefox's image.animated.decode-on-demand.threshold-kb does.
+const maxAnimationKeepBytes = 20 << 20
+
+// animationKeepBytes is how much of the budget the frames of one animation may
+// take before it decodes them as it plays instead. Allowing the whole budget
+// let one animation evict every other image on screen.
+func animationKeepBytes(budget int64) int64 {
+	return min(budget/4, maxAnimationKeepBytes)
+}
 
 // autoImageBudget is two screens of RGBA pixels, as Android image loaders
 // size their memory caches.
@@ -270,6 +291,7 @@ func NewImageCache(maxBytes int64, workers int) *ImageCache {
 		maxBytes: maxBytes,
 		auto:     maxBytes <= 0,
 		entries:  map[imageKey]*list.Element{},
+		evicted:  map[imageKey]evictedImage{},
 		loading:  map[imageKey]*imageLoad{},
 		reusable: map[string]map[*imageEntry]struct{}{},
 		failed:   map[imageKey]error{},
@@ -397,6 +419,9 @@ func (c *ImageCache) requestAs(k imageKey, read func() ([]byte, error), direct b
 		}
 		return e.img, nil, nil
 	}
+	if img := c.revive(k, direct); img != nil {
+		return img, nil, nil
+	}
 	if p := c.loading[k]; p != nil {
 		for current := p; current != nil; current = current.dependency {
 			current.req, current.reqAt = c.seq, time.Now()
@@ -439,6 +464,11 @@ func (c *ImageCache) Forget(src string) {
 			removed = true
 		}
 	}
+	for k := range c.evicted {
+		if k.src == src {
+			delete(c.evicted, k)
+		}
+	}
 	for k := range c.failed {
 		if k.src == src {
 			c.removeFailure(k)
@@ -478,6 +508,16 @@ func (c *ImageCache) remove(el *list.Element) {
 	}
 	c.bytes -= e.img.data.ByteSize()
 	e.img.retired.Store(true)
+	c.evicted[e.key] = evictedImage{img: weak.Make(e.img), sourceSize: e.sourceSize, direct: e.direct}
+	if len(c.evicted) > maxImageEntries {
+		maps.DeleteFunc(c.evicted, func(_ imageKey, ev evictedImage) bool { return ev.img.Value() == nil })
+		for k := range c.evicted {
+			if len(c.evicted) <= maxImageEntries {
+				break
+			}
+			delete(c.evicted, k)
+		}
+	}
 }
 
 // evictTo drops the least recently used decodes until the cache holds at
@@ -575,24 +615,7 @@ func (c *ImageCache) decode(k imageKey, p *imageLoad, read func() ([]byte, error
 			c.failLazy(k.src, err)
 		}
 	} else {
-		c.evictTo(c.maxBytes - size)
-		for c.lru.Len() >= maxImageEntries {
-			c.remove(c.lru.Back())
-		}
-		e := &imageEntry{key: k, img: img, start: p.id, hit: p.id, sourceSize: sourceSize, direct: p.direct}
-		c.entries[k] = c.lru.PushFront(e)
-		if sourceSize != (image.Point{}) {
-			stills := c.reusable[k.src]
-			if stills == nil {
-				stills = make(map[*imageEntry]struct{})
-				c.reusable[k.src] = stills
-			}
-			stills[e] = struct{}{}
-		}
-		if k.sigma == 0 && p.direct {
-			c.latest[k.src] = k
-		}
-		c.bytes += size
+		c.insert(&imageEntry{key: k, img: img, start: p.id, hit: p.id, sourceSize: sourceSize, direct: p.direct})
 		if !k.lazy() {
 			time.AfterFunc(imagePruneDelay, func() { c.pruneSizes(k) })
 		}
@@ -605,6 +628,48 @@ func (c *ImageCache) decode(k imageKey, p *imageLoad, read func() ([]byte, error
 	wakeWindows()
 }
 
+// insert makes room for e within the budget and adds it as the most recently
+// used entry. c.mu is held.
+func (c *ImageCache) insert(e *imageEntry) {
+	size := e.img.data.ByteSize()
+	c.evictTo(c.maxBytes - size)
+	for c.lru.Len() >= maxImageEntries {
+		c.remove(c.lru.Back())
+	}
+	delete(c.evicted, e.key)
+	c.entries[e.key] = c.lru.PushFront(e)
+	if e.sourceSize != (image.Point{}) {
+		stills := c.reusable[e.key.src]
+		if stills == nil {
+			stills = make(map[*imageEntry]struct{})
+			c.reusable[e.key.src] = stills
+		}
+		stills[e] = struct{}{}
+	}
+	if e.key.sigma == 0 && e.direct {
+		c.latest[e.key.src] = e.key
+	}
+	c.bytes += size
+}
+
+// revive puts back an evicted image that is still referenced, so that an image
+// on screen is not decoded again when the images shown together do not fit
+// the budget. Evicting it freed nothing while the UI holds it. c.mu is held.
+func (c *ImageCache) revive(k imageKey, direct bool) *Image {
+	ev, ok := c.evicted[k]
+	if !ok {
+		return nil
+	}
+	img := ev.img.Value()
+	if img == nil {
+		delete(c.evicted, k)
+		return nil
+	}
+	img.retired.Store(false)
+	c.insert(&imageEntry{key: k, img: img, start: c.seq, hit: c.seq, sourceSize: ev.sourceSize, direct: ev.direct || direct})
+	return img
+}
+
 // failLazy records a failed decode of src on its lazy images too, so that
 // Load reports the error instead of an image that never draws.
 func (c *ImageCache) failLazy(src string, err error) {
@@ -612,6 +677,7 @@ func (c *ImageCache) failLazy(src string, err error) {
 		k := imageKey{src: src, Bound: imaging.Bound{Cover: cover}}
 		if el, ok := c.entries[k]; ok {
 			c.remove(el)
+			delete(c.evicted, k)
 			c.recordFailure(k, err)
 		}
 	}
@@ -680,7 +746,7 @@ func (c *ImageCache) decodeFit(k imageKey, p *imageLoad, read func() ([]byte, er
 			f()
 		})
 	}
-	decoded, usedWIC, err := in.DecodePixels(k.Bound, c.maxBytes, false, wic, run)
+	decoded, usedWIC, err := in.DecodePixels(k.Bound, animationKeepBytes(c.maxBytes), c.maxBytes, false, wic, run)
 	img = wrapImage(decoded)
 	if img != nil && len(img.data.FrameData) == 0 && in.Animation.Count == 0 && !in.AnimatedWebP && in.AnimErr == nil {
 		switch in.Format {

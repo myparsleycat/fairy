@@ -136,17 +136,20 @@ func Decode(data []byte, bound Bound, animBytes int64) (*Bitmap, error) {
 	if err != nil {
 		return nil, err
 	}
-	img, err := input.decode(bound, animBytes)
+	img, err := input.decode(bound, animBytes, animBytes)
 	if err != nil {
 		return nil, err
 	}
 	return input.finish(img), nil
 }
 
-func (in Input) decode(bound Bound, animBytes int64) (*Bitmap, error) {
+// decode keeps every frame of an animation whose frames fit keepBytes and
+// otherwise decodes its frames as it plays, or keeps only its first frame
+// when even playing would take more than animBytes.
+func (in Input) decode(bound Bound, keepBytes, animBytes int64) (*Bitmap, error) {
 	animErr := in.AnimErr
 	if animErr == nil && (in.Animation.Count >= 2 || in.AnimatedWebP) {
-		s := in.Animation.sink(bound, animBytes)
+		s := in.Animation.sink(bound, keepBytes)
 		if s.keepAll {
 			animErr = in.walkFrames(&s)
 			if animErr == nil && len(s.frames) != 0 {

@@ -122,14 +122,16 @@ func (in Input) finish(img *Bitmap) *Bitmap {
 }
 
 // DecodePixels decodes the image scaled within bound, as Decode does, or only
-// the first frame of an animation when firstOnly is set. wic, when non-nil,
+// the first frame of an animation when firstOnly is set. An animation keeps
+// all its frames only when they fit keepBytes; past that it decodes them as it
+// plays, within animBytes. wic, when non-nil,
 // is tried first for the formats wicDecoderClass accepts; if it returns nil
 // the Go decoders run instead, and usedWIC reports which produced img. run,
 // when non-nil, runs each attempt under a memory reservation of the given
 // bytes and reports false when it did not run the attempt, in which case
 // DecodePixels returns a nil image and no error. A nil run decodes on the
 // calling goroutine without reserving memory.
-func (in Input) DecodePixels(bound Bound, animBytes int64, firstOnly bool,
+func (in Input) DecodePixels(bound Bound, keepBytes, animBytes int64, firstOnly bool,
 	wic func(Input, Bound) *Bitmap, run func(int64, func()) bool,
 ) (img *Bitmap, usedWIC bool, err error) {
 	if wic != nil && wicDecoderClass(in) != nil {
@@ -147,14 +149,14 @@ func (in Input) DecodePixels(bound Bound, animBytes int64, firstOnly bool,
 		if firstOnly {
 			img, err = in.decodeFirst()
 		} else {
-			img, err = in.decode(bound, animBytes)
+			img, err = in.decode(bound, keepBytes, animBytes)
 		}
 		if err == nil {
 			img = in.finish(img)
 		}
 	}
 	if run != nil {
-		run(min(WorkBudget, in.work(bound, animBytes)+in.finishWork(bound)), f)
+		run(min(WorkBudget, in.work(bound, keepBytes)+in.finishWork(bound)), f)
 	} else {
 		f()
 	}
@@ -198,7 +200,7 @@ func (in Input) decodeFirst() (*Bitmap, error) {
 			}
 		}
 	}
-	return in.decode(Bound{}, 0)
+	return in.decode(Bound{}, 0, 0)
 }
 
 func (a animationInfo) sink(bound Bound, maxBytes int64) frameSink {
@@ -214,13 +216,13 @@ func (a animationInfo) sink(bound Bound, maxBytes int64) frameSink {
 
 // work caps the reservation, not the size of any individual image. An
 // unknown or larger decode reserves the entire budget and runs alone.
-func (in Input) work(bound Bound, animBytes int64) int64 {
+func (in Input) work(bound Bound, keepBytes int64) int64 {
 	if in.AnimErr != nil {
 		return WorkBudget
 	}
 	a := in.Animation
 	if a.Count > 0 {
-		s := a.sink(bound, animBytes)
+		s := a.sink(bound, keepBytes)
 		if !s.keepAll {
 			// The first frame, composited on the canvas, which a stream
 			// keeps; later frames decode while the animation plays.

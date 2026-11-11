@@ -56,7 +56,7 @@ func TestImageDecodeKeepsStillPixels(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				got, err := in.decode(bound, maxAnimBytes)
+				got, err := in.decode(bound, maxAnimBytes, maxAnimBytes)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -122,7 +122,7 @@ func TestImageDecodeReservationIncludesOrientation(t *testing.T) {
 	in.meta.orient = 6
 	in.Config.Width, in.Config.Height = 1, 2
 	raw := New(image.NewRGBA(image.Rect(0, 0, 2, 1)))
-	_, _, err = in.DecodePixels(Bound{}, 0, false,
+	_, _, err = in.DecodePixels(Bound{}, 0, 0, false,
 		func(Input, Bound) *Bitmap { return raw },
 		func(_ int64, f func()) bool {
 			f()

@@ -11,6 +11,7 @@ import (
 	"image/gif"
 	"image/png"
 	"io"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -105,6 +106,60 @@ func TestImageCacheEvictsOverBudget(t *testing.T) {
 	if _, ok := c.entries[imageKey{src: "b", Bound: imaging.Bound{W: 100, H: 100}}]; ok {
 		t.Error("least recently used image b was kept")
 	}
+}
+
+// An image evicted while the UI still holds it must come back without a new
+// decode; otherwise two images on screen that do not fit the budget together
+// evict and decode each other on every frame.
+func TestImageCacheRevivesEvictedImageInUse(t *testing.T) {
+	data := pngBytes(t, 10, 10) // 400 bytes decoded
+	synctest.Test(t, func(t *testing.T) {
+		c := NewImageCache(400, 1)
+		var reads atomic.Int32
+		read := func() ([]byte, error) {
+			reads.Add(1)
+			return data, nil
+		}
+		load := func(src string) *Image {
+			c.Load(src, 100, 100, read)
+			synctest.Wait()
+			return c.Load(src, 100, 100, read)
+		}
+
+		a := load("a")
+		if a == nil || load("b") == nil {
+			t.Fatal("images did not load")
+		}
+		before := reads.Load()
+		if got := c.Load("a", 100, 100, read); got != a {
+			t.Fatalf("evicted image in use was not revived: got %p, want %p", got, a)
+		}
+		if reads.Load() != before {
+			t.Error("reviving an image in use read its source again")
+		}
+		if a.retired.Load() {
+			t.Error("revived image is still marked retired")
+		}
+
+		load("b") // evicts a again
+		c.Forget("a")
+		if c.Load("a", 100, 100, read) != nil {
+			t.Error("image revived after Forget")
+		}
+		synctest.Wait()
+		a = nil
+
+		load("b")
+		runtime.GC()
+		before = reads.Load()
+		if c.Load("a", 100, 100, read) != nil {
+			t.Error("collected image was revived")
+		}
+		synctest.Wait()
+		if reads.Load() == before {
+			t.Error("collected image was not loaded again")
+		}
+	})
 }
 
 func TestImageCacheRejectsImageLargerThanBudget(t *testing.T) {
@@ -219,22 +274,37 @@ func TestImageCacheKeepsAnimationWithinBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	synctest.Test(t, func(t *testing.T) {
-		c := NewImageCache(4*side*side*4, 1)
-		read := func() ([]byte, error) { return buf.Bytes(), nil }
-		c.Sized("gif", 2*side, 2*side, FitContain, read)
+	read := func() ([]byte, error) { return buf.Bytes(), nil }
+	load := func(c *ImageCache, w float32) *Image {
+		c.Sized("gif", w, w, FitContain, read)
 		synctest.Wait()
-		if img := c.Sized("gif", 2*side, 2*side, FitContain, read); img == nil || img.Frames() != 1 {
+		img := c.Sized("gif", w, w, FitContain, read)
+		if img == nil {
+			t.Fatalf("GIF did not load: %v", c.SizedErr("gif", w, w, FitContain))
+		}
+		return img
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		// The two scaled frames take exactly the quarter of the budget an
+		// animation may keep.
+		c := NewImageCache(4*2*side*side*4, 1)
+		if img := load(c, 2*side); img.Frames() != 1 {
 			t.Fatal("large GIF did not fall back to its first frame")
 		}
-		c.Sized("gif", side, side, FitContain, read)
-		synctest.Wait()
-		img := c.Sized("gif", side, side, FitContain, read)
-		if img == nil {
-			t.Fatalf("GIF did not load: %v", c.SizedErr("gif", side, side, FitContain))
+		img := load(c, side)
+		if got := img.Frames(); got != 2 || img.data.Stream != nil {
+			t.Fatalf("GIF has %d frames (streamed %v), want 2 kept within the cache budget", got, img.data.Stream != nil)
 		}
-		if got := img.Frames(); got != 2 {
-			t.Fatalf("GIF has %d frames, want 2 within the cache budget", got)
+	})
+
+	synctest.Test(t, func(t *testing.T) {
+		// One byte short of keeping both full-size frames, but room to play them.
+		const frame = 2 * side * 2 * side * 4
+		c := NewImageCache(4*2*frame-1, 1)
+		img := load(c, 2*side)
+		if got := img.Frames(); got != 2 || img.data.Stream == nil {
+			t.Fatalf("GIF has %d frames (streamed %v), want 2 decoded as it plays", got, img.data.Stream != nil)
 		}
 	})
 }
@@ -537,6 +607,8 @@ func TestImageCacheBoundsMetadata(t *testing.T) {
 			c.Load(fmt.Sprint(n), 0, 0, read)
 			synctest.Wait()
 		}
+		// Evicted images can be revived until collected; nothing holds "0".
+		runtime.GC()
 		before := reads.Load()
 		c.Load("0", 0, 0, read)
 		synctest.Wait()
