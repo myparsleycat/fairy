@@ -37,6 +37,17 @@ var app struct {
 	instanceID string
 	onLaunch   func(Launch)
 	mutex      win.HANDLE
+
+	onSessionEnd func() // guarded by mu
+}
+
+// OnSessionEnd sets f to run when Windows ends the user session, at sign-out, restart or shutdown. f runs on the
+// UI thread while Main is running. Windows may end the process as soon as f returns, without Main returning, so f
+// must finish the cleanup that would otherwise follow Main. It may be called from any goroutine; nil removes it.
+func OnSessionEnd(f func()) {
+	app.mu.Lock()
+	app.onSessionEnd = f
+	app.mu.Unlock()
 }
 
 type appCall struct {
@@ -282,6 +293,14 @@ func appProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 		// Sent to top-level windows by taskkill and installers; the app window
 		// lives until Main returns.
 		return 0
+	case win.WM_ENDSESSION:
+		app.mu.Lock()
+		f := app.onSessionEnd
+		app.mu.Unlock()
+		if wp != 0 && f != nil {
+			f()
+		}
+		return 0
 	}
 	if h := apphost.Handler(msg); h != nil {
 		return h(wp, lp)
@@ -301,36 +320,35 @@ func instanceClass(id string) string { return "nahida.fairy.instance." + id }
 
 func findInstanceWindow(id string) win.HWND { return win.FindWindowByClass(instanceClass(id)) }
 
+// instanceWait bounds how long a further process waits for the first one. The first process has no instance window
+// while it starts up before Main and while it shuts down after Main returns.
+const instanceWait = 30 * time.Second
+
 // SingleInstance makes the program run once per user session. Call it before
 // Main. In the first process it returns true, and onLaunch later receives the
 // arguments of every further start on the UI thread. In a further process it
 // forwards the launch to the first one, allows it to take the foreground, and
-// returns false; the caller should then exit.
+// returns false; the caller should then exit. A further process waits while the
+// first one is not running Main, and returns true in its place once it has exited.
 func SingleInstance(id string, onLaunch func(Launch)) (bool, error) {
 	if id == "" {
 		return false, errors.New("fairy: SingleInstance needs an id")
 	}
-	h, existed, err := win.CreateMutex(`Local\nahida.fairy.` + id)
+	name := `Local\nahida.fairy.` + id
+	h, existed, err := win.CreateMutex(name)
 	if err != nil {
 		return false, fmt.Errorf("fairy: single instance mutex: %w", err)
 	}
-	if !existed {
-		app.mutex = h
-		app.instanceID = id
-		app.onLaunch = onLaunch
-		return true, nil
-	}
 	dir, _ := os.Getwd()
 	data, _ := json.Marshal(Launch{Args: os.Args, Dir: dir})
-	// The first process may still be starting up; give it a few seconds.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
+	deadline := time.Now().Add(instanceWait)
+	for existed {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false, errors.New("fairy: the running instance did not answer")
+		}
 		if target := findInstanceWindow(id); target != 0 {
 			win.AllowSetForegroundWindow(win.WindowProcessID(target))
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				break
-			}
 			timeoutMS := uint32((remaining + time.Millisecond - 1) / time.Millisecond)
 			cds := win.COPYDATASTRUCT{Data: launchMagic, Size: uint32(len(data)), Ptr: uintptr(unsafe.Pointer(&data[0]))}
 			reply, ok := win.SendMessageTimeout(target, win.WM_COPYDATA, 0, unsafe.Pointer(&cds), timeoutMS)
@@ -338,8 +356,21 @@ func SingleInstance(id string, onLaunch func(Launch)) (bool, error) {
 			if ok && reply != 0 {
 				return false, nil
 			}
+		} else {
+			// The mutex is gone once the first process has exited, since this handle was the only other one.
+			win.CloseHandle(h)
+			h, existed, err = win.CreateMutex(name)
+			if err != nil {
+				return false, fmt.Errorf("fairy: single instance mutex: %w", err)
+			}
+			if !existed {
+				break
+			}
 		}
 		time.Sleep(min(100*time.Millisecond, time.Until(deadline)))
 	}
-	return false, errors.New("fairy: the running instance did not answer")
+	app.mutex = h
+	app.instanceID = id
+	app.onLaunch = onLaunch
+	return true, nil
 }

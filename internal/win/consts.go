@@ -48,6 +48,7 @@ const (
 	WM_CLOSE                = 0x0010
 	WM_QUIT                 = 0x0012
 	WM_ERASEBKGND           = 0x0014
+	WM_ENDSESSION           = 0x0016
 	WM_SETTINGCHANGE        = 0x001A
 	WM_SETCURSOR            = 0x0020
 	WM_GETMINMAXINFO        = 0x0024

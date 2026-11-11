@@ -346,6 +346,12 @@ func CreateMutex(name string) (h HANDLE, existed bool, err error) {
 	return HANDLE(r), e == syscall.Errno(ERROR_ALREADY_EXISTS), nil
 }
 
+func CloseHandle(h HANDLE) {
+	if h != 0 {
+		_ = windows.CloseHandle(h)
+	}
+}
+
 func ClipboardSequence() uint32 {
 	r, _, _ := pGetClipboardSequenceNumber.Call()
 	return uint32(r)

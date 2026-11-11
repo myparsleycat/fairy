@@ -66,6 +66,10 @@ if err != nil {
 }
 ```
 
+A further start waits up to 30 seconds while the first instance is starting up or shutting down, and runs as the first instance if that one exits meanwhile.
+
+`OnSessionEnd` registers cleanup for sign-out, restart and shutdown. It runs on the UI thread, and Windows may end the process as soon as it returns, before `Main` returns.
+
 Windows, trays and menus are created on the UI thread (inside `Main`, a handler, or `Do`). Dialogs and message boxes (package `dialog`) block their caller and may be called from any goroutine. `Go` and `Do` run a function on the UI thread without and with waiting.
 
 Components that keep their own UI state, such as whether a menu is open, store it with `fairy.Local[T](key)`. `AutoFocus` focuses an element when it first appears, `OnBlur` runs when it loses focus, and `FocusReturn` hands focus to another element when the focused one leaves the tree.
