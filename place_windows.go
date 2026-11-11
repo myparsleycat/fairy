@@ -71,6 +71,7 @@ func (w *Window) windowRect() rectF {
 func (w *Window) placeAll() {
 	w.placePass++
 	w.hits = w.hits[:0]
+	w.chromeHits = w.chromeHits[:0]
 	w.bars = w.bars[:0]
 	w.focusables = w.focusables[:0]
 	if w.root == nil {
@@ -322,6 +323,11 @@ func (w *Window) animate(s *elState, p animProp, n int, eps float32, target [4]f
 
 func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	e.culled = true
+	e.inChrome, e.excludeChrome = e.windowChrome, e.chromeExclude
+	if p := e.parent; p != nil {
+		e.inChrome = e.inChrome || p.inChrome
+		e.excludeChrome = e.excludeChrome || p.excludeChrome
+	}
 	if e.style.Hidden {
 		return
 	}
@@ -380,6 +386,9 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if p := e.parent; p != nil && !p.xf.identity() {
 		// The clip comes from the parent's layout space.
 		h.clipInv, h.clipTurned = p.xf.inverse(), true
+	}
+	if e.inChrome {
+		w.chromeHits = append(w.chromeHits, len(w.hits))
 	}
 	w.hits = append(w.hits, h)
 	if e.focusable {

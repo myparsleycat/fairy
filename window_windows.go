@@ -157,6 +157,7 @@ type Window struct {
 	preciseWheelAt time.Time // last wheel message with a fraction of a notch
 
 	hits       []hit
+	chromeHits []int
 	bars       []scrollBar
 	focusables []*El
 	byID       map[uint64]*El
@@ -384,7 +385,15 @@ func NewWindow(opts Options) (*Window, error) {
 		w.scale = float32(d) / 96
 		wr := win.GetWindowRect(hwnd)
 		rc := w.outerRect(int32(opts.Width*w.scale), int32(opts.Height*w.scale), d)
-		win.SetWindowPos(hwnd, 0, wr.Left, wr.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+		win.SetWindowPos(
+			hwnd,
+			0,
+			wr.Left,
+			wr.Top,
+			rc.Right-rc.Left,
+			rc.Bottom-rc.Top,
+			win.SWP_NOZORDER|win.SWP_NOACTIVATE,
+		)
 	}
 
 	if opts.Dark {
@@ -788,7 +797,15 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		w.scale = float32(win.HIWORD(wp)) / 96
 		InvalidateMemos()
 		rc := (*win.RECT)(unsafe.Pointer(lp))
-		win.SetWindowPos(w.hwnd, 0, rc.Left, rc.Top, rc.Right-rc.Left, rc.Bottom-rc.Top, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+		win.SetWindowPos(
+			w.hwnd,
+			0,
+			rc.Left,
+			rc.Top,
+			rc.Right-rc.Left,
+			rc.Bottom-rc.Top,
+			win.SWP_NOZORDER|win.SWP_NOACTIVATE,
+		)
 		w.markDirty(dirtyResize)
 		w.invalidate()
 		return 0
@@ -811,7 +828,13 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			p.Rgrc[0].Top = top
 			if win.IsZoomed(w.hwnd) {
 				dpi := uint32(w.scale * 96)
-				p.Rgrc[0].Top += win.GetSystemMetricsForDpi(win.SM_CYFRAME, dpi) + win.GetSystemMetricsForDpi(win.SM_CXPADDEDBORDER, dpi)
+				p.Rgrc[0].Top += win.GetSystemMetricsForDpi(
+					win.SM_CYFRAME,
+					dpi,
+				) + win.GetSystemMetricsForDpi(
+					win.SM_CXPADDEDBORDER,
+					dpi,
+				)
 			}
 			return r
 		}
@@ -827,7 +850,11 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 	case win.WM_NCMOUSEMOVE:
 		if wp == win.HTMAXBUTTON && w.opts.Frameless {
 			if !w.ncTracking {
-				t := win.TRACKMOUSEEVENT{Size: uint32(unsafe.Sizeof(win.TRACKMOUSEEVENT{})), Flags: win.TME_LEAVE | win.TME_NONCLIENT, Hwnd: w.hwnd}
+				t := win.TRACKMOUSEEVENT{
+					Size:  uint32(unsafe.Sizeof(win.TRACKMOUSEEVENT{})),
+					Flags: win.TME_LEAVE | win.TME_NONCLIENT,
+					Hwnd:  w.hwnd,
+				}
 				win.TrackMouseEvent(&t)
 				w.ncTracking = true
 			}
@@ -1136,7 +1163,11 @@ func (w *Window) ncHitTest(lp uintptr) uintptr {
 		return win.HTNOWHERE
 	}
 	x, y := float32(p.X)/w.scale, float32(p.Y)/w.scale
-	for e := w.hitTest(x, y); e != nil; e = e.parent {
+	return w.captionHitTest(x, y)
+}
+
+func (w *Window) captionHitTest(x, y float32) uintptr {
+	for e := w.pointerHitTest(x, y); e != nil; e = e.parent {
 		if e.maxButton {
 			return win.HTMAXBUTTON
 		}

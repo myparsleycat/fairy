@@ -1,8 +1,12 @@
 package fairy
 
 import (
+	"math"
+	"runtime"
+	"strconv"
 	"testing"
 
+	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -12,6 +16,371 @@ func newPointerWindow(t *testing.T, view func() *El) *Window {
 	w.build()
 	w.placeAll()
 	return w
+}
+
+func TestWindowChromeModalInput(t *testing.T) {
+	for _, modals := range []int{0, 1, 2} {
+		t.Run(strconv.Itoa(modals), func(t *testing.T) {
+			var chromeClicks, excludedClicks, backdropClicks, wheelCalls int
+			w := newListWindow(t, nil)
+			w.tracking = true
+			var mods keyboard.Mods
+			w.scriptMods = &mods
+			w.opts.View = func(cx *Cx) *El {
+				for i := range modals {
+					cx.Overlay(Box(Input("", func(string) {}).Key("field").Size(80, 20).Top(40)).
+						Key(strconv.Itoa(i)).WFull().HFull().
+						OnClick(func() { backdropClicks++ }).OnWheel(func(WheelEvent) bool {
+						wheelCalls++
+						return true
+					}), nil)
+				}
+				return Col(Row(
+					Box(Box().Key("excluded-child").Size(40, 20).WindowChrome()).
+						Key("excluded").W(60).HFull().WindowChromeExclude().OnClick(func() { excludedClicks++ }),
+					Box().Key("drag").Grow(1).HFull(),
+					Box(Box().Size(20, 20)).Key("control").W(50).HFull().
+						OnClick(func() { chromeClicks++ }).MaximizeButton(),
+				).WFull().H(30).DragRegion().WindowChrome(), Box().Key("body").WFull().Grow(1)).WFull().HFull()
+			}
+			w.build()
+			w.placeAll()
+			if modals > 0 {
+				w.Focus("field")
+			}
+			focused := w.focused
+			if got := w.captionHitTest(90, 10); got != win.HTCAPTION {
+				t.Errorf("title bar hit = %d, want HTCAPTION", got)
+			}
+			if got := w.captionHitTest(170, 10); got != win.HTMAXBUTTON {
+				t.Errorf("control hit = %d, want HTMAXBUTTON", got)
+			}
+			w.onMouseMove(170, 10)
+			if !w.hovered(w.findKey("control")) {
+				t.Error("window control did not receive hover")
+			}
+			w.onButtonDown(170, 10, 0)
+			w.onButtonUp(170, 10, 0)
+			if chromeClicks != 1 || backdropClicks != 0 || excludedClicks != 0 {
+				t.Errorf(
+					"control click: chrome=%d backdrop=%d excluded=%d",
+					chromeClicks,
+					backdropClicks,
+					excludedClicks,
+				)
+			}
+			if w.focused != focused {
+				t.Error("window control changed keyboard focus")
+			}
+			w.onWheel(90, 10, -1, false, false)
+			if modals > 0 && wheelCalls != 1 {
+				t.Errorf("wheel calls = %d, want 1", wheelCalls)
+			}
+			w.onButtonDown(20, 10, 0)
+			w.onButtonUp(20, 10, 0)
+			if modals == 0 && (excludedClicks != 1 || backdropClicks != 0) {
+				t.Errorf("unblocked action: excluded=%d backdrop=%d", excludedClicks, backdropClicks)
+			}
+			if modals > 0 && (excludedClicks != 0 || backdropClicks != 1) {
+				t.Errorf("blocked action: excluded=%d backdrop=%d", excludedClicks, backdropClicks)
+			}
+			if got := w.pointerHitTest(90, 70); got != w.hitTest(90, 70) {
+				t.Error("body input bypassed normal layer order")
+			}
+		})
+	}
+}
+
+func TestWindowChromeLayout(t *testing.T) {
+	w := newListWindow(t, nil)
+	visible, enabled := true, true
+	w.opts.View = func(cx *Cx) *El {
+		cx.Overlay(Box().Key("backdrop").WFull().HFull(), nil)
+		bar := Row().Key("chrome").WFull().H(30).DragRegion()
+		if enabled {
+			bar.WindowChrome()
+		}
+		if visible {
+			bar.Child(Box().Key("excluded").W(60).HFull().Right(0).WindowChromeExclude())
+		}
+		return Col(bar).WFull().HFull()
+	}
+	frame := func() {
+		w.build()
+		w.placeAll()
+	}
+	frame()
+	if got := w.pointerHitTest(170, 10); got.key != "backdrop" {
+		t.Fatalf("excluded hit = %q, want backdrop", got.key)
+	}
+	w.width, w.scale = 600, 2
+	frame()
+	if got := w.captionHitTest(170, 10); got != win.HTCAPTION {
+		t.Errorf("resized title bar hit = %d, want HTCAPTION", got)
+	}
+	if got := w.pointerHitTest(270, 10); got.key != "backdrop" {
+		t.Errorf("resized excluded hit = %q, want backdrop", got.key)
+	}
+	visible = false
+	frame()
+	if got := w.captionHitTest(270, 10); got != win.HTCAPTION {
+		t.Errorf("removed exclusion hit = %d, want HTCAPTION", got)
+	}
+	enabled = false
+	frame()
+	if got := w.pointerHitTest(170, 10); got != w.hitTest(170, 10) {
+		t.Error("unmarked title bar changed normal hit testing")
+	}
+}
+
+func TestWindowChromeHitGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		view func() *El
+		x, y float32
+		want string
+	}{
+		{
+			name: "rounded corner",
+			view: func() *El { return Box().Key("chrome").Size(40, 40).Radius(20).WindowChrome() },
+			x:    2, y: 2, want: "backdrop",
+		},
+		{
+			name: "rounded center",
+			view: func() *El { return Box().Key("chrome").Size(40, 40).Radius(20).WindowChrome() },
+			x:    20, y: 20, want: "chrome",
+		},
+		{
+			name: "clipped child",
+			view: func() *El {
+				return Box(Box().Key("chrome").Size(80, 20).WindowChrome()).Size(40, 40).Clip()
+			},
+			x: 60, y: 10, want: "backdrop",
+		},
+		{
+			name: "rotated child",
+			view: func() *El {
+				return Box(Box().Key("chrome").Size(100, 20).Left(50).Top(40).Rotate(math.Pi / 2).WindowChrome())
+			},
+			x: 100, y: 5, want: "chrome",
+		},
+		{
+			name: "pass-through root",
+			view: func() *El { return Box().Key("chrome").Size(40, 40).WindowChrome().PassThrough() },
+			x:    20, y: 20, want: "backdrop",
+		},
+		{
+			name: "pass-through child",
+			view: func() *El {
+				return Box(Box().Key("control").Size(20, 20)).Size(40, 40).WindowChrome().PassThrough()
+			},
+			x: 10, y: 10, want: "control",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newListWindow(t, nil)
+			w.opts.View = func(cx *Cx) *El {
+				cx.Overlay(Box().Key("backdrop").WFull().HFull(), nil)
+				return Box(tc.view()).WFull().HFull()
+			}
+			w.build()
+			w.placeAll()
+			got := w.pointerHitTest(tc.x, tc.y)
+			if got == nil {
+				t.Fatal("pointer hit is nil")
+			}
+			if got.key != tc.want {
+				t.Errorf("pointer hit = %q, want %q", got.key, tc.want)
+			}
+		})
+	}
+}
+
+func TestWindowChromePreservesModalAndPopover(t *testing.T) {
+	var chromeClicks, backgroundClicks, dismissals int
+	value := ""
+	w := newListWindow(t, nil)
+	w.tracking = true
+	var mods keyboard.Mods
+	w.scriptMods = &mods
+	w.opts.View = func(cx *Cx) *El {
+		cx.Overlay(Box(
+			Input(value, func(s string) { value = s }).Key("field").Size(80, 20).Top(40),
+			Box().Key("anchor").Size(10, 10).Right(0).Bottom(0).Popover(
+				Box().Key("popup").Size(30, 20),
+				PopoverOptions{OnDismiss: func() { dismissals++ }},
+			),
+		).Key("modal").WFull().HFull().OnClick(func() { backgroundClicks++ }), func() { dismissals++ })
+		return Box(
+			Box().Key("control").Size(80, 30).WindowChrome().
+				OnClick(func() { chromeClicks++ }),
+		).WFull().HFull().OnPointerDown(func(PointerEvent) { backgroundClicks++ })
+	}
+	w.build()
+	w.placeAll()
+	w.Focus("field")
+	w.sel = &textSelection{}
+	selection := w.sel
+	w.onButtonDown(10, 10, 0)
+	w.onButtonUp(10, 10, 0)
+	if chromeClicks != 1 || backgroundClicks != 0 || dismissals != 0 {
+		t.Fatalf("chrome=%d background=%d dismissals=%d", chromeClicks, backgroundClicks, dismissals)
+	}
+	if w.sel != selection || w.focusKey != "field" {
+		t.Fatal("window control changed modal selection or focus")
+	}
+	w.sel = nil
+	w.onChar('a')
+	if value != "a" {
+		t.Errorf("modal input after window control = %q, want a", value)
+	}
+	w.onKeyDown(keyboard.KeyTab, false, "")
+	if w.focusKey != "field" {
+		t.Errorf("Tab left modal: focus = %q", w.focusKey)
+	}
+	w.onKeyDown(keyboard.KeyEscape, false, "")
+	if dismissals != 1 {
+		t.Errorf("Escape dismissals = %d, want 1", dismissals)
+	}
+}
+
+func TestWindowChromeHover(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		modal bool
+	}{
+		{name: "without modal"},
+		{name: "with modal", modal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var backgroundHovers, backgroundMoves, chromeHovers, chromeMoves int
+			w := newListWindow(t, nil)
+			w.tracking = true
+			w.opts.View = func(cx *Cx) *El {
+				focused := Box().Key("focused").Size(80, 20).Top(40).Focusable()
+				root := Box(Box(
+					Box().Key("control").Size(40, 20).Focusable().FocusHighlight(RGB(255, 0, 0)),
+					Box().Key("excluded").Size(40, 20).Left(40).
+						WindowChromeExclude().Focusable().FocusHighlight(RGB(255, 0, 0)),
+				).Size(80, 30).WindowChrome().OnHover(func(in bool) {
+					if in {
+						chromeHovers++
+					}
+				}).OnPointerMove(func(PointerEvent) bool { chromeMoves++; return false })).
+					WFull().HFull().OnHover(func(in bool) {
+					if in {
+						backgroundHovers++
+					}
+				}).OnPointerMove(func(PointerEvent) bool { backgroundMoves++; return false })
+				if tc.modal {
+					cx.Overlay(Box(focused).WFull().HFull(), nil)
+				} else {
+					root.Child(focused)
+				}
+				return root
+			}
+			w.build()
+			w.placeAll()
+			w.Focus("focused")
+			focused := w.keyTarget()
+			w.onMouseMove(10, 10)
+			w.flushPointerMove()
+			if chromeHovers != 1 || chromeMoves != 1 || !w.hovered(w.findKey("control")) {
+				t.Errorf("chrome hover: enters=%d moves=%d", chromeHovers, chromeMoves)
+			}
+			if backgroundHovers != 0 || backgroundMoves != 0 {
+				t.Errorf("non-chrome ancestor received enters=%d moves=%d", backgroundHovers, backgroundMoves)
+			}
+			if w.keyTarget() != focused {
+				t.Errorf("chrome hover changed keyboard focus to %q", w.focusKey)
+			}
+			w.onMouseMove(50, 10)
+			w.flushPointerMove()
+			if tc.modal {
+				if w.keyTarget() != focused || backgroundHovers != 0 || backgroundMoves != 0 {
+					t.Error("excluded hover bypassed the modal")
+				}
+			} else {
+				if w.focusKey != "excluded" || backgroundHovers != 1 || backgroundMoves != 1 {
+					t.Error("excluded hover did not retain normal propagation and focus")
+				}
+			}
+		})
+	}
+}
+
+func TestWindowChromePrecedesScrollbar(t *testing.T) {
+	clicks := 0
+	w := newListWindow(t, nil)
+	w.tracking = true
+	var mods keyboard.Mods
+	w.scriptMods = &mods
+	w.opts.View = func(cx *Cx) *El {
+		cx.Overlay(Col(Box().WFull().H(400)).Key("scroll").WFull().HFull().ScrollY(), nil)
+		return Col(Box().WFull().H(30).WindowChrome().OnClick(func() { clicks++ })).WFull().HFull()
+	}
+	w.build()
+	w.placeAll()
+	if len(w.bars) != 1 {
+		t.Fatalf("scrollbars = %d, want 1", len(w.bars))
+	}
+	bar := w.bars[0]
+	x, y := bar.thumb.x+bar.thumb.w/2, bar.thumb.y+bar.thumb.h/2
+	w.onButtonDown(x, y, 0)
+	if w.press == nil || w.press.bar != nil {
+		t.Fatal("scrollbar took the chrome press")
+	}
+	w.onButtonUp(x, y, 0)
+	if clicks != 1 {
+		t.Errorf("chrome clicks = %d, want 1", clicks)
+	}
+}
+
+func TestWindowChromeNativeHitTest(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if err := registerClass(); err != nil {
+		t.Fatal(err)
+	}
+	hwnd, err := win.CreateWindowEx(0, className, nil, win.WS_OVERLAPPEDWINDOW,
+		0, 0, 400, 300, 0, 0, win.GetModuleHandle(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		delete(windows, hwnd)
+		win.DestroyWindow(hwnd)
+	}()
+	w := newListWindow(t, nil)
+	w.hwnd, w.opts.Frameless = hwnd, true
+	w.opts.View = func(cx *Cx) *El {
+		cx.Overlay(Box().WFull().HFull(), nil)
+		return Col(Row(
+			Box().W(60).HFull().WindowChromeExclude(),
+			Box().Grow(1).HFull(),
+			Box().W(50).HFull().MaximizeButton().OnClick(func() {}),
+		).WFull().H(36).WindowChrome().DragRegion()).WFull().HFull()
+	}
+	w.build()
+	w.placeAll()
+	windows[hwnd] = w
+	for _, tc := range []struct {
+		name string
+		x, y int32
+		want uintptr
+	}{
+		{name: "caption", x: 90, y: 20, want: win.HTCAPTION},
+		{name: "maximize", x: 170, y: 20, want: win.HTMAXBUTTON},
+		{name: "excluded", x: 20, y: 20, want: win.HTCLIENT},
+		{name: "top resize", x: 90, y: 0, want: win.HTTOP},
+	} {
+		p := win.POINT{X: tc.x, Y: tc.y}
+		win.ClientToScreen(hwnd, &p)
+		lp := uintptr(uint32(uint16(p.X)) | uint32(uint16(p.Y))<<16)
+		if got := win.SendMessage(hwnd, win.WM_NCHITTEST, 0, lp); got != tc.want {
+			t.Errorf("%s hit = %d, want %d", tc.name, got, tc.want)
+		}
+	}
 }
 
 func TestPopoverAnchorPress(t *testing.T) {
@@ -98,7 +467,9 @@ func TestWheelHandler(t *testing.T) {
 		t.Fatalf("handler calls = %d, want 1", len(got))
 	}
 	ev := got[0]
-	if ev.DY != 0.05 || ev.DX != 0 || ev.LocalX != 30 || ev.LocalY != 20 || ev.W != 100 || ev.H != 60 || ev.Mods != keyboard.ModCtrl || !ev.Precise {
+	if ev.DY != 0.05 || ev.DX != 0 || ev.LocalX != 30 || ev.LocalY != 20 || ev.W != 100 || ev.H != 60 ||
+		ev.Mods != keyboard.ModCtrl ||
+		!ev.Precise {
 		t.Fatalf("event = %+v", ev)
 	}
 	if scroller.state.scrollY != 0 {
@@ -241,7 +612,12 @@ func TestMiddleAutoScroll(t *testing.T) {
 	w.onMouseMove(10, 40)
 	w.onButtonUp(10, 40, 2)
 	if w.autoScroll != nil || len(l.drags) != 2 || scroller.state.scrollY != 0 {
-		t.Fatalf("middle drag target: autoscroll %v, drags %+v, scrollY %v", w.autoScroll != nil, l.drags, scroller.state.scrollY)
+		t.Fatalf(
+			"middle drag target: autoscroll %v, drags %+v, scrollY %v",
+			w.autoScroll != nil,
+			l.drags,
+			scroller.state.scrollY,
+		)
 	}
 
 	// Held: the view follows the pointer and the release ends it.

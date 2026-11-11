@@ -223,6 +223,10 @@ type El struct {
 	focusable     bool
 	focus         focusProps
 	dragRegion    bool
+	windowChrome  bool
+	chromeExclude bool
+	inChrome      bool
+	excludeChrome bool
 	maxButton     bool
 	tooltip       string
 	tipTruncated  bool
@@ -420,7 +424,12 @@ func (e *El) PadEdges(top, right, bottom, left float32) *El {
 // box-sizing: border-box lays out a box. A set size includes both.
 func (e *El) padding() layout.Edges {
 	p, b := e.style.Padding, e.border
-	return layout.Edges{Top: p.Top + b.Top, Right: p.Right + b.Right, Bottom: p.Bottom + b.Bottom, Left: p.Left + b.Left}
+	return layout.Edges{
+		Top:    p.Top + b.Top,
+		Right:  p.Right + b.Right,
+		Bottom: p.Bottom + b.Bottom,
+		Left:   p.Left + b.Left,
+	}
 }
 
 // Margin sets equal margin on all sides.
@@ -727,6 +736,14 @@ func (e *El) Focusable() *El { e.focusable = true; return e }
 // DragRegion makes the element move the window when dragged (for custom title bars).
 // Interactive children (with click handlers or focusable) still receive input.
 func (e *El) DragRegion() *El { e.dragRegion = true; return e }
+
+// WindowChrome gives this subtree pointer priority over overlays without changing
+// its paint order or the keyboard focus scope. Use it for custom window controls.
+func (e *El) WindowChrome() *El { e.windowChrome = true; return e }
+
+// WindowChromeExclude keeps this subtree in normal hit-test order, even inside
+// WindowChrome. Use it for title bar actions that modal overlays must block.
+func (e *El) WindowChromeExclude() *El { e.chromeExclude = true; return e }
 
 // MaximizeButton marks the maximize button of a frameless window's own title
 // bar, so Windows 11 opens the snap layout menu when the pointer rests on it.

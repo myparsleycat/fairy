@@ -99,6 +99,20 @@ row.Role(fairy.RoleNone)                                                // left 
 
 Elements are identified by their position in the tree and their `Key`. Give list items a `Key` so that state, layout animations and exit transitions follow the item, and key containers whose content is replaced wholesale (pages, tabs).
 
+## Custom title bar input
+
+Mark a custom title bar with `DragRegion().WindowChrome()` to keep window movement
+available while an overlay is open. `WindowChrome` gives the subtree pointer input
+priority without raising its paint order or changing modal keyboard focus. Mark
+window control buttons with it too if they belong to a separate overlay.
+
+Use `WindowChromeExclude()` on title bar actions that must stay blocked by modal
+backdrops, such as activity badges or update notifications. The exclusion includes
+descendants and takes precedence over nested `WindowChrome` markers. Excluded
+areas use normal layer order; outside a modal they keep their usual behavior.
+Clipping, transforms, rounded corners and `PassThrough` still apply. Wheel input,
+file drops and accessibility retain normal layer order.
+
 ## Direct3D in the app
 
 A `Surface` draws with the device and context in its `SurfaceFrame`; wrap them with `f.GPU()` and `f.RenderTarget()` to use the `d3d` package:

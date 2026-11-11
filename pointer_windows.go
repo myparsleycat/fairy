@@ -11,26 +11,52 @@ import (
 func (w *Window) hitTest(x, y float32) *El {
 	for i := len(w.hits) - 1; i >= 0; i-- {
 		h := &w.hits[i]
-		if h.el.passThrough {
-			continue
-		}
-		cx, cy := x, y
-		if h.clipTurned {
-			cx, cy = h.clipInv.apply(x, y)
-		}
-		if !h.clip.contains(cx, cy) {
-			continue
-		}
-		// A scaled or turned element is hit in its own layout space.
-		px, py := x, y
-		if h.turned {
-			px, py = h.inv.apply(x, y)
-		}
-		if (rectF{h.x, h.y, h.w, h.h}).containsRounded(px, py, h.radii) {
+		if h.contains(x, y) {
 			return h.el
 		}
 	}
 	return nil
+}
+
+func (h *hit) contains(x, y float32) bool {
+	if h.el.passThrough {
+		return false
+	}
+	cx, cy := x, y
+	if h.clipTurned {
+		cx, cy = h.clipInv.apply(x, y)
+	}
+	if !h.clip.contains(cx, cy) {
+		return false
+	}
+	px, py := x, y
+	if h.turned {
+		px, py = h.inv.apply(x, y)
+	}
+	return (rectF{h.x, h.y, h.w, h.h}).containsRounded(px, py, h.radii)
+}
+
+func (w *Window) chromeHitTest(x, y float32) *El {
+	for i := len(w.chromeHits) - 1; i >= 0; i-- {
+		h := &w.hits[w.chromeHits[i]]
+		if !h.contains(x, y) {
+			continue
+		}
+		// An exclusion is a hole in the whole priority region, including its
+		// ancestors, so fall back to normal layers instead of trying them next.
+		if h.el.excludeChrome {
+			return nil
+		}
+		return h.el
+	}
+	return nil
+}
+
+func (w *Window) pointerHitTest(x, y float32) *El {
+	if e := w.chromeHitTest(x, y); e != nil {
+		return e
+	}
+	return w.hitTest(x, y)
 }
 
 type pressState struct {
@@ -131,7 +157,19 @@ func (w *Window) flushPointerMove() {
 	}
 	x, y := w.mouseX, w.mouseY
 	for _, e := range w.hoverPath {
-		if e.onPointerMove != nil && e.onPointerMove(PointerEvent{X: x, Y: y, LocalX: x - e.absX, LocalY: y - e.absY, W: e.w, H: e.h, Button: -1, Mods: w.mods()}) {
+		if e.onPointerMove != nil &&
+			e.onPointerMove(
+				PointerEvent{
+					X:      x,
+					Y:      y,
+					LocalX: x - e.absX,
+					LocalY: y - e.absY,
+					W:      e.w,
+					H:      e.h,
+					Button: -1,
+					Mods:   w.mods(),
+				},
+			) {
 			w.markDirty(dirtyPointer)
 		}
 	}
@@ -156,8 +194,10 @@ func (w *Window) onMouseLeave() {
 // updateHover resolves the hovered path at (x, y) and fires OnHover handlers.
 // It reports whether the path changed.
 func (w *Window) updateHover(x, y float32) bool {
+	top := w.pointerHitTest(x, y)
+	chrome := top != nil && top.inChrome && !top.excludeChrome
 	var path []*El
-	for e := w.hitTest(x, y); e != nil; e = e.parent {
+	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		path = append(path, e)
 	}
 	return w.setHoverPath(path)
@@ -193,7 +233,11 @@ func (w *Window) setHoverPath(path []*El) bool {
 		}
 	}
 	if changed {
-		w.syncHoverFocus(path)
+		focusPath := path
+		if len(path) > 0 && path[0].inChrome && !path[0].excludeChrome {
+			focusPath = nil
+		}
+		w.syncHoverFocus(focusPath)
 	}
 	if changed {
 		w.hideTooltip()
@@ -228,8 +272,11 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	if w.press != nil {
 		return
 	}
+	top := w.chromeHitTest(x, y)
+	chrome := top != nil
+
 	// Dismiss popovers from the top down until the press is inside one.
-	for i := len(w.layers) - 1; i >= 0; i-- {
+	for i := len(w.layers) - 1; !chrome && i >= 0; i-- {
 		l := w.layers[i]
 		if l.hidden || l.root.passThrough {
 			continue
@@ -263,7 +310,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	}
 	w.lastClickAt, w.lastClickX, w.lastClickY = now, x, y
 
-	if button == 0 {
+	if button == 0 && !chrome {
 		for i := len(w.bars) - 1; i >= 0; i-- {
 			b := &w.bars[i]
 			hitArea := rectF{b.track.x - 3, b.track.y - 3, b.track.w + 6, b.track.h + 6}
@@ -292,20 +339,24 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 		}
 	}
 
-	top := w.hitTest(x, y)
-	var focus *El
-	for e := top; e != nil; e = e.parent {
-		if e.focusable {
-			focus = e
-			break
-		}
+	if top == nil {
+		top = w.hitTest(x, y)
 	}
-	if button == 0 || focus != nil {
-		w.setFocusBy(focus, false)
+	if !chrome {
+		var focus *El
+		for e := top; e != nil; e = e.parent {
+			if e.focusable {
+				focus = e
+				break
+			}
+		}
+		if button == 0 || focus != nil {
+			w.setFocusBy(focus, false)
+		}
 	}
 
 	pe := PointerEvent{X: x, Y: y, Button: button, Clicks: w.clickCount, Mods: w.mods()}
-	for e := top; e != nil; e = e.parent {
+	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		if e.onPointerDown != nil {
 			pe.LocalX, pe.LocalY = x-e.absX, y-e.absY
 			pe.W, pe.H = e.w, e.h
@@ -314,7 +365,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 			break
 		}
 	}
-	if button == 2 && w.startAutoScroll(top, x, y) {
+	if !chrome && button == 2 && w.startAutoScroll(top, x, y) {
 		if w.dirty {
 			w.Update()
 		}
@@ -322,7 +373,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	}
 
 	selecting := false
-	if button == 0 {
+	if button == 0 && !chrome {
 		inInput := false
 		for e := top; e != nil; e = e.parent {
 			if e.kind == kindInput {
@@ -338,7 +389,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	}
 
 	p := &pressState{button: button, x: x, y: y, clicks: w.clickCount}
-	for e := top; e != nil; e = e.parent {
+	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		if button == 0 && e.kind == kindInput {
 			p.input = e.id
 			w.pressInput(e, x, y, w.clickCount)
@@ -358,7 +409,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 			break
 		}
 	}
-	for e := top; e != nil; e = e.parent {
+	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		if e.dragsWith(button) {
 			p.drag = e.id
 			p.cursor = e.cursor
@@ -402,7 +453,7 @@ func (w *Window) onButtonUp(x, y float32, button int) {
 	if p.el != 0 {
 		e := w.byID[p.el]
 		inside := false
-		for t := w.hitTest(x, y); t != nil; t = t.parent {
+		for t := w.pointerHitTest(x, y); t != nil; t = t.parent {
 			if t == e {
 				inside = true
 				break
@@ -425,7 +476,19 @@ func (w *Window) onButtonUp(x, y float32, button int) {
 				if p.inputMenu {
 					w.showInputMenu(e, x, y)
 				} else if e.onRightClick != nil {
-					e.onRightClick(PointerEvent{X: x, Y: y, LocalX: x - e.absX, LocalY: y - e.absY, W: e.w, H: e.h, Button: 1, Clicks: 1, Mods: w.mods()})
+					e.onRightClick(
+						PointerEvent{
+							X:      x,
+							Y:      y,
+							LocalX: x - e.absX,
+							LocalY: y - e.absY,
+							W:      e.w,
+							H:      e.h,
+							Button: 1,
+							Clicks: 1,
+							Mods:   w.mods(),
+						},
+					)
 					w.Update()
 				}
 			}
