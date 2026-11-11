@@ -136,6 +136,7 @@ Rules for the shared device:
 - Every handle a `Create*` method returns is the caller's to `Release`. Handles from `SurfaceFrame` and `GPU` are borrowed.
 - When the device is lost (driver update, GPU reset), windows make a new one with a higher `Generation`. Compare `GPU.Generation` or `SurfaceFrame.Generation` with the one your resources were made on and make them again. Retained surfaces draw again on the new device. Images from `SurfaceImage` and `NewTextureImage` stop drawing (`Image.Lost`); render them again.
 - `NewTextureImage` keeps a reference to the app's texture and shows its contents live, or copies them with `Copy`. `Image.Release` frees the texture at once; otherwise it is freed when the `Image` is garbage collected.
+- Drivers keep the system memory of released buffers and textures for reuse. After releasing many or large resources, such as when closing a 3D view, call `fairy.TrimDevice()` outside any Surface draw function or `UseDevice` to clear the pipeline state and return that memory (`IDXGIDevice3::Trim`). Fairy also trims when Windows reports low memory.
 
 The shared device requires feature level 10.1 or later and falls back to WARP when no hardware device is available. A standalone `d3d.CreateDevice` accepts feature level 10.0; `d3d.CreateDeviceWithOptions` sets a higher minimum and reports the adapter in `DeviceInfo`.
 

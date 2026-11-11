@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"log"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -49,12 +50,18 @@ func watchMemoryPressure() {
 // no window drew in its last frame and returns freed memory to the system.
 func trimImageMemory() {
 	trimImageCaches()
-	liveMu.Lock()
-	for w := range live {
-		w.Post(w.releaseIdleTextures)
-	}
-	liveMu.Unlock()
+	// Finish releasing textures before trimming, without rebuilding views.
+	doQuiet(func() {
+		liveMu.Lock()
+		defer liveMu.Unlock()
+		for w := range live {
+			w.releaseIdleTextures()
+		}
+	})
 	debug.FreeOSMemory()
+	if err := TrimDevice(); err != nil {
+		log.Printf("fairy: trim graphics device: %v", err)
+	}
 }
 
 // releaseIdleTextures releases the textures not drawn in the last painted

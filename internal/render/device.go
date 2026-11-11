@@ -41,6 +41,7 @@ var (
 	iidIDXGIFactory2     = com.MustGUID("50c83a1c-e072-4c48-87b0-3630fa36a6d0")
 	iidID3D11Texture2D   = com.MustGUID("6f15aaf2-d208-4e89-9ab4-489535d34f9c")
 	iidID3D10Multithread = com.MustGUID("9b7e4e00-342c-4106-a19f-4f2704f689f0")
+	iidIDXGIDevice3      = com.MustGUID("6007896c-3244-4afd-bf18-a6d3beda5023")
 )
 
 var (
@@ -85,6 +86,18 @@ func AcquireDevice() (*Device, error) {
 			shared.Gen, info.DriverType, info.Software, info.FeatureLevel, info.CreationFlags, adapter, info.VendorID, info.DeviceID, info.FallbackReason)
 	}
 	return shared, nil
+}
+
+// AcquireCurrentDevice retains the existing shared device without creating
+// one. It returns nil when no device exists or it was lost. Pair with Release.
+func AcquireCurrentDevice() *Device {
+	deviceMu.Lock()
+	defer deviceMu.Unlock()
+	if shared == nil || shared.lost {
+		return nil
+	}
+	shared.refs++
+	return shared
 }
 
 // CurrentGen returns the generation of the shared device, or 0 when none
@@ -152,6 +165,18 @@ func DeviceLockedByCurrentThread() bool {
 // Nested reports whether the lock is held more than once, by a caller that
 // holds it. The outer holder still uses the pipeline state.
 func (d *Device) Nested() bool { return d.depth > 1 }
+
+// Trim calls IDXGIDevice3::Trim so the driver frees the memory it keeps for
+// released resources. Hold the lock and clear the pipeline state first. It
+// does nothing when the device lacks IDXGIDevice3 (before Windows 8.1).
+func (d *Device) Trim() {
+	dxgi, err := com.QueryInterface(d.Dev.P, &iidIDXGIDevice3)
+	if err != nil {
+		return
+	}
+	com.Call(dxgi, 17) // IDXGIDevice3::Trim
+	com.Release(dxgi)
+}
 
 // MarkLost records that the device was removed. Holders release it and
 // acquire a new one.

@@ -2,9 +2,12 @@ package fairy
 
 import (
 	"image/color"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/myparsleycat/fairy/d3d"
+	"github.com/myparsleycat/fairy/internal/render"
 )
 
 func TestSurfaceNeedsDraw(t *testing.T) {
@@ -126,5 +129,49 @@ func TestTextureImageCopy(t *testing.T) {
 		if got := px.NRGBAAt(1, 1); got != c.want {
 			t.Errorf("pixel %v, want %v", got, c.want)
 		}
+	}
+}
+
+func TestTrimDevice(t *testing.T) {
+	// A fresh process isolates the shared device from other GPU tests.
+	if os.Getenv("FAIRY_TEST_TRIM_DEVICE_CHILD") != "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(exe, "-test.run=^TestTrimDevice$")
+		cmd.Env = append(os.Environ(), "FAIRY_TEST_TRIM_DEVICE_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("TrimDevice subprocess: %v\n%s", err, out)
+		}
+		return
+	}
+	if err := TrimDevice(); err != nil {
+		t.Fatalf("TrimDevice without a device: %v", err)
+	}
+	if gen := render.CurrentGen(); gen != 0 {
+		t.Fatalf("TrimDevice made a device, generation %d", gen)
+	}
+	dev, err := render.AcquireDevice()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = TrimDevice()
+	dev.Release()
+	if err != nil {
+		t.Fatalf("TrimDevice: %v", err)
+	}
+	if gen := render.CurrentGen(); gen != 0 {
+		t.Fatalf("TrimDevice retained the released device, generation %d", gen)
+	}
+	if err := UseDevice(func(GPU) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := TrimDevice(); err != nil {
+		t.Fatalf("TrimDevice: %v", err)
+	}
+	err = UseDevice(func(GPU) error { return TrimDevice() })
+	if err == nil {
+		t.Fatal("TrimDevice inside UseDevice returned nil")
 	}
 }

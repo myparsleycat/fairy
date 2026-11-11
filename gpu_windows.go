@@ -109,6 +109,40 @@ func UseDevice(f func(GPU) error) error {
 	})
 }
 
+// TrimDevice asks the graphics driver to free the memory it still keeps for
+// resources the app has released. Drivers often hold the system memory of
+// released vertex, index and staging buffers for reuse; call TrimDevice after
+// releasing many or large resources, such as when closing a 3D view, to
+// return it. Releasing every handle first is the caller's job: memory of
+// resources still referenced stays allocated.
+//
+// It may be called from any goroutine, but not inside a Surface draw function
+// or UseDevice, where it returns an error: trimming clears the pipeline state
+// the enclosing code is using. It takes the device lock (see UseDevice) and
+// clears the pipeline state and flushes the context before trimming. It
+// returns nil and does nothing when no device exists or the device does not
+// support trimming.
+func TrimDevice() error {
+	dev := render.AcquireCurrentDevice()
+	if dev == nil {
+		return nil
+	}
+	defer dev.Release()
+	err := lockedDevice(dev, func(dev *render.Device) error {
+		if dev.Nested() {
+			return errors.New("fairy: TrimDevice inside a Surface draw function or UseDevice")
+		}
+		dev.Ctx.ClearState()
+		dev.Ctx.Flush()
+		dev.Trim()
+		return nil
+	})
+	if dev.Lost() {
+		wakeWindows()
+	}
+	return err
+}
+
 // DeviceGeneration returns the Generation of the shared device, or 0 when no
 // device exists or it was lost and not yet made again.
 func DeviceGeneration() uint64 { return render.CurrentGen() }
