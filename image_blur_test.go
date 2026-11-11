@@ -87,6 +87,49 @@ func TestImageCacheBlurredSharesSourceAndBudget(t *testing.T) {
 	})
 }
 
+// A blur's small source must not become the image Sized shows while another
+// size of the same src loads.
+func TestImageCacheSizedFallbackSkipsBlurSource(t *testing.T) {
+	data := pngBytes(t, 96, 48)
+	synctest.Test(t, func(t *testing.T) {
+		c := NewImageCache(1<<20, 1)
+		c.SetNativeDecoders(false)
+		var reads atomic.Int32
+		var block atomic.Bool
+		hold := make(chan struct{})
+		defer close(hold)
+		read := func() ([]byte, error) {
+			reads.Add(1)
+			if block.Load() {
+				<-hold
+			}
+			return data, nil
+		}
+
+		c.Sized("photo", 64, 64, FitContain, read)
+		synctest.Wait()
+		preview := c.Sized("photo", 64, 64, FitContain, read)
+		c.Blurred("photo", 16, 16, 1.5, read)
+		synctest.Wait()
+		if preview == nil || c.Blurred("photo", 16, 16, 1.5, read) == nil || reads.Load() != 1 {
+			t.Fatalf("preview and blur from one read: preview=%v, reads=%d", preview, reads.Load())
+		}
+
+		block.Store(true)
+		if got := c.Sized("photo", 128, 128, FitContain, read); got != preview {
+			w, h := got.Size()
+			t.Fatalf("Sized fallback = %dx%d, want the 64x32 preview", w, h)
+		}
+		c.mu.Lock()
+		c.remove(c.entries[imageKey{src: "photo", Bound: imaging.Bound{W: 64, H: 64}}])
+		c.mu.Unlock()
+		if got := c.Sized("photo", 128, 128, FitContain, read); got != nil {
+			w, h := got.Size()
+			t.Fatalf("Sized fallback after removing the preview = %dx%d, want nil", w, h)
+		}
+	})
+}
+
 func TestImageCacheBlurredValidationAndForgetWhileWaiting(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

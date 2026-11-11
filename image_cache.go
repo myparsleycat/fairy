@@ -58,6 +58,8 @@ type imageLoad struct {
 	started    bool
 	dependency *imageLoad
 	dependents map[*imageLoad]struct{}
+	// direct is false while the load was asked for only as the source of a blur (c.mu).
+	direct bool
 
 	mu       sync.Mutex
 	watchers map[chan<- *imageLoad]struct{}
@@ -215,6 +217,9 @@ type imageEntry struct {
 	start      uint64      // seq when its load started
 	hit        uint64      // seq of the last request for exactly this key
 	sourceSize image.Point // nonzero for directly decoded, reusable stills
+	// direct is false for a blur's source that nothing else asked for. Sized
+	// does not stand it in for another size, as it is often far smaller.
+	direct bool
 }
 
 // Images is the default cache, with a budget of two screens of pixels for
@@ -324,7 +329,8 @@ func (c *ImageCache) Load(src string, maxW, maxH int, read func() ([]byte, error
 // size that covers the box, so the image is not stretched up on screen. The
 // size is rounded up to steps of about √2, so that resizing the box reloads
 // the image only now and then; until a new size is ready, Sized returns the
-// size of src that finished loading last. A zero w or h is unlimited; with
+// size of src that finished loading last, other than one loaded only as the
+// source of Blurred. A zero w or h is unlimited; with
 // both zero it returns an image decoded at the size it is drawn, as Load does.
 func (c *ImageCache) Sized(src string, w, h float32, fit Fit, read func() ([]byte, error)) *Image {
 	c.mu.Lock()
@@ -372,25 +378,37 @@ func (c *ImageCache) load(k imageKey, read func() ([]byte, error)) *Image {
 
 // request returns the cached image, its pending load, or its error. c.mu is held.
 func (c *ImageCache) request(k imageKey, read func() ([]byte, error)) (*Image, *imageLoad, error) {
+	return c.requestAs(k, read, true)
+}
+
+// requestAs is request; direct is false when only a blur asks for k as its source.
+func (c *ImageCache) requestAs(k imageKey, read func() ([]byte, error), direct bool) (*Image, *imageLoad, error) {
 	c.resolveBudget()
 	c.seq++
 	if el, ok := c.entries[k]; ok {
 		c.lru.MoveToFront(el)
 		e := el.Value.(*imageEntry)
 		e.hit = c.seq
+		if direct && !e.direct {
+			e.direct = true
+			if _, ok := c.latest[k.src]; !ok && k.sigma == 0 {
+				c.latest[k.src] = k
+			}
+		}
 		return e.img, nil, nil
 	}
 	if p := c.loading[k]; p != nil {
 		for current := p; current != nil; current = current.dependency {
 			current.req, current.reqAt = c.seq, time.Now()
 		}
+		p.direct = p.direct || direct
 		return nil, p, nil
 	}
 	if err := c.failed[k]; err != nil {
 		c.touchFailure(k)
 		return nil, nil, err
 	}
-	p := &imageLoad{id: c.seq, key: k, done: make(chan struct{}), req: c.seq, reqAt: time.Now()}
+	p := &imageLoad{id: c.seq, key: k, done: make(chan struct{}), req: c.seq, reqAt: time.Now(), direct: direct}
 	c.loading[k] = p
 	go c.decode(k, p, read)
 	return nil, p, nil
@@ -452,7 +470,7 @@ func (c *ImageCache) remove(el *list.Element) {
 		delete(c.latest, e.key.src)
 		for cur := c.lru.Front(); cur != nil; cur = cur.Next() {
 			other := cur.Value.(*imageEntry)
-			if other.key.src == e.key.src && other.key.sigma == 0 {
+			if other.key.src == e.key.src && other.key.sigma == 0 && other.direct {
 				c.latest[e.key.src] = other.key
 				break
 			}
@@ -561,7 +579,7 @@ func (c *ImageCache) decode(k imageKey, p *imageLoad, read func() ([]byte, error
 		for c.lru.Len() >= maxImageEntries {
 			c.remove(c.lru.Back())
 		}
-		e := &imageEntry{key: k, img: img, start: p.id, hit: p.id, sourceSize: sourceSize}
+		e := &imageEntry{key: k, img: img, start: p.id, hit: p.id, sourceSize: sourceSize, direct: p.direct}
 		c.entries[k] = c.lru.PushFront(e)
 		if sourceSize != (image.Point{}) {
 			stills := c.reusable[k.src]
@@ -571,7 +589,7 @@ func (c *ImageCache) decode(k imageKey, p *imageLoad, read func() ([]byte, error
 			}
 			stills[e] = struct{}{}
 		}
-		if k.sigma == 0 {
+		if k.sigma == 0 && p.direct {
 			c.latest[k.src] = k
 		}
 		c.bytes += size

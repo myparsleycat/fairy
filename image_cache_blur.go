@@ -57,7 +57,7 @@ func (c *ImageCache) decodeBlur(k imageKey, p *imageLoad, read func() ([]byte, e
 	}
 	base := k
 	base.sigma = 0
-	src, pending, err := c.request(base, read)
+	src, pending, err := c.requestAs(base, read, false)
 	if pending != nil {
 		p.dependency = pending
 		if pending.dependents == nil {
