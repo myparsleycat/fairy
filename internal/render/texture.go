@@ -105,9 +105,10 @@ func CopyTexture(d *Device, tex d3d.Texture2D) (*Texture, error) {
 
 // Update replaces the pixels of a mutable texture with premultiplied RGBA.
 // Hold the device lock around it.
-func (t *Texture) Update(ctx d3d.Context, rgba []byte) {
+func (t *Texture) Update(d *Device, rgba []byte) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	ctx := d.Ctx
 	ctx.UpdateSubresource(t.tex, nil, unsafe.Pointer(&rgba[0]), uint32(t.Width*4), 0)
 	runtime.KeepAlive(rgba)
 	if t.mips {

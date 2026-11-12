@@ -130,7 +130,7 @@ func (w *Window) uploadImage(img *Image, n int) (*render.Texture, error) {
 			dev := w.r.Device()
 			runtime.LockOSThread()
 			dev.Lock()
-			t.tex.Update(dev.Ctx, pix)
+			t.tex.Update(dev, pix)
 			dev.Unlock()
 			runtime.UnlockOSThread()
 			t.shown = n

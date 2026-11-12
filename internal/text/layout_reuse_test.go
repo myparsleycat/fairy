@@ -14,7 +14,7 @@ import (
 
 type laidOut struct {
 	W, H  float32
-	Lines []dwrite.LineMetrics
+	Lines []LineMetrics
 	Runs  []string
 }
 
