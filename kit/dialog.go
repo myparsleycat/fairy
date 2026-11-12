@@ -1,6 +1,8 @@
 package kit
 
 import (
+	"slices"
+
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
 	"github.com/myparsleycat/fairy/motion"
@@ -14,6 +16,12 @@ type DialogProps struct {
 	Description string
 	Body        *fairy.El   // optional content under the description
 	Actions     []*fairy.El // buttons in the footer, right-aligned; the first has focus when the dialog opens
+	// LeadingActions are left-aligned in the footer, before Actions, such as a
+	// Delete button; when set, the first of them has focus instead.
+	LeadingActions []*fairy.El
+	// BodyKey identifies the scrolling body; change it when the body shows other
+	// content, such as another tab, so that it starts at the top.
+	BodyKey string
 	// Width is 384 when zero, or 320 with Size SizeSmall, as for a short
 	// confirmation.
 	Width float32
@@ -68,26 +76,46 @@ func dialog(p DialogProps, viewWidth, viewHeight float32) *fairy.El {
 	if closeButton {
 		head.MarginEdges(0, 28, 0, 0)
 	}
+	headBottom := float32(0)
+	if p.Body == nil {
+		headBottom = 16
+		// Without a body the head scrolls instead, so a long description cannot
+		// push the actions out of the window.
+		if viewHeight > 0 {
+			head.ScrollY()
+		}
+	}
+	head.PadEdges(16, 16, headBottom, 16)
 	radius := t.RadiusXl()
-	panel := t.Surface(fairy.Col(head), t.Popover).W(w).Pad(16).Gap(16).Radius(radius).Color(t.PopoverForeground).
+	panel := t.Surface(fairy.Col(head), t.Popover).W(w).Radius(radius).Color(t.PopoverForeground).
 		Ring(1, alpha(t.Foreground, 0.1)).Role(fairy.RoleDialog).Label(p.Title).
 		Enter(fairy.Transition{Scale: 0.95, Motion: motion.Popup}).
 		Exit(fairy.Transition{Scale: 0.95, Motion: motion.Popup}).
 		OnClick(func() {}) // keeps clicks inside the panel from reaching the backdrop
-	if viewHeight > 0 {
-		panel.MaxH(max(viewHeight-t.DialogTopInset-32, 1)).ScrollY()
-	}
 	if p.Body != nil {
-		panel.Child(p.Body)
+		// Only the body scrolls when the dialog is taller than the window, so the
+		// title and the actions stay in view.
+		body := fairy.Col(p.Body).Key(p.BodyKey).Pad(16)
+		if viewHeight > 0 {
+			body.ScrollY()
+		}
+		panel.Child(body)
 	}
-	if len(p.Actions) > 0 {
+	if viewHeight > 0 {
+		panel.MaxH(max(viewHeight-t.DialogTopInset-32, 1))
+	}
+	if len(p.Actions)+len(p.LeadingActions) > 0 {
+		buttons := append(append(slices.Clip(p.LeadingActions), fairy.Spacer()), p.Actions...)
 		// Focus starts in the dialog, on the first action unless the body
 		// asked for it first, so keyboard and screen reader users are not left
 		// on the control beneath it.
-		p.Actions[0].AutoFocus()
-		footer := fairy.Row(append([]*fairy.El{fairy.Spacer()}, p.Actions...)...).Gap(8).Pad(16).
-			MarginEdges(0, -16, -16, -16).BorderEdges(1, 0, 0, 0, t.Border).Fill(alpha(t.Muted, 0.5)).
-			Radii(0, 0, radius, radius)
+		if len(p.LeadingActions) > 0 {
+			p.LeadingActions[0].AutoFocus()
+		} else {
+			p.Actions[0].AutoFocus()
+		}
+		footer := fairy.Row(buttons...).Gap(8).Pad(16).
+			BorderEdges(1, 0, 0, 0, t.Border).Fill(alpha(t.Muted, 0.5)).Radii(0, 0, radius, radius)
 		panel.Child(footer)
 	}
 	if closeButton {
