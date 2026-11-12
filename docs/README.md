@@ -198,6 +198,7 @@ go run -tags fairydebug ./examples/kit
 | `github.com/myparsleycat/fairy/keyboard` | Keys, modifiers, key events and chords |
 | `github.com/myparsleycat/fairy/i18n` | Message catalog for i18next JSON resources |
 | `github.com/myparsleycat/fairy/icons/lucide` | Generated Lucide icons |
+| `github.com/myparsleycat/fairy/icons/lucide/catalog` | Lucide icons looked up by name |
 | `github.com/myparsleycat/fairy/d3d` | Direct3D 11 binding and `D3DCompile` for apps that draw 3D |
 | `github.com/myparsleycat/fairy/dialog` | Native file dialogs and message boxes |
 | `github.com/myparsleycat/fairy/tray` | Notification area icons and notifications |
@@ -209,7 +210,7 @@ The `internal` packages hold the Win32, COM, DirectWrite, renderer, Media Founda
 
 After editing `internal/render/shaders.hlsl`, run `go generate ./internal/render` to rebuild `shaders.bin`. A stale blob still works: the renderer then compiles the HLSL at startup.
 
-`icons/lucide` holds every Lucide icon and alias; the linker keeps only the icons a program references. To update to another lucide-react release, run:
+`icons/lucide` holds every Lucide icon and alias; the linker keeps only the icons a program references. `icons/lucide/catalog` looks icons up by kebab-case name for names chosen at run time, and links all of them. To update to another lucide-react release, run:
 
 ```bash
 go run ./cmd/genlucide -src path/to/node_modules/lucide-react
