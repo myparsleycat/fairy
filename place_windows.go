@@ -391,7 +391,10 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	}
 	r := rectF{e.absX, e.absY, ew, eh}
 	vis := r.intersect(clip)
-	if vis.empty() && (e.clip || !hasAbsoluteChild(e)) {
+	// Exiting children are drawn where they were, so a box that shrank to
+	// nothing as its last child left still has to draw them.
+	keep := !e.clip && (hasAbsoluteChild(e) || (ew <= 0 || eh <= 0) && w.ghostIn[e.id])
+	if vis.empty() && !keep {
 		w.placeCulled(e)
 		return
 	}

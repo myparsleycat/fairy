@@ -29,6 +29,13 @@ func (w *Window) collectGhosts() {
 		g.subs = exitingInside(old, nil)
 		w.ghosts = append(w.ghosts, g)
 	}
+	if w.ghostIn == nil {
+		w.ghostIn = map[uint64]bool{}
+	}
+	clear(w.ghostIn)
+	for _, g := range w.ghosts {
+		w.ghostIn[g.parent] = true
+	}
 }
 
 func newGhost(e *El) *ghost {

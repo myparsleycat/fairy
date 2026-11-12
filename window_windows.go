@@ -147,7 +147,8 @@ type Window struct {
 	prevByID  map[uint64]*El
 	layers    []*layer
 	ghosts    []*ghost
-	dt        float32 // seconds since the previous frame while animating
+	ghostIn   map[uint64]bool // ids of the elements ghosts are drawn in, as of the last build
+	dt        float32         // seconds since the previous frame while animating
 	lastFrame time.Time
 	animating bool
 	wakeAt    time.Time // earliest time a later frame was requested for; zero when none

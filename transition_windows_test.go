@@ -121,6 +121,34 @@ func TestNestedExitRuns(t *testing.T) {
 	}
 }
 
+// A box that shrinks to nothing as its last absolute child leaves, as a toast
+// stack does, stays placed so the child's exit is drawn.
+func TestExitInsideCollapsedBox(t *testing.T) {
+	open := true
+	var stack *El
+	w := newListWindow(t, nil)
+	w.opts.View = func(cx *Cx) *El {
+		stack = Box().W(100).H(0)
+		if open {
+			stack.H(40).Child(Box().Key("toast").Left(0).Right(0).Bottom(0).H(40).Exit(SlideY(40)))
+		}
+		return Box(stack).Size(200, 200)
+	}
+	w.build()
+	w.placeAll()
+	w.build()
+	w.placeAll()
+	open = false
+	w.build()
+	w.placeAll()
+	if len(w.ghosts) != 1 {
+		t.Fatalf("ghosts = %d, want the leaving child", len(w.ghosts))
+	}
+	if stack.culled {
+		t.Fatal("the emptied box is culled, so its leaving child is not drawn")
+	}
+}
+
 // FocusRing shows for focus the keyboard moved and for any focus of an
 // Input, as :focus-visible.
 func TestFocusVisible(t *testing.T) {
