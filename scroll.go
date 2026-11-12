@@ -1,10 +1,7 @@
 package fairy
 
 import (
-	"unsafe"
-
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -211,8 +208,7 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	} else {
 		ev.DY = -delta
 	}
-	lines := uint32(3)
-	win.SystemParametersInfo(win.SPI_GETWHEELSCROLLLINES, 0, unsafe.Pointer(&lines))
+	lines := wheelScrollLines()
 	// step is how far a notch scrolls a view of the given size. A setting of
 	// 0 lines scrolls nothing.
 	step := func(view float32) float32 {

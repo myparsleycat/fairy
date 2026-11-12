@@ -3,8 +3,6 @@ package fairy
 import (
 	"math"
 	"time"
-
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // Touch follows one contact, as browsers do on Windows. A touch on an element
@@ -144,7 +142,7 @@ func (w *Window) onTouchDown(id uint32, x, y float32, at time.Time) {
 		}
 		return
 	}
-	win.SetTimer(w.hwnd, timerTouch, uint32(touchLongPress.Milliseconds()))
+	w.setTimer(timerTouch, uint32(touchLongPress.Milliseconds()))
 }
 
 // touchPresses reports whether a touch at (x, y) goes straight to the mouse
@@ -181,7 +179,7 @@ func (w *Window) onTouchMove(id uint32, x, y float32, at time.Time) {
 		if dx*dx+dy*dy <= touchSlop*touchSlop {
 			return
 		}
-		win.KillTimer(w.hwnd, timerTouch)
+		w.killTimer(timerTouch)
 		if !w.startTouchPan(t, dx, dy) {
 			t.phase = touchDone
 			return
@@ -243,7 +241,7 @@ func (w *Window) onTouchUp(id uint32, x, y float32, at time.Time) {
 		w.onTouchMove(id, x, y, at)
 	}
 	w.touch = nil
-	win.KillTimer(w.hwnd, timerTouch)
+	w.killTimer(timerTouch)
 	switch t.phase {
 	case touchPressed:
 		w.onButtonUp(x, y, 0)
@@ -273,10 +271,10 @@ func (w *Window) onTouchCancel(id uint32) {
 		return
 	}
 	w.touch = nil
-	win.KillTimer(w.hwnd, timerTouch)
+	w.killTimer(timerTouch)
 	if t.phase == touchPressed && w.press != nil {
 		w.cancelPress()
-		win.ReleaseCapture()
+		w.releasePointer()
 	}
 	w.endTouchHover()
 }

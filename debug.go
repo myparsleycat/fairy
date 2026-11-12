@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // dirtyCause records why a view is built again, for FAIRY_DEBUG_FRAMES.
@@ -58,7 +57,7 @@ func init() { render.Verbose = debugFrames }
 
 // frameTimes is the time a frame spent in each phase.
 type frameTimes struct {
-	at                                 time.Duration // win.Ticks
+	at                                 time.Duration // monoTicks
 	view, prepare, layout, rows, place time.Duration
 	paint, record, present             time.Duration
 	builds                             int
@@ -68,13 +67,13 @@ type frameTimes struct {
 // mark starts timing a phase; lap adds the time since to d.
 func (w *Window) mark() {
 	if debugFrames {
-		w.ft.at = win.Ticks()
+		w.ft.at = monoTicks()
 	}
 }
 
 func (w *Window) lap(d *time.Duration) {
 	if debugFrames {
-		now := win.Ticks()
+		now := monoTicks()
 		*d += now - w.ft.at
 		w.ft.at = now
 	}

@@ -20,9 +20,9 @@ func (w *Window) updateIME() {
 	}
 	if editing {
 		w.caretOn = true
-		win.SetTimer(w.hwnd, timerCaret, caretBlinkMs)
+		w.setTimer(timerCaret, caretBlinkMs)
 	} else {
-		win.KillTimer(w.hwnd, timerCaret)
+		w.killTimer(timerCaret)
 	}
 }
 

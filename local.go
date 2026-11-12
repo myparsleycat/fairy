@@ -1,12 +1,8 @@
-//go:build windows
-
 package fairy
 
 import (
 	"runtime"
 	"sync"
-
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // Local returns state of type T kept under key in the window whose view is
@@ -48,7 +44,7 @@ func (w *Window) withBuildWindow(build func() *El) *El {
 	// another view on the same thread before returning.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	thread := win.GetCurrentThreadId()
+	thread := currentThreadID()
 	viewBuilds.Lock()
 	prev := viewBuilds.windows[thread]
 	viewBuilds.windows[thread] = w
@@ -69,7 +65,7 @@ func (w *Window) withBuildWindow(build func() *El) *El {
 // View. Components keep it for handlers that act on the window, such as
 // scrolling a row into view.
 func CurrentWindow() *Window {
-	thread := win.GetCurrentThreadId()
+	thread := currentThreadID()
 	viewBuilds.RLock()
 	w := viewBuilds.windows[thread]
 	viewBuilds.RUnlock()

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 const stateTTL = 3 // frames an element's state survives without being built
@@ -17,7 +16,7 @@ func (w *Window) renderFrame() {
 	}
 	// A minimized window draws nothing. Restoring it sends WM_PAINT, which
 	// resumes any animation.
-	if win.IsIconic(w.hwnd) {
+	if w.IsMinimized() {
 		return
 	}
 	if !w.r.HasTarget() && !w.resizeRenderer() {
@@ -25,7 +24,7 @@ func (w *Window) renderFrame() {
 	}
 	w.wakeAt = time.Time{}
 	start := time.Now()
-	ticks := win.Ticks()
+	ticks := monoTicks()
 	dt := w.frameDT(start)
 	w.lastFrame = start
 	w.ft = frameTimes{}
@@ -87,20 +86,20 @@ func (w *Window) renderFrame() {
 	if debugFrames {
 		st := w.r.Stats()
 		w.ft.record, w.ft.present = st.Record, st.Present
-		w.logFrame(win.Ticks()-ticks, st.Batches)
+		w.logFrame(monoTicks()-ticks, st.Batches)
 	}
 	w.frame++
 	switch {
-	case !win.IsWindowVisible(w.hwnd):
+	case !w.IsVisible():
 		// Hidden windows wait for the WM_PAINT that showing them sends.
 	case w.animating && occluded:
-		win.SetTimer(w.hwnd, timerAnim, hiddenFrameMs)
+		w.setTimer(timerAnim, hiddenFrameMs)
 	case w.animating && w.sizeMove:
-		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
+		w.setTimer(timerAnim, sizeMoveFrameMs)
 	case w.animating:
 		w.invalidate()
 	case !w.wakeAt.IsZero():
-		win.SetTimer(w.hwnd, timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
+		w.setTimer(timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
 	}
 	if !w.animating {
 		w.lastFrame = time.Time{}
@@ -120,7 +119,7 @@ func (w *Window) resizeRenderer() bool {
 			log.Printf("fairy: resize swap chain: %v", err)
 		}
 		w.resizeErr = true
-		win.SetTimer(w.hwnd, timerRecover, resizeRetryMs)
+		w.setTimer(timerRecover, resizeRetryMs)
 		return false
 	}
 	w.resizeErr = false
@@ -141,7 +140,7 @@ func (w *Window) newRenderer() (r *render.Renderer, err error) {
 		}
 	}()
 	composition := w.opts.DynamicBackdrop || w.backdrop != BackdropNone
-	r, err = render.New(uintptr(w.hwnd), w.width, w.height, composition)
+	r, err = render.New(w.viewHandle(), w.width, w.height, composition)
 	if err == nil || !composition {
 		return r, err
 	}
@@ -152,7 +151,7 @@ func (w *Window) newRenderer() (r *render.Renderer, err error) {
 		w.applyBackdrop(BackdropNone)
 		w.backdrop = BackdropNone
 	}
-	return render.New(uintptr(w.hwnd), w.width, w.height, false)
+	return render.New(w.viewHandle(), w.width, w.height, false)
 }
 
 // recreateRenderer replaces the renderer after the GPU device was lost. When a
@@ -172,7 +171,7 @@ func (w *Window) recreateRenderer() {
 	if err != nil {
 		w.recoverMs = min(max(w.recoverMs*2, 100), 2000)
 		log.Printf("fairy: cannot recreate renderer, retrying in %dms: %v", w.recoverMs, err)
-		win.SetTimer(w.hwnd, timerRecover, uint32(w.recoverMs))
+		w.setTimer(timerRecover, uint32(w.recoverMs))
 		return
 	}
 	w.recoverMs = 0

@@ -5,7 +5,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/edit"
 	"github.com/myparsleycat/fairy/internal/text"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -239,7 +238,7 @@ func (w *Window) paste(e *El, st *editState) bool {
 
 func isTypingKey(k keyboard.Key) bool {
 	return k == keyboard.KeySpace || (k >= '0' && k <= '9') || (k >= 'A' && k <= 'Z') ||
-		(k >= 0x60 && k <= 0x6F) || (k >= 0xBA && k <= 0xE2) || k == win.VK_PROCESSKEY
+		(k >= 0x60 && k <= 0x6F) || (k >= 0xBA && k <= 0xE2) || k == keyProcess
 }
 
 func (w *Window) undo(e *El, st *editState) {

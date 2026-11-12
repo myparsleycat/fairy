@@ -1,12 +1,8 @@
-//go:build windows
-
 package fairy
 
 import (
 	"sync"
 	"sync/atomic"
-
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // Point is a position or offset in logical pixels.
@@ -48,9 +44,7 @@ func (l *Live[T]) Set(v T) {
 	l.shownIn = nil
 	l.mu.Unlock()
 	for w := range ws {
-		if h := w.hwnd; h != 0 {
-			win.InvalidateRect(h, false)
-		}
+		w.redrawAsync()
 	}
 }
 

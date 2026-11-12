@@ -3,7 +3,6 @@ package fairy
 import (
 	"unicode/utf16"
 
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -43,7 +42,7 @@ func (w *Window) focusedEl() *El {
 func (w *Window) resetBlink() {
 	w.caretOn = true
 	if w.focusedEl() != nil {
-		win.SetTimer(w.hwnd, timerCaret, caretBlinkMs)
+		w.setTimer(timerCaret, caretBlinkMs)
 	}
 }
 
@@ -160,7 +159,7 @@ func (w *Window) onKeyDown(k keyboard.Key, repeat bool, text string) bool {
 	if k == keyboard.KeyEscape && ev.Mods == 0 {
 		if p := w.press; p != nil && p.dragging {
 			w.cancelPress()
-			win.ReleaseCapture()
+			w.releasePointer()
 			return true
 		}
 		if l := w.topLayer(); l != nil && l.onDismiss != nil {

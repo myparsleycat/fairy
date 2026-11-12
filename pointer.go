@@ -2,9 +2,6 @@ package fairy
 
 import (
 	"time"
-	"unsafe"
-
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // hitTest returns the topmost element under (x, y).
@@ -111,11 +108,7 @@ func (w *Window) coveredFrom(start int, x, y float32) bool {
 
 func (w *Window) onMouseMove(x, y float32) {
 	w.mouseX, w.mouseY, w.mouseIn = x, y, true
-	if !w.tracking && !w.ncHover {
-		t := win.TRACKMOUSEEVENT{Size: uint32(unsafe.Sizeof(win.TRACKMOUSEEVENT{})), Flags: win.TME_LEAVE, Hwnd: w.hwnd}
-		win.TrackMouseEvent(&t)
-		w.tracking = true
-	}
+	w.trackMouseLeave()
 	if w.autoScroll != nil {
 		w.autoScrollMove(x, y)
 		return
@@ -280,7 +273,7 @@ func (w *Window) setHoverPath(path []*El) bool {
 				if delay == 0 {
 					w.showTooltip()
 				} else {
-					win.SetTimer(w.hwnd, timerTip, delay)
+					w.setTimer(timerTip, delay)
 				}
 				break
 			}
@@ -337,7 +330,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	if w.touchPress {
 		near = touchSlop
 	}
-	if now-w.lastClickAt <= win.GetDoubleClickTime() && dx*dx+dy*dy <= near*near {
+	if now-w.lastClickAt <= doubleClickMs() && dx*dx+dy*dy <= near*near {
 		w.clickCount++
 	} else {
 		w.clickCount = 1
@@ -358,7 +351,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 				p.barStart = e.state.scrollX
 			}
 			w.press = p
-			win.SetCapture(w.hwnd)
+			w.capturePointer()
 			w.invalidate()
 			return
 		}
@@ -443,7 +436,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	}
 	p.sel = selecting && p.drag == 0 && p.input == 0
 	w.press = p
-	win.SetCapture(w.hwnd)
+	w.capturePointer()
 	if w.dirty {
 		w.Update()
 	} else {
@@ -460,7 +453,7 @@ func (w *Window) onButtonUp(x, y float32, button int) {
 		return
 	}
 	w.press = nil
-	win.ReleaseCapture()
+	w.releasePointer()
 	if p.bar != nil {
 		w.invalidate()
 		return
