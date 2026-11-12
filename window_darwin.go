@@ -115,8 +115,8 @@ func (w *Window) setCursor(c Cursor) {}
 func (w *Window) setPanCursor() { w.autoScroll.cursor = w.panCursor() }
 
 // popupMenu shows items as a native menu at window point (x, y) and waits
-// until it closes. It reports false when there is no window to show it in.
-func (w *Window) popupMenu(x, y float32, items []MenuItem) bool { return false }
+// until it closes.
+func (w *Window) popupMenu(x, y float32, items []MenuItem) {}
 
 // enableIME turns the input method on for the window or off.
 func (w *Window) enableIME(on bool) {}

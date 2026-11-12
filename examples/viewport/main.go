@@ -1,3 +1,5 @@
+//go:build windows
+
 // Command viewport drives a Direct3D surface the way a 3D model viewer does:
 // left drag turns the camera, right or middle drag pans, Shift+left drag
 // scales the model, the wheel zooms about the pointer, the pointer picks the

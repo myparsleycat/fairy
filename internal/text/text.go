@@ -547,11 +547,8 @@ func (l *Layout) LineMetrics() []LineMetrics {
 		return nil
 	}
 	ms := l.dl.LineMetrics()
-	out := make([]LineMetrics, len(ms))
-	for i, m := range ms {
-		out[i] = LineMetrics(m)
-	}
-	return out
+	// LineMetrics has dwrite.LineMetrics's layout.
+	return unsafe.Slice((*LineMetrics)(unsafe.Pointer(unsafe.SliceData(ms))), len(ms))
 }
 
 const offsetStride = 256

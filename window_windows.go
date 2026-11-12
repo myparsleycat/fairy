@@ -48,15 +48,11 @@ func (w *Window) systemClipboardText() (string, bool) { return win.ClipboardText
 func (w *Window) systemClipboardHasText() bool { return win.ClipboardHasText() }
 
 // popupMenu shows items as a native menu at window point (x, y) and waits
-// until it closes. It reports false when there is no window to show it in.
-func (w *Window) popupMenu(x, y float32, items []MenuItem) bool {
-	if w.hwnd == 0 {
-		return false
-	}
+// until it closes.
+func (w *Window) popupMenu(x, y float32, items []MenuItem) {
 	p := win.POINT{X: int32(x * w.scale), Y: int32(y * w.scale)}
 	win.ClientToScreen(w.hwnd, &p)
 	showMenu(w.hwnd, p.X, p.Y, items)
-	return true
 }
 
 func (w *Window) setSystemClipboardText(s string) bool { return win.SetClipboardText(w.hwnd, s) }

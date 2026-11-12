@@ -1,3 +1,5 @@
+//go:build windows
+
 // Command media shows the native surfaces: a Direct3D surface, video
 // playback and an embedded WebView2 browser.
 //
