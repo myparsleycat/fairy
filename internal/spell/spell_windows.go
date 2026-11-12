@@ -33,9 +33,6 @@ const (
 
 const suggestions = 5
 
-// Range identifies a misspelling by UTF-8 byte offsets, with End exclusive.
-type Range struct{ Start, End int }
-
 // defaultWorker runs the Windows spell checker on one goroutine locked to an
 // OS thread in the multithreaded apartment, so checks never wait on the UI
 // thread's message loop and the UI thread never runs one. Calls the UI thread

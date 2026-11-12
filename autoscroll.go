@@ -95,7 +95,7 @@ func (w *Window) autoScrollRelease() bool {
 	w.releasePointer()
 	// Capture may have suppressed the leave notification; the next move
 	// re-arms it so that leaving the window is noticed.
-	w.tracking = false
+	w.rearmMouseLeave()
 	if a.moved {
 		w.stopAutoScroll()
 	}

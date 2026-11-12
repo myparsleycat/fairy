@@ -7,17 +7,6 @@ import (
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
-// Progress is the state of a window's taskbar button progress bar.
-type Progress uint8
-
-const (
-	ProgressNone          Progress = iota // no progress bar
-	ProgressNormal                        // green bar at value
-	ProgressPaused                        // yellow bar at value
-	ProgressError                         // red bar at value
-	ProgressIndeterminate                 // moving bar, value ignored
-)
-
 var (
 	clsidTaskbarList = com.MustGUID("56fdf344-fd6d-11d0-958a-006097c9a090")
 	iidITaskbarList3 = com.MustGUID("ea1afb91-9e28-4b86-90e9-9e9f8a5eefaf")

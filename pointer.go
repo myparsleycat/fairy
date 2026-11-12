@@ -533,3 +533,30 @@ func (w *Window) cancelPress() {
 	}
 	w.invalidate()
 }
+
+// applyCursor shows the cursor for what is under the pointer.
+func (w *Window) applyCursor() {
+	if w.autoScroll != nil {
+		w.setPanCursor()
+		return
+	}
+	c := CursorDefault
+	for _, e := range w.hoverPath {
+		if e.links && w.linkAt(e, w.mouseX, w.mouseY) != nil {
+			c = CursorPointer
+			break
+		}
+		if e.cursor != CursorInherit {
+			c = e.cursor
+			break
+		}
+		if e.kind == kindText && e.text != "" && selectableScope(e) != nil {
+			c = CursorText
+			break
+		}
+	}
+	if w.press != nil && w.press.cursor != CursorInherit {
+		c = w.press.cursor
+	}
+	w.setCursor(c)
+}

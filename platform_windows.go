@@ -46,6 +46,9 @@ func (w *Window) trackMouseLeave() {
 	w.tracking = true
 }
 
+// rearmMouseLeave makes the next move arm trackMouseLeave again.
+func (w *Window) rearmMouseLeave() { w.tracking = false }
+
 // redrawAsync repaints the window without rebuilding it. It is safe from
 // any goroutine.
 func (w *Window) redrawAsync() {
@@ -96,3 +99,6 @@ func panCursorHandle(c pancursor.Kind, size int) win.HANDLE {
 	panCursors.m[key] = h
 	return h
 }
+
+// systemLocale is the user's locale as a BCP 47 tag, such as "en-US".
+func systemLocale() string { return win.UserLocale() }

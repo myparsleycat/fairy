@@ -887,29 +887,8 @@ func (w *Window) showSystemMenu(x, y int32) {
 	}
 }
 
-func (w *Window) applyCursor() {
-	if w.autoScroll != nil {
-		w.setPanCursor()
-		return
-	}
-	c := CursorDefault
-	for _, e := range w.hoverPath {
-		if e.links && w.linkAt(e, w.mouseX, w.mouseY) != nil {
-			c = CursorPointer
-			break
-		}
-		if e.cursor != CursorInherit {
-			c = e.cursor
-			break
-		}
-		if e.kind == kindText && e.text != "" && selectableScope(e) != nil {
-			c = CursorText
-			break
-		}
-	}
-	if w.press != nil && w.press.cursor != CursorInherit {
-		c = w.press.cursor
-	}
+// setCursor shows c as the pointer over the window.
+func (w *Window) setCursor(c Cursor) {
 	id := uintptr(win.IDC_ARROW)
 	switch c {
 	case CursorPointer:
