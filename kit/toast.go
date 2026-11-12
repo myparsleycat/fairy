@@ -247,34 +247,52 @@ func (ts *Toaster) View() *fairy.El {
 	if ts.heights == nil {
 		ts.heights = map[ToastID]float32{}
 	}
-	n := len(ts.items)
-	var frontH float32
-	if n > 0 {
-		frontH = ts.heights[ts.items[n-1].id]
-	}
 	expanded := ts.paused
+	slots, frontH, total := ts.layout(expanded)
 	stack := fairy.Box().Right(24).Bottom(24).W(356).OnHover(ts.hold)
-	var total float32
-	for i := range n {
-		it := ts.items[i]
-		depth := n - 1 - i // 0 for the newest, in front
-		h := ts.heights[it.id]
-		var offset float32
-		for j := i + 1; j < n; j++ {
-			offset += ts.heights[ts.items[j].id] + toastGap
-		}
-		if depth < toastVisible {
-			total = max(total, offset+h)
-		}
-		stack.Child(ts.toastView(it, depth, h, frontH, offset, expanded))
-	}
-	if !expanded && n > 0 {
-		total = frontH + toastGap*float32(min(n, toastVisible)-1)
+	for i, it := range ts.items {
+		s := slots[i]
+		stack.Child(ts.toastView(it, s.depth, ts.heights[it.id], frontH, s.offset, expanded))
 	}
 	// The stack covers the gaps between spread toasts, so the pointer
 	// crossing them keeps the stack spread.
 	stack.H(total)
 	return fairy.Box(stack).Key("kit.toasts").PassThrough()
+}
+
+// toastSlot is where a toast sits in the stack: depth 0 is in front, and
+// offset is how far its bottom is lifted while the stack is spread.
+type toastSlot struct {
+	depth  int
+	offset float32
+}
+
+// layout places the toasts, newest first, and returns the height of the front
+// toast and of the stack. A toast is measured only once it is laid out, so a
+// newest toast not measured yet does not count: the toasts behind it keep
+// their places for that frame instead of aiming at a height it may not have.
+func (ts *Toaster) layout(expanded bool) (slots [maxToasts]toastSlot, frontH, total float32) {
+	depth := 0
+	var offset float32
+	for i := len(ts.items) - 1; i >= 0; i-- {
+		h := ts.heights[ts.items[i].id]
+		if frontH == 0 {
+			frontH = h
+		}
+		slots[i] = toastSlot{depth, offset}
+		if h == 0 && depth == 0 {
+			continue
+		}
+		if depth < toastVisible {
+			total = max(total, offset+h)
+		}
+		offset += h + toastGap
+		depth++
+	}
+	if !expanded && depth > 0 {
+		total = frontH + toastGap*float32(min(depth, toastVisible)-1)
+	}
+	return slots, frontH, total
 }
 
 func (ts *Toaster) toastView(it toast, depth int, h, frontH, offset float32, expanded bool) *fairy.El {

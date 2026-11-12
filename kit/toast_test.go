@@ -54,6 +54,31 @@ func TestToastLimitAndForever(t *testing.T) {
 	}
 }
 
+// The toasts behind a new toast keep their places until it is measured, then
+// move behind it at once with its height.
+func TestToastLayoutWaitsForMeasure(t *testing.T) {
+	ts := &Toaster{Duration: time.Hour, heights: map[ToastID]float32{}}
+	ts.put(1, ToastInfo, "a", "")
+	ts.heights[1] = 62
+	ts.put(2, ToastSuccess, "b", "body")
+
+	slots, frontH, total := ts.layout(false)
+	if slots[0].depth != 0 || frontH != 62 || total != 62 {
+		t.Fatalf("before measuring: back depth %d, frontH %v, total %v; want 0, 62, 62", slots[0].depth, frontH, total)
+	}
+
+	ts.heights[2] = 87
+	slots, frontH, total = ts.layout(false)
+	if slots[0].depth != 1 || frontH != 87 || total != 87+toastGap {
+		t.Fatalf("after measuring: back depth %d, frontH %v, total %v; want 1, 87, %v",
+			slots[0].depth, frontH, total, 87+toastGap)
+	}
+	slots, _, total = ts.layout(true)
+	if slots[0].offset != 87+toastGap || total != 87+toastGap+62 {
+		t.Fatalf("spread: back offset %v, total %v; want %v, %v", slots[0].offset, total, 87+toastGap, 87+toastGap+62)
+	}
+}
+
 func TestToastIDs(t *testing.T) {
 	ts := &Toaster{}
 	a, b := ts.Show(ToastInfo, "a", ""), ts.Loading("b", "")
