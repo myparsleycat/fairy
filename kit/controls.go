@@ -450,21 +450,28 @@ func Progress(value float64, opts ...Option) *fairy.El {
 		Role(fairy.RoleProgressBar).RangeValue(min(max(value, 0), 1)*100, 0, 100, 1, nil)
 }
 
-// ProgressCircle is a small ring that fills clockwise from 12 o'clock to
-// value (0 to 1), sweeping to a new value as Progress moves. It is 16 pixels
-// unless sized with Size; the Label option names what is progressing.
+// ProgressCircle is a ring of size pixels (16 when size is not positive) that
+// fills clockwise from 12 o'clock to value (0 to 1) over a Border track,
+// sweeping to a new value as Progress moves. The line is 2 pixels at every
+// size, like a Lucide icon's stroke, unless set with the StrokeWidth option.
+// The fill takes the element's color, MutedForeground unless set with Color;
+// the Label option names what is progressing.
 func ProgressCircle(value float64, size float32, opts ...Option) *fairy.El {
 	o := build(opts)
 	if size <= 0 {
 		size = 16
 	}
+	stroke := o.strokeWidth
+	if stroke <= 0 {
+		stroke = 2
+	}
 	v := min(max(value, 0), 1)
 	ring := func(sweep float32) *fairy.El {
-		return fairy.Arc(0, sweep).Stroke(size / 8).Absolute().Inset(0).Pad(size / 16)
+		return fairy.Arc(0, sweep).Stroke(stroke).Absolute().Inset(0)
 	}
 	e := fairy.Box(
-		ring(2*math.Pi).Opacity(0.2),
-		ring(float32(v*2*math.Pi)).Animate(motion.Fast),
+		ring(2*math.Pi).Color(current.Border),
+		ring(float32(v*2*math.Pi)).RoundCaps().Animate(motion.Fast),
 	).Size(size, size).Shrink(0).Color(current.MutedForeground).
 		Role(fairy.RoleProgressBar).RangeValue(math.Round(v*100), 0, 100, 1, nil)
 	if o.label != "" {

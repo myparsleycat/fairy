@@ -63,6 +63,7 @@ type options struct {
 	maxWidth      float32
 	maxHeight     float32
 	width         float32
+	strokeWidth   float32
 	alignEnd      bool
 }
 
@@ -209,6 +210,10 @@ func Width(w float32) Option { return func(o *options) { o.width = w } }
 // MaxHeight caps the height of the open list of a Select or the panel of a
 // DropdownMenu, below the room beside the trigger. The rows scroll.
 func MaxHeight(h float32) Option { return func(o *options) { o.maxHeight = h } }
+
+// StrokeWidth sets the line width of a ProgressCircle in pixels, in place of
+// its 2-pixel default. A width that is not positive keeps the default.
+func StrokeWidth(px float32) Option { return func(o *options) { o.strokeWidth = px } }
 
 // AlignEnd lines a DropdownMenu's end edge up with its trigger's, as
 // align="end" on shadcn/ui's DropdownMenuContent.
