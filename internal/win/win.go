@@ -5,6 +5,7 @@ package win
 
 import (
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -43,6 +44,9 @@ var (
 	pReleaseCapture                = user32.NewProc("ReleaseCapture")
 	pGetCapture                    = user32.NewProc("GetCapture")
 	pTrackMouseEvent               = user32.NewProc("TrackMouseEvent")
+	pGetPointerType                = user32.NewProc("GetPointerType")
+	pGetPointerInfo                = user32.NewProc("GetPointerInfo")
+	pGetMessageExtraInfo           = user32.NewProc("GetMessageExtraInfo")
 	pInvalidateRect                = user32.NewProc("InvalidateRect")
 	pValidateRect                  = user32.NewProc("ValidateRect")
 	pScreenToClient                = user32.NewProc("ScreenToClient")
@@ -275,6 +279,46 @@ func ReleaseCapture()   { pReleaseCapture.Call() }
 func GetCapture() HWND  { r, _, _ := pGetCapture.Call(); return HWND(r) }
 
 func TrackMouseEvent(t *TRACKMOUSEEVENT) { pTrackMouseEvent.Call(uintptr(unsafe.Pointer(t))) }
+
+// GetPointerType reports the PT_* type of a WM_POINTER* pointer id.
+func GetPointerType(id uint32) (uint32, bool) {
+	var t uint32
+	r, _, _ := pGetPointerType.Call(uintptr(id), uintptr(unsafe.Pointer(&t)))
+	return t, r != 0
+}
+
+type pointerInfo struct {
+	Type, ID, FrameID, Flags uint32
+	Source, Hwnd             uintptr
+	Pixel, Himetric          POINT
+	PixelRaw, HimetricRaw    POINT
+	Time, HistoryCount       uint32
+	InputData                int32
+	KeyStates                uint32
+	PerformanceCount         uint64
+	ButtonChange             uint32
+}
+
+// PointerAge reports how long ago the input of the pointer message being
+// handled happened, from its high-resolution timestamp. It reports false when
+// the device gives none.
+func PointerAge(id uint32) (time.Duration, bool) {
+	var pi pointerInfo
+	if r, _, _ := pGetPointerInfo.Call(uintptr(id), uintptr(unsafe.Pointer(&pi))); r == 0 || pi.PerformanceCount == 0 {
+		return 0, false
+	}
+	now := Ticks() // first: it loads the counter frequency qpcDuration uses
+	age := now - qpcDuration(int64(pi.PerformanceCount))
+	return age, age >= 0 && age < time.Second
+}
+
+// IsMouseFromTouch reports whether the mouse message being handled was
+// synthesized from touch input: Windows marks its extra info with the
+// MI_WP_SIGNATURE 0xFF515700 and sets 0x80 for touch, but not for pen.
+func IsMouseFromTouch() bool {
+	r, _, _ := pGetMessageExtraInfo.Call()
+	return uint32(r)&0xFFFFFF80 == 0xFF515780
+}
 
 func InvalidateRect(h HWND, erase bool) { pInvalidateRect.Call(uintptr(h), 0, boolPtr(erase)) }
 func ValidateRect(h HWND)               { pValidateRect.Call(uintptr(h), 0) }

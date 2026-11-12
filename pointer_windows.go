@@ -70,6 +70,7 @@ type pressState struct {
 	// inputMenu: a right press on an Input without OnRightClick opens its edit menu.
 	inputMenu bool
 	sel       bool // the press started a selection of read-only text
+	touch     bool // a finger, not the mouse, holds the press
 	bar       *scrollBar
 	barStart  float32
 	cursor    Cursor
@@ -81,6 +82,18 @@ type scrollBar struct {
 	thumb    rectF
 	vis      rectF
 	vertical bool
+}
+
+// barAt returns the scroll bar whose track, widened for an easier grab, is at (x, y).
+func (w *Window) barAt(x, y float32) *scrollBar {
+	for i := len(w.bars) - 1; i >= 0; i-- {
+		b := &w.bars[i]
+		hitArea := rectF{b.track.x - 3, b.track.y - 3, b.track.w + 6, b.track.h + 6}
+		if b.vis.contains(x, y) && hitArea.contains(x, y) {
+			return b
+		}
+	}
+	return nil
 }
 
 func (w *Window) onMouseMove(x, y float32) {
@@ -112,7 +125,11 @@ func (w *Window) onMouseMove(x, y float32) {
 			return
 		case p.drag != 0:
 			dx, dy := x-p.x, y-p.y
-			if !p.dragging && dx*dx+dy*dy < 9 {
+			slop := float32(3)
+			if p.touch {
+				slop = touchSlop
+			}
+			if !p.dragging && dx*dx+dy*dy < slop*slop {
 				break
 			}
 			e := w.byID[p.drag]
@@ -303,24 +320,19 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 
 	now := uint32(time.Now().UnixMilli())
 	dx, dy := x-w.lastClickX, y-w.lastClickY
-	if now-w.lastClickAt <= win.GetDoubleClickTime() && dx*dx+dy*dy <= 16 {
+	near := float32(4)
+	if w.touchPress {
+		near = touchSlop
+	}
+	if now-w.lastClickAt <= win.GetDoubleClickTime() && dx*dx+dy*dy <= near*near {
 		w.clickCount++
 	} else {
 		w.clickCount = 1
 	}
 	w.lastClickAt, w.lastClickX, w.lastClickY = now, x, y
 
-	if button == 0 && !chrome {
-		for i := len(w.bars) - 1; i >= 0; i-- {
-			b := &w.bars[i]
-			hitArea := rectF{b.track.x - 3, b.track.y - 3, b.track.w + 6, b.track.h + 6}
-			if !b.vis.contains(x, y) || !hitArea.contains(x, y) {
-				continue
-			}
-			e := w.byID[b.el]
-			if e == nil || e.state == nil {
-				break
-			}
+	if b := w.barAt(x, y); b != nil && button == 0 && !chrome {
+		if e := w.byID[b.el]; e != nil && e.state != nil {
 			bar := *b
 			p := &pressState{button: 0, x: x, y: y, bar: &bar}
 			if !bar.thumb.contains(x, y) {
@@ -388,7 +400,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 		}
 	}
 
-	p := &pressState{button: button, x: x, y: y, clicks: w.clickCount}
+	p := &pressState{button: button, x: x, y: y, clicks: w.clickCount, touch: w.touchPress}
 	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		if button == 0 && e.kind == kindInput {
 			p.input = e.id

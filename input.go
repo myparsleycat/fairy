@@ -142,6 +142,8 @@ type elState struct {
 	glide              bool    // smooth scrolling runs on motionGlide, as for ScrollToRow
 	revealGlide        bool    // gliding to s.reveal, retargeted as rows are measured
 	bottomGlide        bool    // gliding to the bottom, retargeted as content grows
+	fling              bool    // a touch pan let go and the view coasts at flingVX, flingVY
+	flingVX, flingVY   float32 // logical pixels per second
 	barScroll          float32 // scrollY when the thumb was last placed
 	barScrollX         float32 // scrollX when the thumb was last placed
 	scrolledAt         time.Time

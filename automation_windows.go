@@ -26,12 +26,14 @@ import (
 //	move X Y | click X Y [shift|ctrl|alt...] | dblclick X Y | rclick X Y [mods]
 //	down X Y [right|middle] [mods] | up X Y [right|middle]
 //	wheel X Y NOTCHES [mods] | hwheel X Y NOTCHES | type TEXT | key NAME [shift|ctrl|alt...]
+//	tdown X Y | tmove X Y | tup X Y
 //	resize W H | maximize | wait DURATION | snap FILE.png | quit
 //	dragfiles X Y PATH... | dropfiles X Y | dragleave
 //	tree FILE.json | clock DURATION|off | step N
 //
 // The modifier keys given to down stay held until up. Wheel notches are
-// positive away from the user (up) and, for hwheel, to the right.
+// positive away from the user (up) and, for hwheel, to the right. tdown,
+// tmove and tup are one touch contact.
 // Coordinates are logical pixels. In place of "X Y", "@KEY" names the center
 // of the topmost element with that Key, and "@KEY+DX,DY" a point offset from
 // it. Input goes through the same handlers as real input, so scripts can check
@@ -104,6 +106,8 @@ func (w *Window) runScriptFromEnv() {
 		}
 	}()
 }
+
+const scriptTouchID = 1
 
 func (w *Window) scriptStep(f []string, line string) error {
 	if len(f) > 1 && strings.HasPrefix(f[1], "@") {
@@ -178,6 +182,12 @@ func (w *Window) scriptStep(f []string, line string) error {
 			w.onWheel(num(1), num(2), n, false, precise)
 		}
 		w.scriptMods = held
+	case "tdown":
+		w.onTouchDown(scriptTouchID, num(1), num(2), w.now())
+	case "tmove":
+		w.onTouchMove(scriptTouchID, num(1), num(2), w.now())
+	case "tup":
+		w.onTouchUp(scriptTouchID, num(1), num(2), w.now())
 	case "type":
 		text := strings.TrimPrefix(line[len("type"):], " ")
 		for _, u := range []rune(text) {
@@ -264,7 +274,7 @@ func (w *Window) scriptStep(f []string, line string) error {
 // many of the first ones are numbers.
 var scriptArgs = map[string]struct{ min, nums int }{
 	"move": {2, 2}, "down": {2, 2}, "up": {2, 2}, "click": {2, 2}, "rclick": {2, 2}, "dblclick": {2, 2},
-	"wheel": {3, 3}, "hwheel": {3, 3}, "key": {1, 0}, "dragfiles": {2, 2}, "dropfiles": {2, 2},
+	"wheel": {3, 3}, "hwheel": {3, 3}, "tdown": {2, 2}, "tmove": {2, 2}, "tup": {2, 2}, "key": {1, 0}, "dragfiles": {2, 2}, "dropfiles": {2, 2},
 	"resize": {2, 2}, "snap": {1, 0}, "tree": {1, 0}, "step": {1, 0},
 }
 

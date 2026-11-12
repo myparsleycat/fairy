@@ -423,5 +423,9 @@ func Ticks() time.Duration {
 	}
 	var c int64
 	pQueryPerformanceCounter.Call(uintptr(unsafe.Pointer(&c)))
+	return qpcDuration(c)
+}
+
+func qpcDuration(c int64) time.Duration {
 	return time.Duration(c/qpcFreq)*time.Second + time.Duration(c%qpcFreq)*time.Second/time.Duration(qpcFreq)
 }

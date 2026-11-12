@@ -161,8 +161,8 @@ func (w *Window) wheelScroll(e *El, dx, dy float32) bool {
 	if tx == bx && ty == by {
 		return false
 	}
-	if s.glide {
-		// The wheel takes over from a glide, from where the view is now.
+	if s.glide || s.fling {
+		// The wheel takes over from a glide or a fling, from where the view is now.
 		s.scrollTX, s.scrollTY = s.scrollX, s.scrollY
 		tx = min(max(s.scrollX+dx, 0), max(n.ContentW-n.W, 0))
 		ty = min(max(s.scrollY+dy, 0), max(n.ContentH-n.H, 0))

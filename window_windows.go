@@ -97,6 +97,7 @@ const (
 	timerTip     = 2
 	timerAnim    = 3
 	timerRecover = 4
+	timerTouch   = 5
 	caretBlinkMs = 530
 	// Animation frame interval inside the modal move/size loop. Painting back
 	// to back there blocks in Present on every vblank and starves the loop's
@@ -170,6 +171,8 @@ type Window struct {
 
 	press      *pressState
 	autoScroll *autoScroll // middle-button autoscroll in progress
+	touch      *touchState // the touch contact being followed
+	touchPress bool        // onButtonDown is handling a touch
 	charHigh   uint16      // high surrogate of a WM_CHAR pair awaiting its low half
 	focused    uint64
 	focusKey   string
@@ -754,6 +757,14 @@ func wndProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 }
 
 func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
+	// Touch arrives as WM_POINTER*; drop any mouse message Windows still
+	// synthesizes from it so a tap is not handled twice. While a touch drags,
+	// the mouse is ignored too: the drag shares the mouse press, and the
+	// cursor's position would make it jump.
+	if msg >= win.WM_MOUSEMOVE && msg <= win.WM_MBUTTONUP &&
+		(w.touch != nil && w.touch.phase == touchPressed || win.IsMouseFromTouch()) {
+		return 0
+	}
 	switch msg {
 	case win.WM_PAINT:
 		// Validate first: a frame that keeps animating invalidates again.
@@ -939,6 +950,38 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			}
 		}
 		return 0
+	case win.WM_POINTERDOWN, win.WM_POINTERUPDATE, win.WM_POINTERUP:
+		id := uint32(win.LOWORD(wp))
+		if t, ok := win.GetPointerType(id); !ok || t != win.PT_TOUCH {
+			break
+		}
+		if w.scripted {
+			return 0
+		}
+		flags := win.HIWORD(wp)
+		x, y := w.screenToLogical(lp)
+		// The fling velocity needs when the input happened, not when the
+		// message got here, which can be a frame later.
+		at := time.Now()
+		if age, ok := win.PointerAge(id); ok {
+			at = at.Add(-age)
+		}
+		switch {
+		case flags&win.POINTER_MESSAGE_FLAG_CANCELED != 0:
+			w.onTouchCancel(id)
+		case msg == win.WM_POINTERDOWN:
+			if flags&win.POINTER_MESSAGE_FLAG_PRIMARY != 0 {
+				w.onTouchDown(id, x, y, at)
+			}
+		case msg == win.WM_POINTERUPDATE:
+			w.onTouchMove(id, x, y, at)
+		default:
+			w.onTouchUp(id, x, y, at)
+		}
+		return 0
+	case win.WM_POINTERCAPTURECHANGED:
+		w.onTouchCancel(uint32(win.LOWORD(wp)))
+		return 0
 	case win.WM_MOUSEWHEEL, win.WM_MOUSEHWHEEL:
 		if w.scripted {
 			return 0
@@ -1047,6 +1090,9 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		case timerAnim:
 			win.KillTimer(w.hwnd, timerAnim)
 			w.invalidate()
+		case timerTouch:
+			win.KillTimer(w.hwnd, timerTouch)
+			w.onTouchLongPress()
 		case timerRecover:
 			win.KillTimer(w.hwnd, timerRecover)
 			if w.r == nil {

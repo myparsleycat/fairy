@@ -15,6 +15,13 @@ func (w *Window) stepScroll(e *El) {
 		}
 	}
 	if s.smooth {
+		s.fling = false // the wheel or a glide took over
+	}
+	if s.fling {
+		w.stepFling(e, maxX, maxY)
+		return
+	}
+	if s.smooth {
 		if s.bottomGlide {
 			s.scrollTY = maxY // content that grows on the way extends the glide
 		}
@@ -480,7 +487,9 @@ func (w *Window) startGlide(e *El, from float32, instant bool) {
 	w.invalidate()
 }
 
-func stopGlide(s *elState) { s.glide, s.revealGlide, s.bottomGlide = false, false, false }
+func stopGlide(s *elState) {
+	s.glide, s.revealGlide, s.bottomGlide, s.fling = false, false, false, false
+}
 
 // shiftScrollY moves a scroll offset, and any wheel scrolling toward a target, by d.
 func shiftScrollY(s *elState, d float32) {
