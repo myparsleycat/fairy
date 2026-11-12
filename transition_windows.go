@@ -26,6 +26,9 @@ func (w *Window) collectGhosts() {
 		}
 		g := newGhost(old)
 		g.parent = parent
+		if old.parent != nil {
+			g.next = nextStayingSibling(old, w.byID)
+		}
 		g.subs = exitingInside(old, nil)
 		w.ghosts = append(w.ghosts, g)
 	}
@@ -36,6 +39,19 @@ func (w *Window) collectGhosts() {
 	for _, g := range w.ghosts {
 		w.ghostIn[g.parent] = true
 	}
+}
+
+func nextStayingSibling(e *El, live map[uint64]*El) uint64 {
+	after := false
+	for _, c := range e.parent.children {
+		switch {
+		case c == e:
+			after = true
+		case after && live[c.id] != nil:
+			return c.id
+		}
+	}
+	return 0
 }
 
 func newGhost(e *El) *ghost {
@@ -61,6 +77,9 @@ func exitingInside(e *El, subs []*ghost) []*ghost {
 type ghost struct {
 	el     *El
 	parent uint64
+	// next is the first sibling after it that stayed, which is drawn above
+	// it; 0 when none did.
+	next   uint64
 	tr     *motion.Track
 	to     Transition
 	dx, dy float32
@@ -281,11 +300,13 @@ func (e *El) ghostTransform(k float32) {
 	}
 }
 
-// paintGhostsOf draws the exiting children of parent beneath its live
-// children. Inside a parent they keep to the clip its children have now, as
-// a parent that shrinks while they leave would otherwise show them past its
-// edge.
-func (w *Window) paintGhostsOf(parent *El, opacity float32, color Color) bool {
+// paintGhostsOf draws the exiting children of parent that go just below its
+// live child before, so they keep the stacking order they left in, as the
+// front toast of a stack stays in front while it leaves. A nil before draws
+// those that no live child of parent follows. Inside a parent they keep to
+// the clip its children have now, as a parent that shrinks while they leave
+// would otherwise show them past its edge.
+func (w *Window) paintGhostsOf(parent, before *El, opacity float32, color Color) bool {
 	ok := true
 	var id uint64
 	if parent != nil {
@@ -293,6 +314,13 @@ func (w *Window) paintGhostsOf(parent *El, opacity float32, color Color) bool {
 	}
 	for _, g := range w.ghosts {
 		if g.parent != id {
+			continue
+		}
+		if before != nil {
+			if g.next != before.id {
+				continue
+			}
+		} else if n := w.byID[g.next]; g.next != 0 && n != nil && n.parent == parent {
 			continue
 		}
 		start := len(w.scene.Prims)

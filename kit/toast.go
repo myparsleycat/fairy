@@ -249,14 +249,18 @@ func (ts *Toaster) View() *fairy.El {
 	}
 	expanded := ts.paused
 	slots, frontH, total := ts.layout(expanded)
-	stack := fairy.Box().Right(24).Bottom(24).W(356).OnHover(ts.hold)
+	// Layout motion eases a toast's position relative to its parent. The
+	// toasts sit in an empty frame pinned to the bottom edge, so the stack
+	// growing or shrinking above them does not move that origin and make
+	// them slide.
+	frame := fairy.Box().Left(0).Right(0).Bottom(0).H(0).PassThrough()
 	for i, it := range ts.items {
 		s := slots[i]
-		stack.Child(ts.toastView(it, s.depth, ts.heights[it.id], frontH, s.offset, expanded))
+		frame.Child(ts.toastView(it, s.depth, ts.heights[it.id], frontH, s.offset, expanded))
 	}
 	// The stack covers the gaps between spread toasts, so the pointer
 	// crossing them keeps the stack spread.
-	stack.H(total)
+	stack := fairy.Box(frame).Right(24).Bottom(24).W(356).H(total).OnHover(ts.hold)
 	return fairy.Box(stack).Key("kit.toasts").PassThrough()
 }
 

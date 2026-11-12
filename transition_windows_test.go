@@ -1,8 +1,10 @@
 package fairy
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/motion"
 )
 
@@ -146,6 +148,50 @@ func TestExitInsideCollapsedBox(t *testing.T) {
 	}
 	if stack.culled {
 		t.Fatal("the emptied box is culled, so its leaving child is not drawn")
+	}
+}
+
+// A leaving child is drawn in the stacking order it left: above the siblings
+// that came before it and below those after it, as the front toast of a
+// stack stays in front while it leaves.
+func TestExitKeepsStackingOrder(t *testing.T) {
+	colors := map[string]Color{"a": Hex(0xff0000), "b": Hex(0x00ff00), "c": Hex(0x0000ff)}
+	shown := []string{"a", "b", "c"}
+	w := newListWindow(t, nil)
+	w.opts.View = func(cx *Cx) *El {
+		stack := Box().Size(100, 100)
+		for _, k := range shown {
+			stack.Child(Box().Key(k).Left(0).Top(0).Size(40, 40).Fill(colors[k]).Exit(Fade().With(motion.Ease(1))))
+		}
+		return stack
+	}
+	order := func() string {
+		w.dirty = true
+		w.build()
+		w.placeAll()
+		w.scene.Reset()
+		w.paint(w.root, 1, w.opts.TextColor)
+		var got []string
+		for _, p := range w.scene.Prims {
+			for k, c := range colors {
+				a := c.arr(1)
+				if p.Kind == render.KindRect && p.Color[0] == a[0] && p.Color[1] == a[1] && p.Color[2] == a[2] {
+					got = append(got, k)
+				}
+			}
+		}
+		return fmt.Sprint(got)
+	}
+
+	order()
+	order()
+	shown = []string{"a", "c"}
+	if got := order(); got != "[a b c]" {
+		t.Fatalf("middle child leaving: drawn %v, want [a b c]", got)
+	}
+	shown = []string{"a"}
+	if got := order(); got != "[a b c]" {
+		t.Fatalf("last child leaving: drawn %v, want [a b c]", got)
 	}
 }
 
