@@ -209,7 +209,7 @@ The `internal` packages hold the Win32, COM, DirectWrite, renderer, Media Founda
 
 After editing `internal/render/shaders.hlsl`, run `go generate ./internal/render` to rebuild `shaders.bin`. A stale blob still works: the renderer then compiles the HLSL at startup.
 
-To add Lucide icons, append their names to `icons/lucide/names.txt` and run:
+`icons/lucide` holds every Lucide icon and alias; the linker keeps only the icons a program references. To update to another lucide-react release, run:
 
 ```bash
 go run ./cmd/genlucide -src path/to/node_modules/lucide-react
