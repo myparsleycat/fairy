@@ -394,8 +394,12 @@ func (e *El) Blur(px float32) *El { e.blur = max(px, 0); return e }
 
 // BackdropBlur blurs what the window drew behind the element, inside its
 // rounded box, by a Gaussian of standard deviation px, as for a frosted
-// panel; the element's fill goes on top. The desktop and a system backdrop
-// such as Mica are not blurred, and a window draws at most four.
+// panel; the element's fill goes on top. Its own outer shadows are left out
+// of the blur, and the blurred area follows the element's scale and slide,
+// as in an enter transition. The desktop and a system backdrop such as Mica
+// are not blurred. Inside an Isolate or Blur ancestor it blurs only what
+// that ancestor drew. A window leaves out backdrops past four times its area
+// in one frame.
 func (e *El) BackdropBlur(px float32) *El { e.backdropBlur = max(px, 0); return e }
 
 // ScrollEdgeFade fades the children out over px toward each edge that has

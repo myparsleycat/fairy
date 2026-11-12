@@ -4,7 +4,7 @@ Detailed usage and development notes for [Fairy](../README.md). Run commands fro
 
 ## Features
 
-- **Rendering**: Direct3D 11 with one instanced HLSL pipeline for rounded rectangles, per-side borders, gradients, Gaussian shadows, glyphs, images, arcs and wavy lines. Rounded clips (`Clip`), scroll edge fades (`ScrollEdgeFade`), offscreen layers for group opacity (`Isolate`), blur (`Blur`), frosted panels (`BackdropBlur`) and per-element affine transforms.
+- **Rendering**: Direct3D 11 with one instanced HLSL pipeline for rounded rectangles, per-side borders, gradients, Gaussian shadows, glyphs, images, arcs and wavy lines. Rounded clips (`Clip`), scroll edge fades (`ScrollEdgeFade`), offscreen layers for group opacity (`Isolate`), blur (`Blur`), frosted panels (`BackdropBlur`, which follows scale and slide transitions; the kit applies it to menus, popovers, dialogs and toasts through `Theme.SurfaceBlur`) and per-element affine transforms.
 - **Text**: DirectWrite layout, shaping, font fallback and line breaking, grayscale antialiasing with DirectWrite gamma correction, color emoji. `RichText` mixes spans with their own font, size, weight, colors, decorations and click handlers in one paragraph.
 - **Layout**: a flexbox engine in pure Go (`layout`) with wrap, grow, shrink, basis, min and max sizes, padding, margin, gap, alignment, absolute positioning and scroll containers.
 - **Declarative API**: `View` builds a fresh element tree after every event. Hover, scroll, focus and editing state is kept by element identity. `Memo` reuses a subtree while its version is unchanged, and `Live` values redraw the elements bound to them without building the view again.

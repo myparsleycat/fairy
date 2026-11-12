@@ -45,7 +45,7 @@ static const uint FLAG_INSET = 2;
 static const uint FLAG_RAW_ALPHA = 4;
 static const uint FLAG_PREMULTIPLIED = 8;
 static const uint FLAG_XFORM = 16;
-static const uint FLAG_BLUR = 32; // image prims: gaussian along params.xy (uv per tap), sigma params.z taps
+static const uint FLAG_BLUR = 32; // image prims: gaussian along params.xy (uv per tap), sigma params.z taps, taps clamped to color2 (u0, v0, u1, v1)
 static const uint FLAG_DASHED = 64; // rect prims: dash the border
 static const uint FLAG_PADDING_BOX = 128; // rect prims: fill stops inside the border
 static const uint CLIP_SHIFT = 16; // flags >> CLIP_SHIFT: 1 + index into clips, or 0
@@ -388,7 +388,7 @@ float4 ps_main(VOut i) : SV_Target {
         float wsum = 0.0;
         [loop] for (int k = -n; k <= n; k++) {
             float w = exp(-0.5 * float(k * k) / (sigma * sigma));
-            sum += image.SampleLevel(samp, i.uv + p.params.xy * float(k), 0) * w;
+            sum += image.SampleLevel(samp, clamp(i.uv + p.params.xy * float(k), p.color2.xy, p.color2.zw), 0) * w;
             wsum += w;
         }
         return sum / wsum;

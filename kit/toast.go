@@ -301,8 +301,19 @@ func (ts *Toaster) toastView(it toast, depth int, h, frontH, offset float32, exp
 	content := fairy.Row(mark.MarginEdges(0, 4, 0, -3), text).Gap(6).Align(fairy.Center).Pad(16).Shrink(0).
 		OnLayout(func(_, h float32) { ts.heights[id] = h }).Animate(toastMotion)
 	front := depth == 0
-	toastEl := fairy.Box(content).Key(fmt.Sprint(id)).Left(0).Right(0).Radius(t.RadiusLg()).
-		Fill(c.bg).Border(1, c.border).Color(c.text).FontSize(13).
+	toastEl := fairy.Box(content).Key(fmt.Sprint(id)).Left(0).Right(0).Radius(t.RadiusLg())
+	switch {
+	case front && !expanded && len(ts.items) > 1:
+		// The collapsed toasts behind would show through a translucent front
+		// one. It keeps the blur under its opaque fill, so expanding the stack
+		// only fades the fill.
+		t.surface(toastEl, c.bg, 1)
+	case it.kind == ToastSuccess || it.kind == ToastInfo || it.kind == ToastWarning || it.kind == ToastError:
+		t.surface(toastEl, c.bg, max(t.SurfaceAlpha, 0.8))
+	default:
+		t.Surface(toastEl, c.bg)
+	}
+	toastEl.Border(1, c.border).Color(c.text).FontSize(13).
 		Shadow(0, 4, 12, 0, fairy.RGBA(0, 0, 0, 0.1)).
 		AnimateLayout(toastMotion).ScaleMotion(toastMotion).Animate(toastMotion).
 		Enter(fairy.Transition{Y: max(h, 56), Motion: toastMotion})

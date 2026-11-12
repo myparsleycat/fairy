@@ -96,7 +96,7 @@ var (
 // medium shadow (large for submenus), and the open and close motion.
 func popupSurface(e *fairy.El, large bool) *fairy.El {
 	t := &current
-	e.Radius(t.RadiusLg()).Fill(t.Popover).Color(t.PopoverForeground).Ring(1, alpha(t.Foreground, 0.1)).
+	t.Surface(e, t.Popover).Radius(t.RadiusLg()).Color(t.PopoverForeground).Ring(1, alpha(t.Foreground, 0.1)).
 		Key("kit.popup").Enter(popupEnter).Exit(popupExit)
 	if large {
 		return shadowLg(e)

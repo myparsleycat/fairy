@@ -148,19 +148,27 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 	if opacity <= 0.001 {
 		return true
 	}
-	// An isolated element draws at full opacity into a layer, which then
-	// goes onto the window at the element's.
-	layered := e.isolate || e.blur > 0
-	layerMark, groupOpacity := 0, opacity
-	if layered {
-		layerMark, opacity = w.scene.BeginLayer(), 1
-	}
-
 	// The shader expects each radius to fit in half the box; larger ones, as
 	// from Radius(999) for a pill, would leave the shape empty.
 	maxR := min(r.w, r.h) * s / 2
 	radii := [4]float32{min(e.radii[0]*s, maxR), min(e.radii[1]*s, maxR), min(e.radii[2]*s, maxR), min(e.radii[3]*s, maxR)}
 	box := w.snap(r)
+	backdrop := func(mark int, opacity float32) {
+		if e.backdropBlur > 0 {
+			w.scene.EndBackdrop(mark, render.Prim{Bounds: box, Clip: devClip, Radii: radii, Color: [4]float32{1, 1, 1, opacity}}, e.backdropBlur*s)
+		}
+	}
+
+	// An isolated element draws at full opacity into a layer, which then
+	// goes onto the window at the element's. Its backdrop goes before the
+	// layer, which would otherwise hold only what the element draws.
+	layered := e.isolate || e.blur > 0
+	layerMark, groupOpacity := 0, opacity
+	backdropMark := w.scene.BeginBackdrop()
+	if layered {
+		backdrop(backdropMark, opacity)
+		layerMark, opacity = w.scene.BeginLayer(), 1
+	}
 
 	for i, sh := range e.shadows {
 		if m := e.motion; m != nil && e.state != nil && i < 2 {
@@ -172,8 +180,8 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		w.scene.Add(w.shadowPrim(box, radii, devClip, sh, opacity))
 	}
 
-	if e.backdropBlur > 0 {
-		w.scene.AddBackdrop(render.Prim{Bounds: box, Clip: devClip, Radii: radii, Color: [4]float32{1, 1, 1, opacity}}, e.backdropBlur*s)
+	if !layered {
+		backdrop(backdropMark, opacity)
 	}
 
 	if rg.width > 0 && rg.color.isSet() {

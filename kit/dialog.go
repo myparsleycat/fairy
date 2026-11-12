@@ -69,7 +69,7 @@ func dialog(p DialogProps, viewWidth, viewHeight float32) *fairy.El {
 		head.MarginEdges(0, 28, 0, 0)
 	}
 	radius := t.RadiusXl()
-	panel := fairy.Col(head).W(w).Pad(16).Gap(16).Radius(radius).Fill(t.Popover).Color(t.PopoverForeground).
+	panel := t.Surface(fairy.Col(head), t.Popover).W(w).Pad(16).Gap(16).Radius(radius).Color(t.PopoverForeground).
 		Ring(1, alpha(t.Foreground, 0.1)).Role(fairy.RoleDialog).Label(p.Title).
 		Enter(fairy.Transition{Scale: 0.95, Motion: motion.Popup}).
 		Exit(fairy.Transition{Scale: 0.95, Motion: motion.Popup}).
@@ -98,7 +98,7 @@ func dialog(p DialogProps, viewWidth, viewHeight float32) *fairy.El {
 		key = "kit.dialog"
 	}
 	backdrop := fairy.Box(panel).Key(key).Center().PadEdges(16+t.DialogTopInset, 16, 16, 16).Fill(t.Scrim).Role(fairy.RoleNone).
-		Enter(fairy.Fade().With(motion.Popup)).Exit(fairy.Fade().With(motion.Popup))
+		BackdropBlur(t.ScrimBlur).Enter(fairy.Fade().With(motion.Popup)).Exit(fairy.Fade().With(motion.Popup))
 	if p.OnClose != nil {
 		backdrop.OnClick(p.OnClose)
 	}

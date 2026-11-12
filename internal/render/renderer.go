@@ -56,6 +56,8 @@ type Renderer struct {
 	vs         d3d.VertexShader
 	ps         d3d.PixelShader
 	blend      d3d.BlendState
+	blendErase d3d.BlendState // scales the target by one less the prim's alpha
+	blendAdd   d3d.BlendState
 	raster     d3d.RasterizerState
 	sampler    d3d.SamplerState
 	globalsBuf d3d.Buffer
@@ -238,6 +240,16 @@ func (r *Renderer) createPipeline() error {
 		RenderTargetWriteMask: d3d.COLOR_WRITE_ALL,
 	}
 	if r.blend, err = r.dev.CreateBlendState(&bd); err != nil {
+		return err
+	}
+	erase := bd
+	erase.RenderTarget[0].SrcBlend, erase.RenderTarget[0].SrcBlendAlpha = d3d.BLEND_ZERO, d3d.BLEND_ZERO
+	if r.blendErase, err = r.dev.CreateBlendState(&erase); err != nil {
+		return err
+	}
+	add := bd
+	add.RenderTarget[0].DestBlend, add.RenderTarget[0].DestBlendAlpha = d3d.BLEND_ONE, d3d.BLEND_ONE
+	if r.blendAdd, err = r.dev.CreateBlendState(&add); err != nil {
 		return err
 	}
 	rd := d3d.RasterizerDesc{FillMode: d3d.FILL_SOLID, CullMode: d3d.CULL_NONE, DepthClipEnable: 1}
@@ -581,6 +593,8 @@ func (r *Renderer) Release() {
 	r.sampler.Release()
 	r.raster.Release()
 	r.blend.Release()
+	r.blendErase.Release()
+	r.blendAdd.Release()
 	r.ps.Release()
 	r.vs.Release()
 	if r.target != nil {

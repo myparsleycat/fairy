@@ -64,6 +64,13 @@ type Theme struct {
 	SmallSize float32
 	// DialogTopInset leaves space above centered dialogs, typically for a custom title bar.
 	DialogTopInset float32
+	// SurfaceBlur, above zero, makes menus, popovers, dialogs and toasts
+	// translucent, Popover at SurfaceAlpha over a backdrop blur of this many
+	// pixels. Status toasts keep at least 0.8 of their color.
+	SurfaceBlur  float32
+	SurfaceAlpha float32
+	// ScrimBlur is the backdrop blur of the scrim behind dialogs.
+	ScrimBlur float32
 	// Font is the family of the window's text; empty uses the window's font.
 	// shadcn/ui apps often ship their own, which the app registers with
 	// fairy.RegisterFont and names here.
@@ -225,6 +232,19 @@ func shadowMd(e *fairy.El) *fairy.El {
 
 func shadowLg(e *fairy.El) *fairy.El {
 	return e.Shadow(0, 10, 15, -3, fairy.RGBA(0, 0, 0, 0.1)).Shadow(0, 4, 6, -4, fairy.RGBA(0, 0, 0, 0.1))
+}
+
+// Surface fills e with fill, translucent over a backdrop blur while
+// SurfaceBlur is set, as the kit fills menus, popovers, dialogs and toasts.
+func (t *Theme) Surface(e *fairy.El, fill fairy.Color) *fairy.El {
+	return t.surface(e, fill, t.SurfaceAlpha)
+}
+
+func (t *Theme) surface(e *fairy.El, fill fairy.Color, a float32) *fairy.El {
+	if t.SurfaceBlur <= 0 {
+		return e.Fill(fill)
+	}
+	return e.Fill(alpha(fill, a)).BackdropBlur(t.SurfaceBlur)
 }
 
 // alpha returns c at a times its own opacity, as Tailwind's c/NN.

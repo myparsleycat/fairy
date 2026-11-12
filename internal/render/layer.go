@@ -4,6 +4,7 @@ package render
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"unsafe"
 
@@ -13,18 +14,20 @@ import (
 // MaxLayerSize bounds the side of an offscreen layer in device pixels.
 const MaxLayerSize = 4096
 
-// MaxBackdrops is how many backdrop blurs one scene draws; later ones are
-// left out.
-const MaxBackdrops = 4
+// backdropBudget bounds the area all backdrop blurs of a frame copy, in
+// multiples of the target's area; backdrops past it are left out.
+const backdropBudget = 4
 
 // Layer is a range of prims drawn into an offscreen texture that the image
 // prim at End then draws, or with Backdrop, a blur of what was drawn before
-// End that the prim at End draws.
+// Begin that the prim at End draws.
 type Layer struct {
 	Begin, End int
-	Bounds     [4]float32 // device pixels, whole
-	Sigma      float32    // gaussian blur in device pixels
-	Backdrop   bool
+	// Bounds is in device pixels, whole. A backdrop's is worked out when the
+	// frame is drawn, from where its composite prim ends up.
+	Bounds   [4]float32
+	Sigma    float32 // gaussian blur in device pixels
+	Backdrop bool
 }
 
 // BeginLayer starts a layer of the prims added from now on, and returns the
@@ -50,26 +53,25 @@ func (s *Scene) EndLayer(mark int, p Prim, sigma float32) {
 	s.addComposite(p, b)
 }
 
-// AddBackdrop draws a blur, by sigma device pixels, of what was drawn so far
-// under p.Bounds, rounded by p.Radii, at opacity p.Color[3].
-func (s *Scene) AddBackdrop(p Prim, sigma float32) {
-	n := 0
-	for _, l := range s.Layers {
-		if l.Backdrop {
-			n++
-		}
-	}
-	if n >= MaxBackdrops || sigma <= 0 {
+// BeginBackdrop returns the mark that EndBackdrop takes. The backdrop blurs
+// what was drawn before the mark, so prims added between the two, such as
+// the element's own outer shadows, stay out of it.
+func (s *Scene) BeginBackdrop() int { return len(s.Prims) }
+
+// EndBackdrop draws a blur, by sigma device pixels, of what was drawn before
+// mark under p.Bounds, rounded by p.Radii, at opacity p.Color[3]. The blurred
+// region follows a FlagXform given to the composite prim afterwards, exactly
+// for scaling and translation and by its bounding box for rotation.
+func (s *Scene) EndBackdrop(mark int, p Prim, sigma float32) {
+	if sigma <= 0 || p.Bounds[2] <= 0 || p.Bounds[3] <= 0 {
 		return
 	}
-	b := wholeRect(p.Bounds)
-	b[2], b[3] = min(b[2], MaxLayerSize), min(b[3], MaxLayerSize)
-	if b[2] < 1 || b[3] < 1 {
-		return
-	}
-	s.Layers = append(s.Layers, Layer{Begin: len(s.Prims), End: len(s.Prims), Bounds: b, Sigma: sigma, Backdrop: true})
+	s.Layers = append(s.Layers, Layer{Begin: mark, End: len(s.Prims), Sigma: sigma, Backdrop: true})
 	s.addComposite(p, p.Bounds)
 }
+
+// AddBackdrop is EndBackdrop with nothing between the copy and the composite.
+func (s *Scene) AddBackdrop(p Prim, sigma float32) { s.EndBackdrop(len(s.Prims), p, sigma) }
 
 func (s *Scene) addComposite(p Prim, bounds [4]float32) {
 	p.Bounds = bounds
@@ -157,7 +159,9 @@ type layerPlan struct {
 	h1, h2       *Target // horizontal and vertical blur passes at half size
 	out          *Texture
 	blurH, blurV int // indices of the blur prims in r.frame
+	erase        int // a backdrop's prim in r.frame that clears its box before the composite
 	kids         []int
+	skip         bool // a backdrop left out: nothing is copied and its composite draws nothing
 }
 
 // renderTarget is where draws go.
@@ -176,6 +180,22 @@ func (r *Renderer) planLayers(s *Scene) ([]int, error) {
 	for range s.Layers {
 		r.plan = append(r.plan, layerPlan{})
 	}
+	budget := float32(backdropBudget * r.width * r.height)
+	// Backdrops are drawn one after another, each composited before the next
+	// copies, so a later backdrop takes the targets of earlier ones again.
+	var spare []*Target
+	acquire := func(backdrop bool, w, h int) (*Target, error) {
+		if backdrop {
+			w, h := targetSize(w, h)
+			for i, t := range spare {
+				if t.Width == w && t.Height == h {
+					spare = slices.Delete(spare, i, i+1)
+					return t, nil
+				}
+			}
+		}
+		return r.pool.acquire(r.ds, w, h)
+	}
 	for i := range s.Layers {
 		l := &s.Layers[i]
 		parent := -1
@@ -191,45 +211,103 @@ func (r *Renderer) planLayers(s *Scene) ([]int, error) {
 			r.plan[parent].kids = append(r.plan[parent].kids, i)
 		}
 		pl := &r.plan[i]
+		var box [4]float32
+		if l.Backdrop {
+			target := [4]float32{0, 0, float32(r.width), float32(r.height)}
+			if parent >= 0 {
+				target = s.Layers[parent].Bounds
+			}
+			var ok bool
+			box, ok = backdropRegion(l, &s.Prims[l.End], target)
+			area := l.Bounds[2] * l.Bounds[3]
+			if !ok || area > budget {
+				pl.skip, pl.out = true, r.emptyImage
+				continue
+			}
+			budget -= area
+		}
 		bw, bh := int(l.Bounds[2]), int(l.Bounds[3])
-		src, err := r.pool.acquire(r.ds, bw, bh)
+		src, err := acquire(l.Backdrop, bw, bh)
 		if err != nil {
 			return nil, err
 		}
 		pl.src = src
 		uw, uh := float32(bw)/float32(src.Width), float32(bh)/float32(src.Height)
 		pl.out = &src.Texture
+		// kx and ky are the output's texels per device pixel.
+		kx, ky := float32(1), float32(1)
 		if l.Sigma > 0 {
 			hw, hh := max((bw+1)/2, 1), max((bh+1)/2, 1)
-			if pl.h1, err = r.pool.acquire(r.ds, hw, hh); err != nil {
+			if pl.h1, err = acquire(l.Backdrop, hw, hh); err != nil {
 				return nil, err
 			}
-			if pl.h2, err = r.pool.acquire(r.ds, hw, hh); err != nil {
+			if pl.h2, err = acquire(l.Backdrop, hw, hh); err != nil {
 				return nil, err
 			}
 			pl.blurH = len(r.frame)
-			r.frame = append(r.frame, blurPrim(hw, hh, uw, uh, src.Width, l.Sigma, true))
+			r.frame = append(r.frame, blurPrim(hw, hh, uw, uh, &src.Texture, l.Sigma, true))
 			pl.blurV = len(r.frame)
-			r.frame = append(r.frame, blurPrim(hw, hh, float32(hw)/float32(pl.h1.Width), float32(hh)/float32(pl.h1.Height), pl.h1.Height, l.Sigma/2, false))
+			r.frame = append(r.frame, blurPrim(hw, hh, float32(hw)/float32(pl.h1.Width), float32(hh)/float32(pl.h1.Height), &pl.h1.Texture, l.Sigma/2, false))
 			pl.out = &pl.h2.Texture
 			uw, uh = float32(hw)/float32(pl.h2.Width), float32(hh)/float32(pl.h2.Height)
+			kx, ky = float32(hw)/float32(bw), float32(hh)/float32(bh)
 		}
-		r.frame[l.End].UV = [4]float32{0, 0, uw, uh}
+		if l.Backdrop {
+			ow, oh := float32(pl.out.Width), float32(pl.out.Height)
+			r.frame[l.End].UV = [4]float32{
+				(box[0] - l.Bounds[0]) * kx / ow, (box[1] - l.Bounds[1]) * ky / oh, box[2] * kx / ow, box[3] * ky / oh,
+			}
+			// The same box as a plain rect covers exactly the pixels the composite does.
+			e := r.frame[l.End]
+			e.Kind, e.Flags, e.UV = KindRect, e.Flags&^FlagPremultiplied, [4]float32{}
+			pl.erase = len(r.frame)
+			r.frame = append(r.frame, e)
+			spare = append(spare, pl.src, pl.h1, pl.h2)
+		} else {
+			r.frame[l.End].UV = [4]float32{0, 0, uw, uh}
+		}
 	}
 	return top, nil
 }
 
+// backdropRegion sets the bounds of backdrop l to what it copies: the part of
+// target its composite prim p shows in, with room for the blur around it. It
+// returns the box p is drawn over, and false when none of p shows.
+func backdropRegion(l *Layer, p *Prim, target [4]float32) ([4]float32, bool) {
+	box, shown := p.Bounds, p.Bounds
+	if p.Flags&FlagXform != 0 {
+		box = xformBounds(p.Bounds, p.Xform, p.Xlate)
+		shown = xformBounds(intersect(p.Bounds, p.Clip2), p.Xform, p.Xlate)
+	}
+	shown = intersect(shown, p.Clip)
+	if shown[2] <= 0 || shown[3] <= 0 {
+		return box, false
+	}
+	m := float32(math.Ceil(float64(3 * l.Sigma)))
+	b := wholeRect(intersect([4]float32{shown[0] - m, shown[1] - m, shown[2] + 2*m, shown[3] + 2*m}, target))
+	b[2], b[3] = min(b[2], MaxLayerSize), min(b[3], MaxLayerSize)
+	l.Bounds = b
+	return box, b[2] >= 1 && b[3] >= 1
+}
+
 // blurPrim is a pass that fills a w x h target with the source region
-// (0, 0, uw, uh) of a texture size texels across along the blur, blurred by
-// sigma texels.
-func blurPrim(w, h int, uw, uh float32, size int, sigma float32, horizontal bool) Prim {
+// (0, 0, uw, uh) of src, blurred along one axis by sigma texels.
+func blurPrim(w, h int, uw, uh float32, src *Texture, sigma float32, horizontal bool) Prim {
+	size := src.Height
+	if horizontal {
+		size = src.Width
+	}
 	// Taps reach 3 sigma, at most 64 to a side; wider blurs space them out.
 	step := max(float32(math.Ceil(float64(3*sigma/64))), 1)
 	d := step / float32(size)
+	// Taps stay on the region's texels, so its edge pixels repeat instead of
+	// fading into the cleared texels past it.
+	hx, hy := 0.5/float32(src.Width), 0.5/float32(src.Height)
 	p := Prim{
 		Bounds: [4]float32{0, 0, float32(w), float32(h)},
 		Clip:   NoClip,
 		Color:  [4]float32{1, 1, 1, 1},
+		Color2: [4]float32{hx, hy, uw - hx, uh - hy},
 		UV:     [4]float32{0, 0, uw, uh},
 		Params: [4]float32{0, d, sigma / step},
 		Kind:   KindImage,
@@ -248,9 +326,14 @@ func (r *Renderer) drawRange(s *Scene, begin, end int, kids []int) {
 	for _, k := range kids {
 		l := &s.Layers[k]
 		if l.Backdrop {
-			r.drawSeg(s, i, l.End)
-			i = l.End
-			r.backdrop(s, k)
+			r.drawSeg(s, i, l.Begin)
+			i = l.Begin
+			if pl := &r.plan[k]; !pl.skip {
+				r.backdrop(s, k)
+				r.drawSeg(s, l.Begin, l.End)
+				r.composite(pl, l.End)
+				i = l.End + 1
+			}
 			continue
 		}
 		r.drawSeg(s, i, l.Begin)
@@ -286,6 +369,20 @@ func (r *Renderer) backdrop(s *Scene, k int) {
 	}
 	r.blur(pl)
 	r.setTarget(cur)
+}
+
+// composite draws a backdrop's blur, the prim at index at, in place of what
+// is under its box rather than over it: the box is first cleared by its
+// coverage and then the blur is added. Drawn over, a translucent frame, as
+// under a system backdrop, would show its sharp pixels through the blur.
+func (r *Renderer) composite(pl *layerPlan, at int) {
+	r.ctx.OMSetBlendState(r.blendErase, [4]float32{}, 0xFFFFFFFF)
+	r.drawBatch(pl.erase, pl.erase+1)
+	r.ctx.OMSetBlendState(r.blendAdd, [4]float32{}, 0xFFFFFFFF)
+	r.ctx.PSSetShaderResources(2, pl.out.srv)
+	r.drawBatch(at, at+1)
+	r.ctx.PSSetShaderResources(2, r.emptyImage.srv)
+	r.ctx.OMSetBlendState(r.blend, [4]float32{}, 0xFFFFFFFF)
 }
 
 // blur runs the two blur passes of a layer.
@@ -363,8 +460,11 @@ type targetPool struct {
 
 const poolKeep = 12
 
+// targetSize is the size of the pooled target for a w x h layer.
+func targetSize(w, h int) (int, int) { return (w + 63) / 64 * 64, (h + 63) / 64 * 64 }
+
 func (p *targetPool) acquire(d *Device, w, h int) (*Target, error) {
-	w, h = (w+63)/64*64, (h+63)/64*64
+	w, h = targetSize(w, h)
 	for i, t := range p.free {
 		if t.Width == w && t.Height == h {
 			p.free = append(p.free[:i], p.free[i+1:]...)
@@ -380,12 +480,15 @@ func (p *targetPool) acquire(d *Device, w, h int) (*Target, error) {
 	return t, nil
 }
 
-// endFrame returns the targets in use to the pool, keeping the most recent.
+// endFrame returns the targets in use to the pool, keeping the most recent:
+// at least those this frame used, so a frame with many backdrops does not
+// create them all again the next.
 func (p *targetPool) endFrame() {
+	keep := max(poolKeep, len(p.used))
 	p.free = append(p.free, p.used...)
 	clear(p.used)
 	p.used = p.used[:0]
-	if n := len(p.free) - poolKeep; n > 0 {
+	if n := len(p.free) - keep; n > 0 {
 		for _, t := range p.free[:n] {
 			t.Release()
 		}

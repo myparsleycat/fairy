@@ -23,7 +23,8 @@ const (
 	// before that map as well as to Clip after it.
 	FlagXform = 16
 	// FlagBlur makes an image prim a gaussian blur pass: Params.xy is the UV
-	// step between taps and Params.z the sigma in taps.
+	// step between taps and Params.z the sigma in taps. Taps are clamped to the
+	// UV rect Color2 (u0, v0, u1, v1).
 	FlagBlur = 32
 	// FlagDashed draws a rect prim's border as CSS dashes.
 	FlagDashed = 64
