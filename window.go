@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"errors"
 	"sync"
 	"time"
 	"weak"
@@ -429,4 +430,75 @@ func (w *Window) mods() keyboard.Mods {
 		return *w.scriptMods
 	}
 	return w.keyMods()
+}
+
+// newWindowState checks opts, fills in its defaults and makes the window's
+// state, before the native window exists.
+func newWindowState(opts Options) (*Window, error) {
+	opts.DynamicBackdrop = opts.DynamicBackdrop && BackdropSupported(BackdropMica)
+	if opts.View == nil {
+		return nil, errors.New("fairy: Options.View is required")
+	}
+	if !onUIThread() {
+		return nil, errors.New("fairy: NewWindow must run on the UI thread (inside Main, a handler or Do)")
+	}
+	if opts.Width <= 0 {
+		opts.Width = 960
+	}
+	if opts.Height <= 0 {
+		opts.Height = 640
+	}
+	if opts.FontSize <= 0 {
+		opts.FontSize = 14
+	}
+	if opts.Font == "" {
+		opts.Font = defaultFont
+	}
+	if !opts.Background.isSet() {
+		if opts.Dark {
+			opts.Background = Hex(0x1e1e1e)
+		} else {
+			opts.Background = Hex(0xffffff)
+		}
+	}
+	if !opts.TextColor.isSet() {
+		if opts.Dark {
+			opts.TextColor = Hex(0xe6e6e6)
+		} else {
+			opts.TextColor = Hex(0x1a1a1a)
+		}
+	}
+
+	w := &Window{
+		opts:      opts,
+		states:    map[uint64]*elState{},
+		hoverIDs:  map[uint64]bool{},
+		textures:  map[uint64]*texEntry{},
+		surfaces:  map[uint64]*surfaceEntry{},
+		webviews:  map[*WebView]bool{},
+		iconTiles: map[iconKey]render.Tile{},
+		byID:      map[uint64]*El{},
+		prevByID:  map[uint64]*El{},
+		locals:    map[string]*localEntry{},
+		dirty:     true,
+	}
+	return w, nil
+}
+
+// SetColors switches the window between light and dark as Options.Dark,
+// Background and TextColor do at creation: the system frame and title bar,
+// tooltips, the color behind the view and the default text color. A zero
+// color keeps the current one. Call it on the UI thread.
+func (w *Window) SetColors(dark bool, background, text Color) {
+	if dark != w.opts.Dark {
+		w.opts.Dark = dark
+		w.setDarkFrame(dark)
+	}
+	if background.isSet() {
+		w.opts.Background = background
+	}
+	if text.isSet() {
+		w.opts.TextColor = text
+	}
+	w.Update()
 }

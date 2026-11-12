@@ -9,6 +9,9 @@ import (
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
+// defaultFont is the font family of Options.Font when it is empty.
+const defaultFont = "Segoe UI"
+
 // monoTicks returns a monotonic time for frame statistics.
 func monoTicks() time.Duration { return win.Ticks() }
 

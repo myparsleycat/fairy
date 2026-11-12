@@ -294,32 +294,16 @@ func (i *Image) Lost() bool {
 	return i.gpu.texture(render.CurrentGen()) == nil
 }
 
-// NRGBA returns a copy of the image's pixels with straight alpha. For an
-// Image backed by a texture it reads the texture back, which needs a
-// B8G8R8A8 or R8G8B8A8 format; an animated image returns its first frame.
-// An image an ImageCache loaded without a size limit is decoded again at
-// its natural size.
-func (i *Image) NRGBA() (*image.NRGBA, error) {
-	if i.gpu == nil {
-		if i.lazy != nil {
-			full, err := i.lazy.decodeFull()
-			if err != nil {
-				return nil, err
-			}
-			i = full
-		}
-		img := image.NewNRGBA(image.Rect(0, 0, i.data.W, i.data.H))
-		imaging.UnpremultiplyRGBA(img.Pix, i.data.Pixels)
-		return img, nil
-	}
+// readNRGBA reads the texture back with straight alpha.
+func (g *gpuImage) readNRGBA() (*image.NRGBA, error) {
 	var out *image.NRGBA
-	err := UseDevice(func(g GPU) error {
-		t := i.gpu.texture(g.Generation)
+	err := UseDevice(func(dev GPU) error {
+		t := g.texture(dev.Generation)
 		if t == nil {
 			return errors.New("fairy: image texture was released or its device lost")
 		}
 		var err error
-		out, err = g.Context.ReadImage(t.Resource(), i.gpu.premul)
+		out, err = dev.Context.ReadImage(t.Resource(), g.premul)
 		return err
 	})
 	return out, err

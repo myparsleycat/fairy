@@ -14,6 +14,7 @@ var errUnsupported = errors.New("render: no GPU backend for this platform yet")
 // Device is the GPU device shared by every window.
 type Device struct {
 	Gen  uint64 // numbers devices in creation order, starting at 1
+	Info DeviceInfo
 	mu   sync.Mutex
 	refs int
 	lost bool
@@ -34,6 +35,11 @@ func (d *Device) Nested() bool { return false }
 func (d *Device) Trim()        {}
 func (d *Device) MarkLost()    { d.lost = true }
 func (d *Device) Lost() bool   { return d.lost }
+
+// DeviceInfo describes the adapter a Device runs on.
+type DeviceInfo struct {
+	Software bool // the device renders on the CPU
+}
 
 // Texture is an image on the GPU.
 type Texture struct {

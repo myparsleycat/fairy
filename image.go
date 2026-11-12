@@ -62,3 +62,24 @@ func ImageEl(img *Image) *El {
 
 // Fit sets how an image element fills its box.
 func (e *El) Fit(f Fit) *El { e.fit = f; return e }
+
+// NRGBA returns a copy of the image's pixels with straight alpha. For an
+// Image backed by a texture it reads the texture back, which needs a
+// B8G8R8A8 or R8G8B8A8 format; an animated image returns its first frame.
+// An image an ImageCache loaded without a size limit is decoded again at
+// its natural size.
+func (i *Image) NRGBA() (*image.NRGBA, error) {
+	if i.gpu == nil {
+		if i.lazy != nil {
+			full, err := i.lazy.decodeFull()
+			if err != nil {
+				return nil, err
+			}
+			i = full
+		}
+		img := image.NewNRGBA(image.Rect(0, 0, i.data.W, i.data.H))
+		imaging.UnpremultiplyRGBA(img.Pix, i.data.Pixels)
+		return img, nil
+	}
+	return i.gpu.readNRGBA()
+}

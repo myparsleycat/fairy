@@ -1,7 +1,6 @@
 package fairy
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"syscall"
@@ -9,7 +8,6 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
-	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/internal/uia"
 	"github.com/myparsleycat/fairy/internal/win"
@@ -121,55 +119,13 @@ func loadReducedMotion() {
 // NewWindow creates a window. Call it on the UI thread: inside Main's start
 // function, a handler, or Do.
 func NewWindow(opts Options) (*Window, error) {
-	opts.DynamicBackdrop = opts.DynamicBackdrop && BackdropSupported(BackdropMica)
-	if opts.View == nil {
-		return nil, errors.New("fairy: Options.View is required")
+	w, err := newWindowState(opts)
+	if err != nil {
+		return nil, err
 	}
-	if !onUIThread() {
-		return nil, errors.New("fairy: NewWindow must run on the UI thread (inside Main, a handler or Do)")
-	}
+	opts = w.opts
 	if err := registerClass(); err != nil {
 		return nil, fmt.Errorf("fairy: register class: %w", err)
-	}
-	if opts.Width <= 0 {
-		opts.Width = 960
-	}
-	if opts.Height <= 0 {
-		opts.Height = 640
-	}
-	if opts.FontSize <= 0 {
-		opts.FontSize = 14
-	}
-	if opts.Font == "" {
-		opts.Font = "Segoe UI"
-	}
-	if !opts.Background.isSet() {
-		if opts.Dark {
-			opts.Background = Hex(0x1e1e1e)
-		} else {
-			opts.Background = Hex(0xffffff)
-		}
-	}
-	if !opts.TextColor.isSet() {
-		if opts.Dark {
-			opts.TextColor = Hex(0xe6e6e6)
-		} else {
-			opts.TextColor = Hex(0x1a1a1a)
-		}
-	}
-
-	w := &Window{
-		opts:      opts,
-		states:    map[uint64]*elState{},
-		hoverIDs:  map[uint64]bool{},
-		textures:  map[uint64]*texEntry{},
-		surfaces:  map[uint64]*surfaceEntry{},
-		webviews:  map[*WebView]bool{},
-		iconTiles: map[iconKey]render.Tile{},
-		byID:      map[uint64]*El{},
-		prevByID:  map[uint64]*El{},
-		locals:    map[string]*localEntry{},
-		dirty:     true,
 	}
 	dpi := win.GetDpiForSystem()
 	w.scale = float32(dpi) / 96
@@ -211,8 +167,7 @@ func NewWindow(opts Options) (*Window, error) {
 	}
 
 	if opts.Dark {
-		v := int32(1)
-		win.DwmSetWindowAttribute(hwnd, win.DWMWA_USE_IMMERSIVE_DARK_MODE, unsafe.Pointer(&v), 4)
+		w.setDarkFrame(true)
 	}
 	if opts.Frameless {
 		m := win.MARGINS{Top: 1}
@@ -343,26 +298,13 @@ func (w *Window) Close() { win.PostMessage(w.hwnd, win.WM_CLOSE, 0, 0) }
 // SetTitle changes the window title.
 func (w *Window) SetTitle(s string) { win.SetWindowText(w.hwnd, s) }
 
-// SetColors switches the window between light and dark as Options.Dark,
-// Background and TextColor do at creation: the system frame and title bar,
-// tooltips, the color behind the view and the default text color. A zero
-// color keeps the current one. Call it on the UI thread.
-func (w *Window) SetColors(dark bool, background, text Color) {
-	if dark != w.opts.Dark {
-		w.opts.Dark = dark
-		v := int32(0)
-		if dark {
-			v = 1
-		}
-		win.DwmSetWindowAttribute(w.hwnd, win.DWMWA_USE_IMMERSIVE_DARK_MODE, unsafe.Pointer(&v), 4)
+// setDarkFrame switches the system title bar and frame to dark or light.
+func (w *Window) setDarkFrame(dark bool) {
+	v := int32(0)
+	if dark {
+		v = 1
 	}
-	if background.isSet() {
-		w.opts.Background = background
-	}
-	if text.isSet() {
-		w.opts.TextColor = text
-	}
-	w.Update()
+	win.DwmSetWindowAttribute(w.hwnd, win.DWMWA_USE_IMMERSIVE_DARK_MODE, unsafe.Pointer(&v), 4)
 }
 
 // HWND returns the native window handle.
