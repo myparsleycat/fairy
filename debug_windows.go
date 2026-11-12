@@ -26,9 +26,10 @@ const (
 	dirtyWheel
 	dirtyResize
 	dirtyDevice
+	dirtyLayout
 )
 
-var dirtyNames = [...]string{"update", "post", "go", "hover", "pointer", "dismiss", "scroll", "wheel", "resize", "device"}
+var dirtyNames = [...]string{"update", "post", "go", "hover", "pointer", "dismiss", "scroll", "wheel", "resize", "device", "layout"}
 
 func (c dirtyCause) String() string {
 	var parts []string

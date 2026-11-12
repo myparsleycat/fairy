@@ -403,6 +403,9 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if e.onLayout != nil && (n.W != s.layoutW || n.H != s.layoutH || !s.laidOut) {
 		s.layoutW, s.layoutH, s.laidOut = n.W, n.H, true
 		e.onLayout(n.W, n.H)
+		// The view may depend on the reported size, as the toasts do on
+		// their heights, so it is built again within this frame.
+		w.markDirty(dirtyLayout)
 	}
 	h := hit{el: e, x: r.x, y: r.y, w: r.w, h: r.h, clip: clip, radii: e.radii}
 	if !e.xf.identity() {
