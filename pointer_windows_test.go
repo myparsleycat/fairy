@@ -244,6 +244,25 @@ func TestWindowChromePreservesModalAndPopover(t *testing.T) {
 	}
 }
 
+func TestPopoverStaysBelowWindowChrome(t *testing.T) {
+	w := newPointerWindow(t, func() *El {
+		return Col(
+			Box().Key("bar").WFull().H(30).DragRegion().WindowChrome(),
+			Box().Key("anchor").Size(10, 10).Left(10).Top(60).Popover(Box().Key("popup").Size(40, 40), PopoverOptions{}),
+		).WFull().HFull()
+	})
+	popup := w.findKey("popup")
+	if popup == nil {
+		t.Fatal("popup not placed")
+	}
+	if popup.absY < 34 {
+		t.Errorf("popup top = %v, want at least 34 below the 30 pixel chrome", popup.absY)
+	}
+	if got := w.pointerHitTest(popup.absX+1, popup.absY+1); got != popup {
+		t.Errorf("press on the popup's top edge reached %p, want popup %p", got, popup)
+	}
+}
+
 func TestWindowChromeHover(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

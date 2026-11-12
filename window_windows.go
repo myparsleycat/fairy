@@ -159,9 +159,17 @@ type Window struct {
 
 	hits       []hit
 	chromeHits []int
-	bars       []scrollBar
-	focusables []*El
-	byID       map[uint64]*El
+	// chromeTop is the bottom of the WindowChrome band along the top edge.
+	// Popovers and tooltips stay below it, since chrome takes the pointer
+	// before overlays and would swallow presses on anything drawn over it.
+	chromeTop float32
+	// layerChromeTop is chromeTop measured from overlay layers on the last
+	// placement. Popovers are placed among those layers, before later ones
+	// are, so they use the previous frame's value.
+	layerChromeTop float32
+	bars           []scrollBar
+	focusables     []*El
+	byID           map[uint64]*El
 
 	hoverPath      []*El
 	hoverIDs       map[uint64]bool

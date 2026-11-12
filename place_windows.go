@@ -85,6 +85,9 @@ func (w *Window) placeAll() {
 		}
 	}
 	w.place(w.root, 0, 0, wr)
+	rootChrome := len(w.chromeHits)
+	w.chromeTop = max(w.topChromeBottom(w.chromeHits, wr), w.layerChromeTop)
+	area := rectF{0, w.chromeTop, wr.w, wr.h - w.chromeTop}
 	for _, l := range w.layers {
 		l.hidden = false
 		n := &l.root.node
@@ -100,11 +103,11 @@ func (w *Window) placeAll() {
 			}
 			// A scrolling popover is cut to the room on its roomier side, as
 			// Floating UI's size middleware sets --available-height.
-			if room := popoverRoom(ar, l.pop.opts, wr); l.root.style.ScrollY && n.H > room {
+			if room := popoverRoom(ar, l.pop.opts, area); l.root.style.ScrollY && n.H > room {
 				layout.ComputeFit(n, wr.w, room)
 			}
 			var side Side
-			n.X, n.Y, side = popoverPosition(ar, n.W, n.H, l.pop.opts, wr)
+			n.X, n.Y, side = popoverPosition(ar, n.W, n.H, l.pop.opts, area)
 			root := l.root
 			root.popSide = uint8(side) + 1
 			frac := func(v, start, size float32) float32 {
@@ -130,6 +133,7 @@ func (w *Window) placeAll() {
 		w.place(l.root, 0, 0, wr)
 		l.focusEnd = len(w.focusables)
 	}
+	w.layerChromeTop = w.topChromeBottom(w.chromeHits[rootChrome:], wr)
 	if k := w.intoViewKey; k != "" {
 		w.intoViewKey = ""
 		if e := w.findKey(k); e != nil {
@@ -251,6 +255,24 @@ func (w *Window) growPass(e *El) float32 {
 	return e.grow.dh
 }
 
+// topChromeBottom returns the bottom of the WindowChrome boxes among hits placed
+// against the top edge of wr. Exclusions and boxes taller than half the window,
+// which mark more than a title bar, do not count.
+func (w *Window) topChromeBottom(hits []int, wr rectF) float32 {
+	var bottom float32
+	for _, i := range hits {
+		h := &w.hits[i]
+		if h.el.excludeChrome || h.y > wr.y+0.5 || h.h > wr.h/2 {
+			continue
+		}
+		r := rectF{h.x, h.y, h.w, h.h}.intersect(h.clip)
+		if !r.empty() {
+			bottom = max(bottom, r.y+r.h)
+		}
+	}
+	return bottom
+}
+
 // popoverRoom returns the height a popover next to a can take inside wr, keeping
 // the 4 pixel margin popoverPosition keeps: below or above a, whichever is
 // taller, for SideBottom and SideTop.
@@ -258,8 +280,8 @@ func popoverRoom(a rectF, o PopoverOptions, wr rectF) float32 {
 	if o.Side == SideLeft || o.Side == SideRight {
 		return max(wr.h-8, 0)
 	}
-	below := wr.h - (a.y + a.h + o.Gap) - 4
-	above := a.y - o.Gap - 4
+	below := wr.y + wr.h - (a.y + a.h + o.Gap) - 4
+	above := a.y - o.Gap - 4 - wr.y
 	return max(below, above, 0)
 }
 
@@ -285,9 +307,9 @@ func popoverPosition(a rectF, cw, ch float32, o PopoverOptions, wr rectF) (float
 		if o.Side == SideTop {
 			y = above
 		}
-		if o.Side == SideBottom && below+ch > wr.h && above >= 0 {
+		if o.Side == SideBottom && below+ch > wr.y+wr.h && above >= wr.y {
 			y, side = above, SideTop
-		} else if o.Side == SideTop && above < 0 && below+ch <= wr.h {
+		} else if o.Side == SideTop && above < wr.y && below+ch <= wr.y+wr.h {
 			y, side = below, SideBottom
 		}
 	default:
@@ -304,7 +326,7 @@ func popoverPosition(a rectF, cw, ch float32, o PopoverOptions, wr rectF) (float
 		}
 	}
 	x = min(max(x, 4), max(wr.w-cw-4, 4))
-	y = min(max(y, 4), max(wr.h-ch-4, 4))
+	y = min(max(y, wr.y+4), max(wr.y+wr.h-ch-4, wr.y+4))
 	return x, y, side
 }
 

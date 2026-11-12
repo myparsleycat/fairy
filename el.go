@@ -739,6 +739,8 @@ func (e *El) DragRegion() *El { e.dragRegion = true; return e }
 
 // WindowChrome gives this subtree pointer priority over overlays without changing
 // its paint order or the keyboard focus scope. Use it for custom window controls.
+// Popovers and tooltips are placed below chrome along the window's top edge,
+// where they could not take presses.
 func (e *El) WindowChrome() *El { e.windowChrome = true; return e }
 
 // WindowChromeExclude keeps this subtree in normal hit-test order, even inside

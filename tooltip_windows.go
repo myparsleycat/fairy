@@ -83,7 +83,7 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	a := w.tipAnchor
 	top := true
 	y := a.y - ts.Gap - bh
-	if y < 4 && a.y+a.h+ts.Gap+bh <= lh-4 {
+	if y < w.chromeTop+4 && a.y+a.h+ts.Gap+bh <= lh-4 {
 		y, top = a.y+a.h+ts.Gap, false
 	}
 	cx := a.x + a.w/2
@@ -154,7 +154,7 @@ func (w *Window) paintTooltip() bool {
 	lw, lh := float32(w.width)/s, float32(w.height)/s
 	x := min(w.mouseX+12, lw-bw-4)
 	y := w.mouseY + 22
-	if y+bh > lh-4 {
+	if y+bh > lh-4 && w.mouseY-bh-8 >= w.chromeTop+4 {
 		y = w.mouseY - bh - 8
 	}
 	full := w.devRect(rectF{0, 0, lw, lh})

@@ -106,6 +106,11 @@ available while an overlay is open. `WindowChrome` gives the subtree pointer inp
 priority without raising its paint order or changing modal keyboard focus. Mark
 window control buttons with it too if they belong to a separate overlay.
 
+Popovers and tooltips are placed below the `WindowChrome` boxes along the window's
+top edge, since the chrome would take presses on anything drawn over it. Chrome in
+the main view counts at once; chrome in an overlay counts from the next frame.
+`WindowChromeExclude` areas and chrome taller than half the window do not count.
+
 Use `WindowChromeExclude()` on title bar actions that must stay blocked by modal
 backdrops, such as activity badges or update notifications. The exclusion includes
 descendants and takes precedence over nested `WindowChrome` markers. Excluded
