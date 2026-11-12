@@ -11,7 +11,6 @@ import (
 	"log"
 	"math"
 	"runtime"
-	"time"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/d3d"
@@ -381,9 +380,6 @@ func (r *Renderer) HasTarget() bool { return r.rtv.P != nil }
 // errNoTarget reports a Draw while a failed Resize left no render target.
 var errNoTarget = errors.New("render: no render target")
 
-// ErrDeviceLost reports that the GPU device was removed or reset.
-var ErrDeviceLost = errors.New("render: device lost")
-
 // Draw renders the scene and presents it, or leaves it in the offscreen target.
 func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 	r.stats.GPU, r.stats.GPUFrame, r.stats.GPUValid = 0, 0, false
@@ -525,16 +521,6 @@ func (r *Renderer) backBuffer() (d3d.Texture2D, func()) {
 		return d3d.Texture2D{}, func() {}
 	}
 	return buf, func() { buf.Release() }
-}
-
-// Stats is how the last Draw went.
-type Stats struct {
-	Record   time.Duration // building and submitting the draw calls
-	Present  time.Duration // Present, which waits for a free buffer
-	Batches  int           // draw calls
-	GPU      time.Duration
-	GPUFrame uint64 // renderer submission number of the earlier sample
-	GPUValid bool
 }
 
 // SetGPUTiming enables asynchronous timing of renderer commands, excluding

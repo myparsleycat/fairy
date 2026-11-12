@@ -31,11 +31,6 @@ type Device struct {
 	lost    bool
 }
 
-// Verbose logs the selected driver, feature level, flags and adapter when a
-// device is created. The fairy package sets it from FAIRY_DEBUG_FRAMES and
-// FAIRY_DEBUG_GPU.
-var Verbose bool
-
 var (
 	iidIDXGIDevice       = com.MustGUID("54ec77fa-1377-44e6-8c32-88fd5f44c84c")
 	iidIDXGIFactory2     = com.MustGUID("50c83a1c-e072-4c48-87b0-3630fa36a6d0")

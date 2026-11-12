@@ -255,9 +255,6 @@ type upload struct {
 	data       []byte
 }
 
-// Tile is a rectangle inside the atlas.
-type Tile struct{ X, Y, W, H int }
-
 func newAtlas(r *Renderer, size int) (*Atlas, error) {
 	a := &Atlas{r: r}
 	return a, a.allocTexture(size)
@@ -300,15 +297,6 @@ var atlasGenerations atomic.Int64
 
 // Size is the atlas edge length in texels.
 func (a *Atlas) Size() int { return a.size }
-
-const (
-	maxAtlasSize = 8192
-	tilePad      = 1
-)
-
-// Fits reports whether a w*h mask fits an atlas grown to its largest size.
-// A mask that does not would make every Insert fail however often it grows.
-func Fits(w, h int) bool { return w+tilePad <= maxAtlasSize && h+tilePad <= maxAtlasSize }
 
 // Insert reserves space for a w*h coverage mask and queues its upload.
 // It returns false when the atlas is full.
