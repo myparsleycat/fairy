@@ -1,11 +1,9 @@
 package fairy
 
 import (
-	"sync"
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/pancursor"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // A middle press on a scroll container that no element under the pointer
@@ -51,7 +49,7 @@ func (w *Window) startAutoScroll(top *El, x, y float32) bool {
 		s.scrollTX, s.scrollTY, s.smooth = s.scrollX, s.scrollY, false
 		stopGlide(s)
 		w.autoScroll = &autoScroll{el: e.id, x: x, y: y, canX: canX, canY: canY, held: true}
-		win.SetCapture(w.hwnd)
+		w.capturePointer()
 		w.applyCursor()
 		w.invalidate()
 		return true
@@ -66,7 +64,7 @@ func (w *Window) stopAutoScroll() {
 	}
 	w.autoScroll = nil
 	if a.held {
-		win.ReleaseCapture()
+		w.releasePointer()
 	}
 	if w.mouseIn {
 		w.applyCursor()
@@ -94,7 +92,7 @@ func (w *Window) autoScrollRelease() bool {
 		return false
 	}
 	a.held = false
-	win.ReleaseCapture()
+	w.releasePointer()
 	// Capture may have suppressed the leave notification; the next move
 	// re-arms it so that leaving the window is noticed.
 	w.tracking = false
@@ -121,9 +119,7 @@ func (w *Window) stepAutoScroll(dt float32) {
 	if outside {
 		// No moves arrive outside the window without capture; the pointer is
 		// read here and polled while the view stands still.
-		p := win.GetCursorPos()
-		win.ScreenToClient(w.hwnd, &p)
-		x, y = float32(p.X)/w.scale, float32(p.Y)/w.scale
+		x, y = w.pointerPos()
 	}
 	var vx, vy float32
 	if a.canX {
@@ -171,39 +167,4 @@ func (w *Window) panCursor() pancursor.Kind {
 		vy = autoScrollSpeed(w.mouseY - a.y)
 	}
 	return pancursor.At(vx, vy, a.canX, a.canY)
-}
-
-func (w *Window) setPanCursor() {
-	a := w.autoScroll
-	a.cursor = w.panCursor()
-	size := int(win.GetSystemMetricsForDpi(win.SM_CXCURSOR, uint32(w.scale*96+0.5)))
-	if size <= 0 {
-		size = 32
-	}
-	win.SetCursor(panCursorHandle(a.cursor, size))
-}
-
-var panCursors struct {
-	sync.Mutex
-	m map[[2]int]win.HANDLE
-}
-
-// panCursorHandle returns the cursor c at size pixels, made on first use and
-// kept for the life of the process.
-func panCursorHandle(c pancursor.Kind, size int) win.HANDLE {
-	panCursors.Lock()
-	defer panCursors.Unlock()
-	key := [2]int{int(c), size}
-	if h, ok := panCursors.m[key]; ok {
-		return h
-	}
-	h := win.CreateCursorFromBGRA(pancursor.Pixels(c, size), size, size, size/2, size/2)
-	if h == 0 {
-		h = win.LoadCursor(win.IDC_SIZEALL)
-	}
-	if panCursors.m == nil {
-		panCursors.m = map[[2]int]win.HANDLE{}
-	}
-	panCursors.m[key] = h
-	return h
 }

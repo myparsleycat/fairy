@@ -2,7 +2,6 @@ package fairy
 
 import (
 	"github.com/myparsleycat/fairy/internal/edit"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // EditCommand is an editing action on a text Input, as its keys and its
@@ -142,13 +141,9 @@ func (w *Window) inputMenu(e *El, x, y float32) []MenuItem {
 
 // showInputMenu opens an Input's built-in context menu at window point (x, y).
 func (w *Window) showInputMenu(e *El, x, y float32) {
-	if w.hwnd == 0 {
+	if !w.popupMenu(x, y, w.inputMenu(e, x, y)) {
 		return
 	}
-	items := w.inputMenu(e, x, y)
-	p := win.POINT{X: int32(x * w.scale), Y: int32(y * w.scale)}
-	win.ClientToScreen(w.hwnd, &p)
-	showMenu(w.hwnd, p.X, p.Y, items)
 	w.Update()
 }
 
@@ -158,12 +153,12 @@ func (w *Window) clipboardText() (string, bool) {
 	if w.fakeClip != nil {
 		return *w.fakeClip, true
 	}
-	return win.ClipboardText(w.hwnd)
+	return w.systemClipboardText()
 }
 
 func (w *Window) clipboardHasText() bool {
 	if w.fakeClip != nil {
 		return *w.fakeClip != ""
 	}
-	return win.ClipboardHasText()
+	return w.systemClipboardHasText()
 }

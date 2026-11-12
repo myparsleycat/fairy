@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -17,43 +15,29 @@ import (
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
-// The app window is a hidden top-level window owned by the UI thread. It
-// receives calls posted from other goroutines, tray icon notifications and
-// launches forwarded by later instances. Unlike thread messages, its messages
-// keep arriving while a modal loop (dialog, menu, window move) runs. It is not
-// message-only because those get no broadcasts, such as TaskbarCreated, and
-// cannot own the foreground, which tray menus need.
-var app struct {
-	main    sync.Mutex
-	thread  atomic.Uint32
-	hwnd    win.HWND
-	closing bool
-	done    chan struct{} // closed when this Main run begins shutting down
-
-	mu    sync.Mutex
-	calls []appCall
-	quiet []appCall // like calls, but no window updates afterwards
-
+// appPlat is the Win32 part of app. The app window is a hidden top-level
+// window owned by the UI thread. It receives calls posted from other
+// goroutines, tray icon notifications and launches forwarded by later
+// instances. Unlike thread messages, its messages keep arriving while a modal
+// loop (dialog, menu, window move) runs. It is not message-only because those
+// get no broadcasts, such as TaskbarCreated, and cannot own the foreground,
+// which tray menus need.
+type appPlat struct {
+	hwnd       win.HWND
 	instanceID string
-	onLaunch   func(Launch)
 	mutex      win.HANDLE
-
-	onSessionEnd func() // guarded by mu
 }
 
-// OnSessionEnd sets f to run when Windows ends the user session, at sign-out, restart or shutdown. f runs on the
-// UI thread while Main is running. Windows may end the process as soon as f returns, without Main returning, so f
-// must finish the cleanup that would otherwise follow Main. It may be called from any goroutine; nil removes it.
-func OnSessionEnd(f func()) {
-	app.mu.Lock()
-	app.onSessionEnd = f
-	app.mu.Unlock()
-}
+// appLoopReady reports whether the UI loop can be woken.
+func appLoopReady() bool { return app.hwnd != 0 }
 
-type appCall struct {
-	run     func()
-	cancel  func()
-	session <-chan struct{}
+// wakeAppLoop asks the UI loop to run the queued calls, or the quiet ones.
+func wakeAppLoop(quiet bool) bool {
+	msg := uint32(msgAppCall)
+	if quiet {
+		msg = msgAppQuiet
+	}
+	return win.PostMessage(app.hwnd, msg, 0, 0)
 }
 
 const (
@@ -62,17 +46,8 @@ const (
 )
 
 var appProcPtr = syscall.NewCallback(appProc)
-var errUIUnavailable = apphost.ErrUIUnavailable
 
-func init() {
-	apphost.HWND = func() win.HWND { return app.hwnd }
-	apphost.OnUIThread = onUIThread
-	apphost.Running = func() bool { return app.thread.Load() != 0 }
-	apphost.Do = func(f func()) bool { return doAppCall(f, msgAppCall) }
-	apphost.Go = Go
-	apphost.UpdateWindows = updateWindows
-	apphost.QuitIfIdle = quitIfIdle
-}
+func init() { apphost.HWND = func() win.HWND { return app.hwnd } }
 
 // Main runs the UI message loop on the calling goroutine's OS thread. start
 // runs on that thread first and typically opens windows and a tray icon.
@@ -143,88 +118,6 @@ func quitIfIdle() {
 	}
 }
 
-// Go runs f on the UI thread without waiting, then updates every window.
-// It may be called from any goroutine; before Main starts, f is queued until it does.
-// Calls still queued when Main exits are discarded.
-func Go(f func()) {
-	enqueueAppCall(appCall{run: f}, msgAppCall)
-}
-
-// Do runs f on the UI thread and waits for it to return. On the UI thread it
-// calls f directly. If no UI loop is running, or it exits before f runs, Do
-// returns without calling f.
-func Do(f func()) {
-	doAppCall(f, msgAppCall)
-}
-
-// doQuiet runs f on the UI thread and waits, without updating windows
-// afterwards. It is for queries that change no state.
-func doQuiet(f func()) {
-	doAppCall(f, msgAppQuiet)
-}
-
-func doAppCall(f func(), msg uint32) bool {
-	if onUIThread() {
-		f()
-		return true
-	}
-	done := make(chan bool, 1)
-	call := appCall{
-		run: func() {
-			defer func() { done <- true }()
-			f()
-		},
-		cancel: func() { done <- false },
-	}
-	return enqueueAppCall(call, msg) && <-done
-}
-
-func enqueueAppCall(call appCall, msg uint32) bool {
-	app.mu.Lock()
-	defer app.mu.Unlock()
-	if app.closing || (app.hwnd == 0 && call.cancel != nil) || (call.session != nil && call.session != app.done) {
-		return false
-	}
-	queue := &app.calls
-	if msg == msgAppQuiet {
-		queue = &app.quiet
-	}
-	if len(*queue) == 0 && app.hwnd != 0 && !win.PostMessage(app.hwnd, msg, 0, 0) {
-		return false
-	}
-	*queue = append(*queue, call)
-	return true
-}
-
-func cancelAppCalls(calls []appCall) {
-	for _, call := range calls {
-		if call.cancel != nil {
-			call.cancel()
-		}
-	}
-}
-
-func onUIThread() bool {
-	thread := app.thread.Load()
-	return thread != 0 && win.GetCurrentThreadId() == thread
-}
-
-func runAppCalls() {
-	app.mu.Lock()
-	calls := app.calls
-	app.calls = nil
-	app.mu.Unlock()
-	for _, call := range calls {
-		t := time.Now()
-		call.run()
-		if debugSlow > 0 {
-			slow("Go call", t)
-		}
-	}
-	// Calls usually change app state, so every window rebuilds its view.
-	updateWindows()
-}
-
 func updateWindows() {
 	for _, w := range windows {
 		w.markDirty(dirtyGo)
@@ -269,13 +162,7 @@ func appProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 		runAppCalls()
 		return 0
 	case msgAppQuiet:
-		app.mu.Lock()
-		calls := app.quiet
-		app.quiet = nil
-		app.mu.Unlock()
-		for _, call := range calls {
-			call.run()
-		}
+		runQuietCalls()
 		return 0
 	case win.WM_COPYDATA:
 		cds := (*win.COPYDATASTRUCT)(com.Ptr(lp))
@@ -306,12 +193,6 @@ func appProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 		return h(wp, lp)
 	}
 	return win.DefWindowProc(hwnd, msg, wp, lp)
-}
-
-// Launch is a later start of the program, forwarded to the running instance.
-type Launch struct {
-	Args []string // os.Args of the new process
-	Dir  string   // its working directory
 }
 
 const launchMagic = 0x6775696c // "guil"

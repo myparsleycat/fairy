@@ -27,6 +27,10 @@ type windowPlat struct {
 	ncHover    bool   // the pointer is over a MaximizeButton, which Windows treats as non-client
 }
 
+// hasNativeWindow reports whether the window has a native window, which
+// offscreen windows and closed ones do not.
+func (w *Window) hasNativeWindow() bool { return w.hwnd != 0 }
+
 // wake asks the message loop to run the posted calls. It reports false when
 // the window is gone.
 func (w *Window) wake() bool { return win.PostMessage(w.hwnd, msgWake, 0, 0) }
@@ -39,9 +43,22 @@ func (w *Window) requestPaint() {
 	}
 }
 
-func (w *Window) systemClipboardText() string {
-	s, _ := win.ClipboardText(w.hwnd)
-	return s
+// systemClipboardText returns the clipboard's text, and false when it holds
+// none or could not be opened.
+func (w *Window) systemClipboardText() (string, bool) { return win.ClipboardText(w.hwnd) }
+
+func (w *Window) systemClipboardHasText() bool { return win.ClipboardHasText() }
+
+// popupMenu shows items as a native menu at window point (x, y) and waits
+// until it closes. It reports false when there is no window to show it in.
+func (w *Window) popupMenu(x, y float32, items []MenuItem) bool {
+	if w.hwnd == 0 {
+		return false
+	}
+	p := win.POINT{X: int32(x * w.scale), Y: int32(y * w.scale)}
+	win.ClientToScreen(w.hwnd, &p)
+	showMenu(w.hwnd, p.X, p.Y, items)
+	return true
 }
 
 func (w *Window) setSystemClipboardText(s string) bool { return win.SetClipboardText(w.hwnd, s) }
@@ -913,4 +930,23 @@ func (w *Window) applyCursor() {
 		id = win.IDC_CROSS
 	}
 	win.SetCursor(win.LoadCursor(id))
+}
+
+// onChar handles a WM_CHAR, which carries one UTF-16 code unit.
+func (w *Window) onChar(c uint16) {
+	r := rune(c)
+	high := w.charHigh
+	w.charHigh = 0
+	switch {
+	case c >= 0xD800 && c < 0xDC00:
+		w.charHigh = c
+		return
+	case c >= 0xDC00 && c < 0xE000:
+		// A low surrogate without its high half is dropped.
+		if high == 0 {
+			return
+		}
+		r = utf16.DecodeRune(rune(high), r)
+	}
+	w.onTypedRune(r)
 }

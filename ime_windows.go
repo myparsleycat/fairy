@@ -4,36 +4,6 @@ import (
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
-func (w *Window) updateIME() {
-	if w.hwnd == 0 {
-		return
-	}
-	e := w.focusedEl()
-	editing := e != nil && e.kind == kindInput
-	on := w.takesIME(e)
-	if on != w.imeOn {
-		win.ImmEnable(w.hwnd, on)
-		w.imeOn = on
-		if !on && editing {
-			w.editOf(e).comp = ""
-		}
-	}
-	if editing {
-		w.caretOn = true
-		w.setTimer(timerCaret, caretBlinkMs)
-	} else {
-		w.killTimer(timerCaret)
-	}
-}
-
-func (w *Window) imeInput() (*El, *editState) {
-	e := w.focusedEl()
-	if !w.takesIME(e) {
-		return nil, nil
-	}
-	return e, w.editOf(e)
-}
-
 func (w *Window) onIMEComposition(lp uintptr) {
 	e, st := w.imeInput()
 	if e == nil {
@@ -61,31 +31,6 @@ func (w *Window) onIMEComposition(lp uintptr) {
 	w.resetBlink()
 	w.updateIMEPosition()
 	w.invalidate()
-}
-
-func utf16ToByteOffset(s string, u int) int {
-	if u < 0 {
-		return len(s)
-	}
-	n := 0
-	for i, r := range s {
-		if n >= u {
-			return i
-		}
-		if r >= 0x10000 {
-			n += 2
-		} else {
-			n++
-		}
-	}
-	return len(s)
-}
-
-func (w *Window) onIMEEnd() {
-	if _, st := w.imeInput(); st != nil && st.comp != "" {
-		st.comp = ""
-		w.invalidate()
-	}
 }
 
 func (w *Window) commitComposition() {
@@ -120,3 +65,6 @@ func (w *Window) updateIMEPosition() {
 		Area:    win.RECT{Left: x, Top: y, Right: x + 1, Bottom: y + h},
 	})
 }
+
+// enableIME turns the input method on for the window or off.
+func (w *Window) enableIME(on bool) { win.ImmEnable(w.hwnd, on) }

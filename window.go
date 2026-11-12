@@ -322,7 +322,8 @@ func (w *Window) ClipboardText() string {
 	if w.fakeClip != nil {
 		return *w.fakeClip
 	}
-	return w.systemClipboardText()
+	s, _ := w.systemClipboardText()
+	return s
 }
 
 // SetClipboardText puts s on the clipboard and reports whether it got there;

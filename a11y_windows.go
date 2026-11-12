@@ -254,42 +254,6 @@ func visibleRect(e *El) (rectF, bool) {
 	return r, !r.empty()
 }
 
-// scrollIntoView scrolls e's scroll container ancestors, innermost first, so
-// that e is visible.
-func (w *Window) scrollIntoView(e *El) {
-	for a := e.parent; a != nil; a = a.parent {
-		if !(a.style.ScrollX || a.style.ScrollY) || a.state == nil {
-			continue
-		}
-		var x, y float32 // e's position in a's content
-		for c := e; c != a; c = c.parent {
-			x += c.node.X
-			y += c.node.Y
-			if p := c.parent; p != a && p.state != nil && (p.style.ScrollX || p.style.ScrollY) {
-				x -= p.state.scrollX
-				y -= p.state.scrollY
-			}
-		}
-		s, n := a.state, &a.node
-		sx, sy := s.scrollX, s.scrollY
-		if a.style.ScrollY {
-			if y < sy {
-				sy = y
-			} else if y+e.node.H > sy+n.H {
-				sy = y + e.node.H - n.H
-			}
-		}
-		if a.style.ScrollX {
-			if x < sx {
-				sx = x
-			} else if x+e.node.W > sx+n.W {
-				sx = x + e.node.W - n.W
-			}
-		}
-		w.setScroll(a, sx, sy)
-	}
-}
-
 var controlTypes = map[Role]int32{
 	RoleGroup:        uia.ControlGroup,
 	RoleButton:       uia.ControlButton,

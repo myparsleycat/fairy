@@ -218,7 +218,7 @@ func (g *gpuImage) release() {
 		g.mu.Unlock()
 		t.Release()
 	}
-	if !onUIThread() && enqueueAppCall(appCall{run: free, cancel: free}, msgAppCall) {
+	if !onUIThread() && enqueueAppCall(appCall{run: free, cancel: free}, false) {
 		return
 	}
 	free()

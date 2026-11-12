@@ -149,7 +149,7 @@ func runCapturePhase(ctx context.Context, session <-chan struct{}, inline bool, 
 			}
 		},
 		cancel: func() { result <- errUIUnavailable },
-	}, msgAppCall) {
+	}, false) {
 		return errUIUnavailable
 	}
 	select {

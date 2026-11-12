@@ -1,8 +1,6 @@
 package fairy
 
 import (
-	"unicode/utf16"
-
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -211,21 +209,9 @@ func (w *Window) onKeyDown(k keyboard.Key, repeat bool, text string) bool {
 	return false
 }
 
-func (w *Window) onChar(c uint16) {
-	r := rune(c)
-	high := w.charHigh
-	w.charHigh = 0
-	switch {
-	case c >= 0xD800 && c < 0xDC00:
-		w.charHigh = c
-		return
-	case c >= 0xDC00 && c < 0xE000:
-		// A low surrogate without its high half is dropped.
-		if high == 0 {
-			return
-		}
-		r = utf16.DecodeRune(rune(high), r)
-	}
+// onTypedRune types r into the focused Input, as a character the keyboard
+// or an input method produced.
+func (w *Window) onTypedRune(r rune) {
 	if r < 0x20 && r != '\t' || r == 0x7f {
 		return
 	}
