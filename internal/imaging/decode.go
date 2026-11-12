@@ -125,7 +125,7 @@ func (in Input) finish(img *Bitmap) *Bitmap {
 // the first frame of an animation when firstOnly is set. An animation keeps
 // all its frames only when they fit keepBytes; past that it decodes them as it
 // plays, within animBytes. wic, when non-nil,
-// is tried first for the formats wicDecoderClass accepts; if it returns nil
+// is tried first for the formats wicAccepts reports; if it returns nil
 // the Go decoders run instead, and usedWIC reports which produced img. run,
 // when non-nil, runs each attempt under a memory reservation of the given
 // bytes and reports false when it did not run the attempt, in which case
@@ -134,7 +134,7 @@ func (in Input) finish(img *Bitmap) *Bitmap {
 func (in Input) DecodePixels(bound Bound, keepBytes, animBytes int64, firstOnly bool,
 	wic func(Input, Bound) *Bitmap, run func(int64, func()) bool,
 ) (img *Bitmap, usedWIC bool, err error) {
-	if wic != nil && wicDecoderClass(in) != nil {
+	if wic != nil && wicAccepts(in) {
 		f := func() { img = in.finish(wic(in, bound)) }
 		if run == nil {
 			f()

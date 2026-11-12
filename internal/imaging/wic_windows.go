@@ -56,6 +56,9 @@ var pngEnd = []byte("\x00\x00\x00\x00IEND\xaeB`\x82")
 // images. Images that need a guard the Go decoders give, or a color
 // conversion WIC does differently, are left to Go: truncated files, which
 // WIC decodes partially, and CMYK JPEGs.
+// wicAccepts reports whether WIC decodes in's format.
+func wicAccepts(in Input) bool { return wicDecoderClass(in) != nil }
+
 func wicDecoderClass(in Input) *com.GUID {
 	if in.Animation.Count != 0 || in.AnimErr != nil || uint64(len(in.data)) > math.MaxUint32 ||
 		in.Config.Width <= 0 || in.Config.Height <= 0 {

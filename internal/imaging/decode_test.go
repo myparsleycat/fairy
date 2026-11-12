@@ -119,6 +119,9 @@ func TestImageDecodeReservationIncludesOrientation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !wicAccepts(in) {
+		t.Skip("the WIC decode path needs WIC")
+	}
 	in.meta.orient = 6
 	in.Config.Width, in.Config.Height = 1, 2
 	raw := New(image.NewRGBA(image.Rect(0, 0, 2, 1)))
