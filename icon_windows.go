@@ -97,28 +97,33 @@ func (w *Window) paintArc(e *El, box rectF, color Color, clip [4]float32, opacit
 	})
 }
 
-// paintSpinner draws eight dots on a circle whose brightness rotates once per
-// second, and asks for a frame at the next step while it is drawn.
+// paintSpinner draws Lucide's loader-circle, M21 12a9 9 0 1 1-6.219-8.56 with
+// a stroke of 2 in a 24-unit box: an arc of radius 9 from 3 o'clock clockwise
+// to 0.1π, turned once per second like CSS animate-spin. It asks for frames at
+// up to 60 per second rather than animating, so a spinner left on screen does
+// not repaint the window at the full refresh rate.
 func (w *Window) paintSpinner(box rectF, color Color, clip [4]float32, opacity float32) {
-	const dots = 8
-	s := w.scale
-	size := min(box.w, box.h) * s
+	size := min(box.w, box.h)
 	if size <= 0 {
 		return
 	}
-	cx, cy := (box.x+box.w/2)*s, (box.y+box.h/2)*s
-	dot := size * 0.2
-	r := size/2 - dot/2
-	const step = time.Second / dots
+	const (
+		extent = 20.0 / 24 // diameter plus stroke
+		stroke = 2.0 / 24
+		start  = math.Pi / 2
+		sweep  = 1.6 * math.Pi
+		step   = time.Second / 60
+	)
 	now := w.now()
 	since := now.Sub(pulseEpoch)
-	head := int(since % time.Second / step)
-	for i := 0; i < dots; i++ {
-		a := float64(i) / dots * 2 * math.Pi
-		x, y := cx+r*float32(math.Sin(a))-dot/2, cy-r*float32(math.Cos(a))-dot/2
-		age := (head - i + dots) % dots
-		alpha := 1 - float32(age)/dots*0.85
-		w.scene.Add(primRect([4]float32{x, y, dot, dot}, clip, color.arr(opacity*alpha), dot/2))
-	}
+	turn := float64(since%time.Second) / float64(time.Second)
+	s, d := w.scale, size*extent
+	w.scene.Add(render.Prim{
+		Bounds: [4]float32{(box.x + (box.w-d)/2) * s, (box.y + (box.h-d)/2) * s, d * s, d * s},
+		Clip:   clip,
+		Color:  color.arr(opacity),
+		Params: [4]float32{float32(start + 2*math.Pi*turn), sweep, size * stroke * s, 1},
+		Kind:   render.KindArc,
+	})
 	w.frameAt(now.Add(step - since%step))
 }

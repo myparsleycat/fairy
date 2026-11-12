@@ -10,8 +10,9 @@ func Icon(v *svg.Vector) *El {
 	return e
 }
 
-// Spinner is a busy indicator: a ring of dots in the text color that turns
-// while it is on screen. Size it with Size; it defaults to the icon size.
+// Spinner is a busy indicator: an open ring in the text color, drawn like the
+// Lucide loader-circle icon, that turns once a second while it is on screen.
+// Size it with Size; it defaults to the icon size.
 func Spinner() *El { return newEl(kindSpinner) }
 
 type arcProps struct {
