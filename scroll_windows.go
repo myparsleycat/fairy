@@ -46,7 +46,9 @@ func (w *Window) placeScrollBar(e *El, vis rectF, vertical bool) {
 		pos := (track.w - tw) * (e.state.scrollX / max(n.ContentW-n.W, 1))
 		thumb = rectF{track.x + pos, track.y, tw, thick}
 	}
-	w.bars = append(w.bars, scrollBar{el: e.id, track: track, thumb: thumb, vis: vis, vertical: vertical})
+	w.bars = append(w.bars, scrollBar{
+		el: e.id, track: track, thumb: thumb, vis: vis, vertical: vertical, above: len(w.hits),
+	})
 }
 
 func (w *Window) paintScrollBars(e *El, color Color, opacity float32) {

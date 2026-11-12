@@ -355,6 +355,77 @@ func TestWindowChromePrecedesScrollbar(t *testing.T) {
 	}
 }
 
+func TestCoveredScrollbarTakesNoPress(t *testing.T) {
+	clicks := 0
+	w := newListWindow(t, nil)
+	w.tracking = true
+	var mods keyboard.Mods
+	w.scriptMods = &mods
+	w.opts.View = func(cx *Cx) *El {
+		cx.Overlay(Box(Box().Key("button").WFull().H(40).OnClick(func() { clicks++ })).Key("dialog").
+			WFull().HFull().Center().OnClick(func() {}), nil)
+		return Col(Box().WFull().H(400)).Key("scroll").WFull().HFull().ScrollY()
+	}
+	w.build()
+	w.placeAll()
+	if len(w.bars) != 1 {
+		t.Fatalf("scrollbars = %d, want 1", len(w.bars))
+	}
+	bar, button := w.bars[0], w.findKey("button")
+	x, y := bar.track.x+bar.track.w/2, button.absY+button.h/2
+	w.onButtonDown(x, y, 0)
+	if w.press == nil || w.press.bar != nil {
+		t.Fatal("the scroll bar under the dialog took the press")
+	}
+	w.onButtonUp(x, y, 0)
+	if clicks != 1 {
+		t.Errorf("button clicks = %d, want 1", clicks)
+	}
+}
+
+func TestUncoveredScrollbarTakesPress(t *testing.T) {
+	// The narrow content leaves the bar over the container itself, which the rounded corner and the pass-through
+	// container exclude from hit testing.
+	for _, tc := range []struct {
+		name     string
+		contentW float32
+		scroll   func(*El) *El
+		at       func(bar scrollBar) (float32, float32)
+	}{
+		{"over content", 200, func(e *El) *El { return e }, func(b scrollBar) (float32, float32) {
+			return b.track.x - 2, b.track.y + b.track.h/2
+		}},
+		{"rounded corner", 100, func(e *El) *El { return e.Radius(20) }, func(b scrollBar) (float32, float32) {
+			return b.track.x + b.track.w, b.track.y - 1
+		}},
+		{"pass-through container", 100, func(e *El) *El { return e.PassThrough() }, func(b scrollBar) (float32, float32) {
+			return b.track.x + b.track.w/2, b.track.y + b.track.h/2
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newListWindow(t, nil)
+			w.tracking = true
+			var mods keyboard.Mods
+			w.scriptMods = &mods
+			w.opts.View = func(cx *Cx) *El {
+				content := Box().W(tc.contentW).H(400).OnClick(func() {})
+				return tc.scroll(Col(content).Key("scroll").WFull().HFull().ScrollY())
+			}
+			w.build()
+			w.placeAll()
+			if len(w.bars) != 1 {
+				t.Fatalf("scrollbars = %d, want 1", len(w.bars))
+			}
+			x, y := tc.at(w.bars[0])
+			w.onButtonDown(x, y, 0)
+			if w.press == nil || w.press.bar == nil {
+				t.Fatalf("press at (%v, %v) did not take the scroll bar", x, y)
+			}
+			w.onButtonUp(x, y, 0)
+		})
+	}
+}
+
 func TestWindowChromeNativeHitTest(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

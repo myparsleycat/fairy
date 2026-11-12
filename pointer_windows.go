@@ -82,18 +82,31 @@ type scrollBar struct {
 	thumb    rectF
 	vis      rectF
 	vertical bool
+	// above is the index in hits where the elements placed after the scroll container's subtree start; the bar
+	// is drawn over its own content but under those.
+	above int
 }
 
-// barAt returns the scroll bar whose track, widened for an easier grab, is at (x, y).
+// barAt returns the scroll bar whose track, widened for an easier grab, is at (x, y), unless an element placed
+// above it, such as a dialog or another layer, covers that point.
 func (w *Window) barAt(x, y float32) *scrollBar {
 	for i := len(w.bars) - 1; i >= 0; i-- {
 		b := &w.bars[i]
 		hitArea := rectF{b.track.x - 3, b.track.y - 3, b.track.w + 6, b.track.h + 6}
-		if b.vis.contains(x, y) && hitArea.contains(x, y) {
+		if b.vis.contains(x, y) && hitArea.contains(x, y) && !w.coveredFrom(b.above, x, y) {
 			return b
 		}
 	}
 	return nil
+}
+
+func (w *Window) coveredFrom(start int, x, y float32) bool {
+	for i := start; i < len(w.hits); i++ {
+		if w.hits[i].contains(x, y) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Window) onMouseMove(x, y float32) {
