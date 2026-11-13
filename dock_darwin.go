@@ -16,7 +16,7 @@ var dockProgress struct {
 // system's color. It may be called from any goroutine.
 func (w *Window) SetProgress(state Progress, value float64) {
 	Go(func() {
-		if nsApp == 0 {
+		if nsApp == 0 || w.closed {
 			return
 		}
 		tile := darwin.Send(nsApp, "dockTile")
@@ -49,4 +49,16 @@ func (w *Window) SetProgress(state Progress, value float64) {
 		darwin.Send(tile, "setContentView:", dockProgress.view)
 		darwin.Send(tile, "display")
 	})
+}
+
+// clearDockProgress removes the bar a closing window left on the Dock tile:
+// on Windows the bar goes away with the window's taskbar button.
+func (w *Window) clearDockProgress() {
+	if dockProgress.owner != w || nsApp == 0 {
+		return
+	}
+	dockProgress.owner = nil
+	tile := darwin.Send(nsApp, "dockTile")
+	darwin.Send(tile, "setContentView:", darwin.ID(0))
+	darwin.Send(tile, "display")
 }

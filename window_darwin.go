@@ -35,6 +35,14 @@ type windowPlat struct {
 	// event is the input event being handled, whose modifiers keyMods
 	// reports.
 	event darwin.ID
+	// deadKeys composes dead keys typed while no input method sees keys.
+	deadKeys mackey.DeadKeys
+	// ctrlClick is set while a Control-click, the secondary click on a
+	// Mac, is pressed: its mouseUp: is a right button up too.
+	ctrlClick bool
+	// placedInset is ControlsInset after placeControls last moved the
+	// window controls.
+	placedInset float32
 }
 
 // byView and byDelegate find the Window an AppKit callback is for.
@@ -180,9 +188,12 @@ func (w *Window) windowClosed() {
 	if w.closed {
 		return
 	}
+	// Closing a web view hands the keyboard back to the window's view,
+	// which secures a focused password input again: close them first.
+	w.closeWebViews()
 	w.securePassword(nil)
 	w.releaseBackdrop()
-	w.closeWebViews()
+	w.clearDockProgress()
 	w.a11yShutdown()
 	w.closed = true
 	for id, t := range w.timers {
@@ -202,10 +213,12 @@ func (w *Window) windowClosed() {
 	darwin.Send(w.nsWindow, "setDelegate:", darwin.ID(0))
 	darwin.Release(w.delegate)
 	darwin.Release(w.view)
-	w.layer = 0
 	// The window may be closing inside its own close: release it afterwards.
+	// The handles are cleared so that a call on the closed Window messages
+	// nil, which does nothing, rather than a freed object.
 	nw := w.nsWindow
 	darwin.Async(func() { darwin.Release(nw) })
+	w.nsWindow, w.view, w.layer, w.delegate = 0, 0, 0, 0
 }
 
 // Show shows and activates the window.
@@ -307,13 +320,17 @@ func mainScreenHeight() float64 {
 // Close asks the window to close, running Options.OnClose.
 func (w *Window) Close() {
 	// Event handlers can run inside renderFrame. Keep its resources alive
-	// until it returns, as posting WM_CLOSE does on Windows.
+	// until it returns, as posting WM_CLOSE does on Windows. performClose:
+	// is not used: it beeps when OnClose keeps the window open.
 	darwin.Perform(func() {
-		if !w.closed {
-			darwin.Send(w.nsWindow, "performClose:", darwin.ID(0))
+		if !w.closed && w.mayClose() {
+			w.closeNow()
 		}
 	})
 }
+
+// mayClose asks Options.OnClose whether the window may close.
+func (w *Window) mayClose() bool { return w.opts.OnClose == nil || w.opts.OnClose() }
 
 // resizeClient sizes the window for a content area of width x height
 // logical pixels, keeping its top left corner in place.
@@ -337,6 +354,9 @@ func (w *Window) SetTitle(s string) {
 
 // setDarkFrame switches the title bar and frame to dark or light.
 func (w *Window) setDarkFrame(dark bool) {
+	if !w.hasNativeWindow() {
+		return
+	}
 	name := "NSAppearanceNameAqua"
 	if dark {
 		name = "NSAppearanceNameDarkAqua"
@@ -563,6 +583,12 @@ func (w *Window) mouseDown(ev darwin.ID, button int) {
 	w.focusView()
 	w.commitComposition()
 	x, y := w.eventPoint(ev)
+	if button == 0 && macMods(darwin.Get[uint64](ev, "modifierFlags"))&(keyboard.ModCtrl|keyboard.ModSuper) == keyboard.ModCtrl {
+		// Control-click is the secondary click on a Mac.
+		w.ctrlClick = true
+		w.onButtonDown(x, y, 1)
+		return
+	}
 	if button == 0 && !w.scripted && w.inDragRegion(x, y) {
 		if darwin.Get[int64](ev, "clickCount") == 2 {
 			w.titleBarDoubleClick()
@@ -577,6 +603,10 @@ func (w *Window) mouseDown(ev darwin.ID, button int) {
 func (w *Window) mouseUp(ev darwin.ID, button int) {
 	defer w.handling(ev)()
 	x, y := w.eventPoint(ev)
+	if button == 0 && w.ctrlClick {
+		w.ctrlClick = false
+		button = 1
+	}
 	w.onButtonUp(x, y, button)
 }
 
@@ -592,6 +622,11 @@ func (w *Window) mouseMoved(ev darwin.ID) {
 		return
 	}
 	w.onMouseMove(x, y)
+	// As WM_SETCURSOR does on Windows, each move shows the cursor of what
+	// is under the pointer: the view sets no cursor rects.
+	if !w.closed && w.mouseIn {
+		w.applyCursor()
+	}
 }
 
 func (w *Window) scrollWheel(ev darwin.ID) {
@@ -628,6 +663,14 @@ func (w *Window) keyDown(ev darwin.ID) {
 	repeat := darwin.Get[bool](ev, "isARepeat")
 	chars := darwin.GoString(darwin.Send(ev, "characters"))
 	typed := typedText(chars)
+	flags := darwin.Get[uint64](ev, "modifierFlags")
+	if !w.imeOn && macMods(flags)&nonTypingMods == 0 {
+		// Without the text input system, as in password inputs, the event's
+		// characters carry no dead-key state: compose them here.
+		if s, ok := w.deadKeys.Type(code, flags); ok {
+			typed = typedText(s)
+		}
+	}
 	k := mackey.Key(code)
 	// While the input method composes, it sees keys first.
 	composing := w.composition() != ""
@@ -649,6 +692,44 @@ func (w *Window) keyDown(ev darwin.ID) {
 	}
 	for _, r := range typed {
 		w.onTypedRune(r)
+	}
+}
+
+// flagsChanged reports a modifier key going down to the key handlers, as
+// Windows does with WM_KEYDOWN for Shift, Control, Alt and the Windows key.
+func (w *Window) flagsChanged(ev darwin.ID) {
+	if w.focusedWebView() != nil || w.composition() != "" {
+		return
+	}
+	defer w.handling(ev)()
+	code := darwin.Get[uint16](ev, "keyCode")
+	var mask uint64
+	switch code {
+	case 0x38, 0x3C:
+		mask = nsShift
+	case 0x3B, 0x3E:
+		mask = nsControl
+	case 0x3A, 0x3D:
+		mask = nsOption
+	case 0x37, 0x36:
+		mask = nsCommand
+	default:
+		return
+	}
+	if darwin.Get[uint64](ev, "modifierFlags")&mask == 0 {
+		return // released
+	}
+	if k := mackey.Key(code); k != 0 {
+		w.onKeyDown(k, false, "")
+	}
+}
+
+// forwardEdit passes an edit action the view received from a web view
+// inside it on to the window, which owns their undo manager.
+func forwardEdit(view darwin.ID, action string, sender darwin.ID) {
+	win := darwin.Send(view, "window")
+	if win != 0 && darwin.Send(win, "firstResponder") != view {
+		darwin.Send(win, action, sender)
 	}
 }
 
@@ -711,12 +792,32 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 		{Cmd: darwin.Sel("mouseExited:"), Fn: on(func(w *Window, _ id) {
 			if !w.scripted {
 				w.onMouseLeave()
+				if w.press == nil && w.autoScroll == nil {
+					darwin.Send(darwin.SendClass("NSCursor", "arrowCursor"), "set")
+				}
 			}
 		})},
 		{Cmd: darwin.Sel("scrollWheel:"), Fn: on((*Window).scrollWheel)},
 		{Cmd: darwin.Sel("keyDown:"), Fn: on((*Window).keyDown)},
 		{Cmd: darwin.Sel("keyUp:"), Fn: func(id, sel, id) {}},
-		{Cmd: darwin.Sel("flagsChanged:"), Fn: func(id, sel, id) {}},
+		{Cmd: darwin.Sel("flagsChanged:"), Fn: on((*Window).flagsChanged)},
+		// NSWindow answers undo: and redo: with its undo manager, which web
+		// views share. The view answers them itself so that, while it has
+		// the keyboard, the Edit menu's items stay disabled and ⌘Z reaches
+		// keyDown:, and otherwise passes them on to the window.
+		{Cmd: darwin.Sel("undo:"), Fn: func(self id, _ sel, sender id) { forwardEdit(self, "undo:", sender) }},
+		{Cmd: darwin.Sel("redo:"), Fn: func(self id, _ sel, sender id) { forwardEdit(self, "redo:", sender) }},
+		{Cmd: darwin.Sel("validateMenuItem:"), Fn: func(self id, _ sel, item id) bool {
+			switch darwin.Get[darwin.SEL](item, "action") {
+			case darwin.Sel("undo:"), darwin.Sel("redo:"):
+				win := darwin.Send(self, "window")
+				if win == 0 || darwin.Send(win, "firstResponder") == self {
+					return false
+				}
+				return darwin.Get[bool](win, "validateMenuItem:", item)
+			}
+			return true
+		}},
 	})
 	if err != nil {
 		panic(err)
@@ -741,7 +842,7 @@ var delegateClass = sync.OnceValue(func() darwin.Class {
 	c, err := objc.RegisterClass("FairyWindowDelegate", darwin.Cls("NSObject"), nil, nil, []objc.MethodDef{
 		{Cmd: darwin.Sel("windowShouldClose:"), Fn: func(self id, _ sel, sender id) bool {
 			w := byDelegate[self]
-			return w == nil || w.opts.OnClose == nil || w.opts.OnClose()
+			return w == nil || w.mayClose()
 		}},
 		{Cmd: darwin.Sel("windowWillClose:"), Fn: on(func(w *Window) {
 			w.windowClosed()

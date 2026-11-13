@@ -24,16 +24,15 @@ type (
 
 // Library handles, loaded when the package initializes.
 var (
-	System          uintptr
-	Objc            uintptr
-	CoreFoundation  uintptr
-	Foundation      uintptr
-	CoreGraphics    uintptr
-	CoreText        uintptr
-	QuartzCore      uintptr
-	Metal           uintptr
-	AppKit          uintptr
-	ApplicationSvcs uintptr
+	System         uintptr
+	Objc           uintptr
+	CoreFoundation uintptr
+	Foundation     uintptr
+	CoreGraphics   uintptr
+	CoreText       uintptr
+	QuartzCore     uintptr
+	Metal          uintptr
+	AppKit         uintptr
 )
 
 func load(path string) uintptr {
@@ -55,7 +54,6 @@ func init() {
 	QuartzCore = load(fw + "QuartzCore.framework/QuartzCore")
 	Metal = load(fw + "Metal.framework/Metal")
 	AppKit = load(fw + "AppKit.framework/AppKit")
-	ApplicationSvcs = load(fw + "ApplicationServices.framework/ApplicationServices")
 
 	purego.RegisterLibFunc(&CFRetain, CoreFoundation, "CFRetain")
 	purego.RegisterLibFunc(&CFRelease, CoreFoundation, "CFRelease")

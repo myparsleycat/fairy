@@ -13,7 +13,8 @@ func TestDarwinBackdrop(t *testing.T) {
 	Do(func() {
 		for _, b := range []Backdrop{BackdropMica, BackdropAcrylic} {
 			if err := w.SetBackdrop(b); err != nil {
-				t.Fatal(err)
+				t.Error(err)
+				return // not t.Fatal: it would end the UI loop inside Do
 			}
 			fx := backdropViews[w]
 			subs := darwin.Send(darwin.Send(w.view, "superview"), "subviews")
@@ -27,7 +28,8 @@ func TestDarwinBackdrop(t *testing.T) {
 			w.renderFrame()
 		}
 		if err := w.SetBackdrop(BackdropNone); err != nil {
-			t.Fatal(err)
+			t.Error(err)
+			return // not t.Fatal: it would end the UI loop inside Do
 		}
 		if backdropViews[w] != 0 || !darwin.Get[bool](w.nsWindow, "isOpaque") || w.r.Transparent() {
 			t.Error("BackdropNone left the effect view or a transparent window")

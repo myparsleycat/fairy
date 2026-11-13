@@ -123,6 +123,13 @@ var appDelegateClass = sync.OnceValue(func() darwin.Class {
 					finishMain()
 					return 1 // NSTerminateNow
 				}
+				// ⌘Q closes every window, so each window's OnClose may
+				// keep the app running, as closing it would.
+				for _, w := range windowsFrontToBack() {
+					if !w.closed && !w.mayClose() {
+						return 0 // NSTerminateCancel
+					}
+				}
 				Quit()
 				return 0 // NSTerminateCancel
 			},
@@ -175,6 +182,7 @@ func Main(start func() error) error {
 	app.thread.Store(currentThreadID())
 	queued := len(app.calls) != 0
 	app.mu.Unlock()
+	screenPixels() // measured on the UI thread for other goroutines
 	if queued {
 		wakeAppLoop(false)
 	}
@@ -185,7 +193,14 @@ func Main(start func() error) error {
 	if len(openWindows) == 0 && apphost.Holds() == 0 {
 		return nil
 	}
-	darwin.Send(nsApp, "activateIgnoringOtherApps:", true)
+	// An app that starts with only hidden windows, such as a tray app,
+	// does not take the focus from the app in front.
+	for _, w := range openWindows {
+		if w.IsVisible() {
+			darwin.Send(nsApp, "activateIgnoringOtherApps:", true)
+			break
+		}
+	}
 	darwin.Send(nsApp, "run")
 	return nil
 }
@@ -217,8 +232,10 @@ func finishMain() {
 	app.mu.Unlock()
 }
 
-// keyAEQuitReason ('why?') is the parameter of the quit Apple event that
-// the system sends when it logs out, restarts or shuts down.
+// keyAEQuitReason ('why?') holds the reason of the quit Apple event that
+// the system sends when it logs out, restarts or shuts down. loginwindow
+// stores it as an attribute of the event (AEPutAttributePtr, typeType), not
+// as the parameter AERegistry.h describes, so both places are read.
 const keyAEQuitReason = 'w'<<24 | 'h'<<16 | 'y'<<8 | '?'
 
 // systemQuit reports whether the termination being asked for comes from
@@ -232,8 +249,18 @@ func sessionQuitEvent(ev darwin.ID) bool {
 	if ev == 0 {
 		return false
 	}
-	reason := darwin.Send(ev, "paramDescriptorForKeyword:", uint32(keyAEQuitReason))
-	switch darwin.Get[uint32](reason, "enumCodeValue") {
+	reason := darwin.Send(ev, "attributeDescriptorForKeyword:", uint32(keyAEQuitReason))
+	if reason == 0 {
+		reason = darwin.Send(ev, "paramDescriptorForKeyword:", uint32(keyAEQuitReason))
+	}
+	if reason == 0 {
+		return false
+	}
+	code := darwin.Get[uint32](reason, "typeCodeValue")
+	if code == 0 {
+		code = darwin.Get[uint32](reason, "enumCodeValue")
+	}
+	switch code {
 	case 0x72657374, 0x73687574, 0x726c676f: // rest, shut, rlgo
 		return true
 	}
@@ -285,5 +312,20 @@ func updateWindows() {
 	}
 }
 
-// errNoBackend is returned by features the macOS backend does not have yet.
-var errNoBackend = errors.New("fairy: not implemented on macOS yet")
+// windowsFrontToBack returns the open windows, frontmost first.
+func windowsFrontToBack() []*Window {
+	var ws []*Window
+	seen := map[*Window]bool{}
+	list := darwin.Send(nsApp, "orderedWindows")
+	for i := range darwin.Get[uint64](list, "count") {
+		if w := openWindows[darwin.Send(list, "objectAtIndex:", i)]; w != nil && !seen[w] {
+			ws, seen[w] = append(ws, w), true
+		}
+	}
+	for _, w := range openWindows {
+		if !seen[w] {
+			ws = append(ws, w)
+		}
+	}
+	return ws
+}

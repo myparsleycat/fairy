@@ -124,3 +124,10 @@ func panCursorHandle(c pancursor.Kind, size int) win.HANDLE {
 
 // systemLocale is the user's locale as a BCP 47 tag, such as "en-US".
 func systemLocale() string { return win.UserLocale() }
+
+// shiftDeleteCuts makes Shift+Delete cut the selection, as Windows edits do.
+const shiftDeleteCuts = true
+
+// occludedFramesDropped reports whether the renderer draws nothing while
+// the window is occluded. DXGI still renders such frames.
+const occludedFramesDropped = false

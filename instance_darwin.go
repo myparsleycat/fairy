@@ -129,14 +129,20 @@ func serveLaunches(ln net.Listener) {
 				c.Write([]byte{0})
 				return
 			}
-			// Reply first so the sending process can exit, then handle it.
-			c.Write([]byte{1})
-			Go(func() {
+			// Queue the call, then reply so the sending process can exit.
+			// Main may begin closing in between: the launch is then refused
+			// rather than reported as taken and lost.
+			queued := enqueueAppCall(appCall{run: func() {
 				darwin.Send(nsApp, "activateIgnoringOtherApps:", true)
 				if f != nil {
 					f(l)
 				}
-			})
+			}}, false)
+			if !queued {
+				c.Write([]byte{0})
+				return
+			}
+			c.Write([]byte{1})
 		}()
 	}
 }

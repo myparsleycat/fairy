@@ -174,7 +174,7 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		}
 		return true
 	case keyboard.KeyDelete:
-		if ev.Mods == keyboard.ModShift {
+		if shiftDeleteCuts && ev.Mods&keyboard.ModShift != 0 && ev.Mods&(keyboard.ModCtrl|keyboard.ModAlt) == 0 {
 			w.runEdit(e, st, EditCut)
 			return true
 		}

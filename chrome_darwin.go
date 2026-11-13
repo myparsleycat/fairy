@@ -87,6 +87,13 @@ func (w *Window) placeControls() {
 	for _, btn := range b {
 		darwin.Send(btn, "updateTrackingAreas")
 	}
+	// Views that read ControlsInset while building laid out for the
+	// buttons' old place. AppKit can move them back, so rebuild only when
+	// the inset differs from the one last placed.
+	if inset := w.ControlsInset(); inset != w.placedInset {
+		w.placedInset = inset
+		w.Update()
+	}
 }
 
 // ControlsInset returns how far the system's window controls reach into a
@@ -106,8 +113,13 @@ func (w *Window) ControlsInset() float32 {
 	return float32(f.Origin.X + f.Size.W + first.Origin.X)
 }
 
-// inDragRegion reports whether a press at (x, y) moves the window.
+// inDragRegion reports whether a press at (x, y) moves the window. As on
+// Windows, DragRegion only applies to frameless windows: a framed window
+// is moved by its title bar.
 func (w *Window) inDragRegion(x, y float32) bool {
+	if !w.opts.Frameless {
+		return false
+	}
 	for e := w.pointerHitTest(x, y); e != nil; e = e.parent {
 		if e.interactive() {
 			return false

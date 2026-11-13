@@ -35,7 +35,8 @@ func TestDarwinFramelessTitleBar(t *testing.T) {
 		inset = w.ControlsInset()
 		b, ok := w.windowButtons()
 		if !ok {
-			t.Fatal("no window buttons")
+			t.Error("no window buttons")
+			return // not t.Fatal: it would end the UI loop inside Do
 		}
 		f := darwin.Get[darwin.CGRect](b[0], "frame")
 		f = darwin.Get[darwin.CGRect](darwin.Send(b[0], "superview"), "convertRect:toView:", f, darwin.ID(0))

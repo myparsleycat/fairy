@@ -59,8 +59,24 @@ func systemLocale() string {
 }
 
 // screenPixels is the pixel count of all displays, which sizes the image
-// memory budget.
+// memory budget. Image caches may ask from any goroutine, such as the
+// memory-pressure one, but NSScreen belongs to the UI thread while Main
+// runs: other goroutines get the count the UI thread last measured.
 func screenPixels() int64 {
+	if onUIThread() || app.thread.Load() == 0 {
+		n := measureScreenPixels()
+		lastScreenPixels.Store(n)
+		return n
+	}
+	if n := lastScreenPixels.Load(); n > 0 {
+		return n
+	}
+	return 2560 * 1600
+}
+
+var lastScreenPixels atomic.Int64
+
+func measureScreenPixels() int64 {
 	var n int64
 	darwin.WithPool(func() {
 		screens := darwin.SendClass("NSScreen", "screens")
@@ -131,3 +147,12 @@ func settingsChanged() {
 		w.Update()
 	}
 }
+
+// shiftDeleteCuts makes Shift+Delete cut the selection. Mac text fields
+// only delete forward with it.
+const shiftDeleteCuts = false
+
+// occludedFramesDropped reports whether the renderer draws nothing while
+// the window is occluded: no drawable comes for a window out of sight, and
+// windowDidChangeOcclusionState: draws the pending paint.
+const occludedFramesDropped = true

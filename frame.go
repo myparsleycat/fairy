@@ -71,6 +71,11 @@ func (w *Window) renderFrame() {
 	w.dt = 0
 	err := w.r.Draw(&w.scene, w.clearColor())
 	occluded := err == nil && w.r.Occluded()
+	if occluded && occludedFramesDropped {
+		// Nothing was drawn: keep the paint pending for when the window
+		// shows again.
+		w.needPaint = true
+	}
 	if err == render.ErrDeviceLost {
 		w.recreateRenderer()
 	}
