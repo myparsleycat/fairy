@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
@@ -214,6 +215,16 @@ func TestDarwinAccessibilityTree(t *testing.T) {
 		if v := axString(input, "accessibilityValue"); v != "world" {
 			t.Errorf("value after setting %q", v)
 		}
+		// A number is set as its text; other objects are ignored.
+		darwin.Send(input, "setAccessibilityValue:", darwin.Number(7))
+		w.runPosted()
+		darwin.Send(input, "setAccessibilityValue:", darwin.SendClass("NSArray", "array"))
+		darwin.Send(input, "setAccessibilitySelectedText:", darwin.SendClass("NSArray", "array"))
+		w.runPosted()
+		w.renderFrame()
+		if text != "7" {
+			t.Errorf("setting a number and other objects set %q, want %q", text, "7")
+		}
 		w.Announce("Saved")
 		Announce("Saved everywhere")
 	})
@@ -245,7 +256,7 @@ func TestDarwinAccessibilityControls(t *testing.T) {
 			Box(Text("Bold")).Role(RoleButton).Checked(false).OnClick(func() {}),
 			Box().Label("Volume").RangeValue(volume, 0, 100, 5, func(v float64) { volume = v }).ValueText("loud").Size(100, 10),
 			Box().RangeValue(0.5, 0, 1, 0, nil).Label("Loading").Size(100, 4),
-			Input("a\nb", func(string) {}).Multiline().Label("Notes").Size(200, 40),
+			Input("a\nb", func(string) {}).Multiline().Label("Notes").Key("notes").Size(200, 40),
 			Input("secret", func(string) {}).Password().Label("Password").Size(200, 30),
 			Text(status).Role(RoleStatusBar),
 		)
@@ -294,6 +305,14 @@ func TestDarwinAccessibilityControls(t *testing.T) {
 		if l := darwin.Get[int64](notes, "accessibilityInsertionPointLineNumber"); l != 1 {
 			t.Errorf("insertion point line %d", l)
 		}
+		// A selection made backward has the caret at its start.
+		if e := w.byKey("notes"); e != nil {
+			st := w.editOf(e)
+			st.Anchor, st.Caret = len(st.Value), 0
+		}
+		if l := darwin.Get[int64](notes, "accessibilityInsertionPointLineNumber"); l != 0 {
+			t.Errorf("insertion point line %d with the caret at the start", l)
+		}
 		if l := darwin.Get[int64](notes, "accessibilityLineForIndex:", int64(2)); l != 1 {
 			t.Errorf("line for index 2: %d", l)
 		}
@@ -306,6 +325,24 @@ func TestDarwinAccessibilityControls(t *testing.T) {
 	})
 	if volume != 45 {
 		t.Errorf("increment set %v, want 45", volume)
+	}
+	// Steps before the tree is rebuilt go on from the value last set.
+	Do(func() {
+		darwin.Get[bool](slider, "accessibilityPerformIncrement")
+		darwin.Get[bool](slider, "accessibilityPerformIncrement")
+		w.runPosted()
+	})
+	if volume != 55 {
+		t.Errorf("two more increments set %v, want 55", volume)
+	}
+	Do(func() {
+		w.Update()
+		w.renderFrame()
+		darwin.Get[bool](slider, "accessibilityPerformDecrement")
+		w.runPosted()
+	})
+	if volume != 50 {
+		t.Errorf("decrement after a rebuild set %v, want 50", volume)
 	}
 	Do(func() {
 		darwin.Send(slider, "setAccessibilityValue:", darwin.Number(250))
@@ -339,6 +376,33 @@ func TestDarwinAccessibilityControls(t *testing.T) {
 			t.Errorf("live region text %q", w.acc.live[w.acc.tree.kids[0][6]])
 		}
 	})
+}
+
+// A menu that opens is announced, even with no exposed children yet.
+func TestDarwinAccessibilityMenuOpened(t *testing.T) {
+	open := false
+	w := newTestWindow(t, func() *El {
+		col := Col(Box(Text("File")).OnClick(func() {}).Size(40, 20))
+		if open {
+			col.children = append(col.children, Box().Role(RoleMenu).Label("File menu").Size(100, 100))
+		}
+		return col
+	})
+	var posted []string
+	Do(func() {
+		w.renderFrame()
+		axChildren(w.view)
+		w.renderFrame()
+		prev := axPostNotification
+		defer func() { axPostNotification = prev }()
+		axPostNotification = func(_, name darwin.ID) { posted = append(posted, darwin.GoString(name)) }
+		open = true
+		w.Update()
+		w.renderFrame()
+	})
+	if !slices.Contains(posted, "AXMenuOpened") {
+		t.Errorf("posted %q, want AXMenuOpened", posted)
+	}
 }
 
 // Nothing is built for a window that no assistive client has asked about.
