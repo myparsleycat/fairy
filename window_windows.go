@@ -229,12 +229,7 @@ func (w *Window) Show() {
 		win.ShowWindow(w.hwnd, win.SW_SHOW)
 	}
 	win.SetForegroundWindow(w.hwnd)
-	if !w.ready {
-		w.ready = true
-		if w.opts.OnReady != nil {
-			w.Post(func() { w.opts.OnReady(w) })
-		}
-	}
+	w.shown()
 }
 
 // Hide hides the window without closing it.
@@ -366,16 +361,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			w.releaseTextures()
 			return 0
 		}
-		nw, nh := int(win.LOWORD(lp)), int(win.HIWORD(lp))
-		if nw != w.width || nh != w.height {
-			w.width, w.height = nw, nh
-			if w.r != nil {
-				w.resizeRenderer()
-			}
-			w.markDirty(dirtyResize)
-			// Draw now so the modal resize loop shows the new size immediately.
-			w.renderFrame()
-		}
+		w.onResize(int(win.LOWORD(lp)), int(win.HIWORD(lp)))
 		return 0
 	case win.WM_DPICHANGED:
 		w.scale = float32(win.HIWORD(wp)) / 96
@@ -617,27 +603,10 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		w.onIMEEnd()
 		return 0
 	case win.WM_SETFOCUS:
-		if w.opts.OnFocus != nil {
-			w.opts.OnFocus(true)
-			w.Update()
-		}
-		w.osFocus = true
-		w.resetBlink()
-		w.invalidate()
+		w.onFocusChange(true)
 		return 0
 	case win.WM_KILLFOCUS:
-		if w.opts.OnFocus != nil {
-			w.opts.OnFocus(false)
-			w.Update()
-		}
-		w.osFocus = false
-		if w.acc != nil {
-			w.acc.focus = 0
-		}
-		w.commitComposition()
-		w.cancelPress()
-		w.stopAutoScroll()
-		w.invalidate()
+		w.onFocusChange(false)
 		return 0
 	case win.WM_SETTINGCHANGE:
 		if wp == win.SPI_SETCLIENTAREAANIMATION {
@@ -653,27 +622,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			w.Update()
 		}
 	case win.WM_TIMER:
-		switch wp {
-		case timerCaret:
-			w.caretOn = !w.caretOn || w.clock != nil
-			w.invalidate()
-		case timerTip:
-			w.killTimer(timerTip)
-			w.showTooltip()
-		case timerAnim:
-			w.killTimer(timerAnim)
-			w.invalidate()
-		case timerTouch:
-			w.killTimer(timerTouch)
-			w.onTouchLongPress()
-		case timerRecover:
-			w.killTimer(timerRecover)
-			if w.r == nil {
-				w.recreateRenderer()
-			} else {
-				w.invalidate() // renderFrame retries a failed resize
-			}
-		}
+		w.onTimer(wp)
 		return 0
 	case msgWake:
 		w.runPosted()
@@ -723,23 +672,7 @@ func (w *Window) destroy() {
 	w.a11yShutdown()
 	w.revokeDrop()
 	w.closeWebViews()
-	liveMu.Lock()
-	delete(live, w)
-	liveMu.Unlock()
-	w.releaseTextures()
-	w.textures = nil
-	for _, se := range w.surfaces {
-		se.target.Release()
-	}
-	w.surfaces = nil
-	if w.ts != nil {
-		w.ts.Release()
-		w.ts = nil
-	}
-	if w.r != nil {
-		w.r.Release()
-		w.r = nil
-	}
+	w.release()
 	delete(windows, w.hwnd)
 }
 
@@ -866,4 +799,18 @@ func (w *Window) onChar(c uint16) {
 		r = utf16.DecodeRune(rune(high), r)
 	}
 	w.onTypedRune(r)
+}
+
+// resizeClient sizes the window for a client area of width x height logical
+// pixels, keeping its position.
+func (w *Window) resizeClient(width, height float32) {
+	r := win.GetWindowRect(w.hwnd)
+	cw, ch := int32(width*w.scale), int32(height*w.scale)
+	if w.opts.Frameless {
+		// The visible frameless window is its client area; the invisible
+		// resize borders are not part of the requested size.
+		rc := w.outerRect(cw, ch, uint32(w.scale*96))
+		cw, ch = rc.Right-rc.Left, rc.Bottom-rc.Top
+	}
+	win.SetWindowPos(w.hwnd, 0, r.Left, r.Top, cw, ch, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
 }

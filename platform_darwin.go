@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"github.com/myparsleycat/fairy/internal/darwin"
 	"os"
 	"strings"
 	"time"
@@ -18,8 +19,16 @@ func doubleClickMs() uint32 { return 500 }
 // means a page.
 func wheelScrollLines() uint32 { return 3 }
 
+var pthreadThreadID func(thread uintptr, id *uint64) int32
+
+func init() { darwin.Func(&pthreadThreadID, darwin.System, "pthread_threadid_np") }
+
 // currentThreadID identifies the OS thread the caller runs on.
-func currentThreadID() uint32 { return 0 }
+func currentThreadID() uint32 {
+	var id uint64
+	pthreadThreadID(0, &id)
+	return uint32(id)
+}
 
 // systemLocale is the user's locale as a BCP 47 tag, such as "en-US".
 func systemLocale() string {

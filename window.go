@@ -502,3 +502,93 @@ func (w *Window) SetColors(dark bool, background, text Color) {
 	}
 	w.Update()
 }
+
+// onResize handles a new client size in device pixels.
+func (w *Window) onResize(width, height int) {
+	if width == w.width && height == w.height {
+		return
+	}
+	w.width, w.height = width, height
+	if w.r != nil {
+		w.resizeRenderer()
+	}
+	w.markDirty(dirtyResize)
+	// Draw now so a live resize shows the new size immediately.
+	w.renderFrame()
+}
+
+// onFocusChange handles the window gaining or losing keyboard focus.
+func (w *Window) onFocusChange(focused bool) {
+	if w.opts.OnFocus != nil {
+		w.opts.OnFocus(focused)
+		w.Update()
+	}
+	w.osFocus = focused
+	if focused {
+		w.resetBlink()
+	} else {
+		if w.acc != nil {
+			w.acc.focus = 0
+		}
+		w.commitComposition()
+		w.cancelPress()
+		w.stopAutoScroll()
+	}
+	w.invalidate()
+}
+
+// onTimer handles a timer set with setTimer firing.
+func (w *Window) onTimer(id uintptr) {
+	switch id {
+	case timerCaret:
+		w.caretOn = !w.caretOn || w.clock != nil
+		w.invalidate()
+	case timerTip:
+		w.killTimer(timerTip)
+		w.showTooltip()
+	case timerAnim:
+		w.killTimer(timerAnim)
+		w.invalidate()
+	case timerTouch:
+		w.killTimer(timerTouch)
+		w.onTouchLongPress()
+	case timerRecover:
+		w.killTimer(timerRecover)
+		if w.r == nil {
+			w.recreateRenderer()
+		} else {
+			w.invalidate() // renderFrame retries a failed resize
+		}
+	}
+}
+
+// shown runs OnReady after the window is first shown.
+func (w *Window) shown() {
+	if !w.ready {
+		w.ready = true
+		if w.opts.OnReady != nil {
+			w.Post(func() { w.opts.OnReady(w) })
+		}
+	}
+}
+
+// release frees the window's GPU and text resources once it is closed.
+func (w *Window) release() {
+	liveMu.Lock()
+	delete(live, w)
+	liveMu.Unlock()
+	w.releaseTextures()
+	w.textures = nil
+	for _, se := range w.surfaces {
+		se.target.Release()
+	}
+	w.surfaces = nil
+	if w.ts != nil {
+		w.ts.Release()
+		w.ts = nil
+	}
+	if w.r != nil {
+		w.r.Release()
+		w.r = nil
+	}
+}

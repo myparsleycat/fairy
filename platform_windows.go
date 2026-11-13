@@ -49,6 +49,9 @@ func (w *Window) trackMouseLeave() {
 	w.tracking = true
 }
 
+// ignoreMouseLeave stops arming trackMouseLeave, for scripted windows.
+func (w *Window) ignoreMouseLeave() { w.tracking = true }
+
 // rearmMouseLeave makes the next move arm trackMouseLeave again.
 func (w *Window) rearmMouseLeave() { w.tracking = false }
 

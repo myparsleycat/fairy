@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -67,7 +66,7 @@ func (w *Window) runScriptFromEnv() {
 		w.setClock(d)
 	}
 	w.scripted = true
-	w.tracking = true
+	w.ignoreMouseLeave()
 	go func() {
 		sc := bufio.NewScanner(strings.NewReader(string(data)))
 		for sc.Scan() {
@@ -190,14 +189,8 @@ func (w *Window) scriptStep(f []string, line string) error {
 		w.onTouchUp(scriptTouchID, num(1), num(2), w.now())
 	case "type":
 		text := strings.TrimPrefix(line[len("type"):], " ")
-		for _, u := range []rune(text) {
-			if u >= 0x10000 {
-				hi, lo := (u-0x10000)>>10+0xD800, (u-0x10000)&0x3FF+0xDC00
-				w.onChar(uint16(hi))
-				w.onChar(uint16(lo))
-			} else {
-				w.onChar(uint16(u))
-			}
+		for _, r := range text {
+			w.onTypedRune(r)
 		}
 	case "key":
 		k, ok := keyNames[strings.ToLower(f[1])]
@@ -231,15 +224,7 @@ func (w *Window) scriptStep(f []string, line string) error {
 	case "dragleave":
 		w.fileDragLeave()
 	case "resize":
-		r := win.GetWindowRect(w.hwnd)
-		cw, ch := int32(num(1)*w.scale), int32(num(2)*w.scale)
-		if w.opts.Frameless {
-			// The visible frameless window is its client area; the invisible
-			// resize borders are not part of the requested size.
-			rc := w.outerRect(cw, ch, uint32(w.scale*96))
-			cw, ch = rc.Right-rc.Left, rc.Bottom-rc.Top
-		}
-		win.SetWindowPos(w.hwnd, 0, r.Left, r.Top, cw, ch, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+		w.resizeClient(num(1), num(2))
 	case "maximize":
 		w.ToggleMaximize()
 	case "snap":
