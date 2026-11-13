@@ -166,6 +166,7 @@ func (w *Window) windowClosed() {
 		return
 	}
 	w.securePassword(nil)
+	w.a11yShutdown()
 	w.closed = true
 	for id, t := range w.timers {
 		t.Stop()
@@ -667,6 +668,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 	}
 	addTextInputClient(c)
 	addDropTarget(c)
+	addAccessibility(c)
 	return c
 })
 
