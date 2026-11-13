@@ -167,6 +167,7 @@ func (w *Window) windowClosed() {
 		return
 	}
 	w.securePassword(nil)
+	w.releaseBackdrop()
 	w.closed = true
 	for id, t := range w.timers {
 		t.Stop()
