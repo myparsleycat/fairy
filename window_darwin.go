@@ -354,6 +354,14 @@ func (w *Window) redrawAsync() {
 	})
 }
 
+// NSWindow returns the window's NSWindow, or 0 once it is closed.
+func (w *Window) NSWindow() uintptr {
+	if w.closed {
+		return 0
+	}
+	return uintptr(w.nsWindow)
+}
+
 // viewHandle is the CAMetalLayer the renderer draws into.
 func (w *Window) viewHandle() uintptr { return uintptr(w.layer) }
 
@@ -473,10 +481,6 @@ func (w *Window) setPanCursor() {
 	w.autoScroll.cursor = w.panCursor()
 	darwin.Send(darwin.SendClass("NSCursor", "closedHandCursor"), "set")
 }
-
-// popupMenu shows items as a native menu at window point (x, y) and waits
-// until it closes.
-func (w *Window) popupMenu(x, y float32, items []MenuItem) {}
 
 // enableIME turns the input method on for the window or off.
 func (w *Window) enableIME(on bool) {}

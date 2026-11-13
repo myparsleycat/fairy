@@ -53,13 +53,7 @@ func (w *Window) ClipboardImage() (image.Image, bool) { return nil, false }
 // SetClipboardImage puts img on the clipboard.
 func (w *Window) SetClipboardImage(img image.Image) bool { return false }
 
-// Menus and the Dock.
-
-// PopupMenu shows items as a native menu at window point (x, y).
-func (w *Window) PopupMenu(x, y float32, items []MenuItem) error { return errNoBackend }
-
-// ShowMenu shows items as a native menu at screen point (x, y).
-func ShowMenu(x, y int, items []MenuItem) error { return errNoBackend }
+// The Dock.
 
 // SetProgress shows progress on the window's Dock tile.
 func (w *Window) SetProgress(state Progress, value float64) {}
