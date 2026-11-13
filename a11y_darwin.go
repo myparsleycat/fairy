@@ -628,6 +628,32 @@ func (w *Window) a11yHitTest(p darwin.CGPoint) uint64 {
 
 // Actions.
 
+// axScrollToVisible is NSAccessibilityScrollToVisibleAction, exported only
+// from macOS 26.
+const axScrollToVisible = "AXScrollToVisible"
+
+// axActions are the protocol's action methods elements implement, by
+// action name.
+var axActions = []struct {
+	name string
+	sel  darwin.SEL
+}{
+	{"AXPress", darwin.Sel("accessibilityPerformPress")},
+	{"AXIncrement", darwin.Sel("accessibilityPerformIncrement")},
+	{"AXDecrement", darwin.Sel("accessibilityPerformDecrement")},
+}
+
+// inScroller reports whether e is inside a scroll container, which can
+// scroll it into view.
+func inScroller(e *El) bool {
+	for a := e.parent; a != nil; a = a.parent {
+		if (a.style.ScrollX || a.style.ScrollY) && a.state != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // post runs f with the node's current element after the call returns, so
 // that handlers which open dialogs do not block the assistive client.
 func (n *a11yNode) post(f func(e *El)) {
@@ -985,6 +1011,42 @@ func registerElementClass() darwin.Class {
 			walk(n.id)
 			return n.w.a11yArray(ids)
 		})},
+		// AppKit has no protocol method for AXScrollToVisible, which
+		// VoiceOver sends to bring an element it moves to into view, so
+		// the element answers the older action methods, listing the
+		// protocol's actions it allows along with it.
+		{Cmd: darwin.Sel("accessibilityActionNames"), Fn: func(self id, _ sel) id {
+			arr := darwin.SendClass("NSMutableArray", "array")
+			_, e, _ := axNode(self)
+			if e == nil {
+				return arr
+			}
+			for _, a := range axActions {
+				if darwin.Get[bool](self, "isAccessibilitySelectorAllowed:", a.sel) {
+					darwin.Send(arr, "addObject:", darwin.String(a.name))
+				}
+			}
+			if inScroller(e) {
+				darwin.Send(arr, "addObject:", darwin.String(axScrollToVisible))
+			}
+			return arr
+		}},
+		{Cmd: darwin.Sel("accessibilityPerformAction:"), Fn: func(self id, _ sel, action id) {
+			n, e, _ := axNode(self)
+			if n == nil {
+				return
+			}
+			name := darwin.GoString(action)
+			if name == axScrollToVisible {
+				n.w.scrollIntoView(e)
+				return
+			}
+			for _, a := range axActions {
+				if a.name == name && darwin.Get[bool](self, "isAccessibilitySelectorAllowed:", a.sel) {
+					objc.Send[bool](self, a.sel)
+				}
+			}
+		}},
 		{Cmd: darwin.Sel("accessibilityPerformPress"), Fn: boolean(func(n *a11yNode, e *El, r Role) bool {
 			if e.onClick == nil {
 				return false

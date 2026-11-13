@@ -352,3 +352,49 @@ func TestDarwinAccessibilityLazy(t *testing.T) {
 		w.Announce("nobody listens")
 	})
 }
+
+// Elements in a scroll container offer AXScrollToVisible, which VoiceOver
+// sends to bring the element it moves to into view.
+func TestDarwinAccessibilityScrollToVisible(t *testing.T) {
+	w := newTestWindow(t, func() *El {
+		list := Col().ScrollY().H(60).W(100).Key("list")
+		for i := range 10 {
+			list.Child(Box(Text(string(rune('A'+i)))).OnClick(func() {}).Size(100, 30))
+		}
+		return Col(Box(Text("Top")).OnClick(func() {}).Size(100, 30), list)
+	})
+	Do(func() {
+		w.renderFrame()
+		kids := axChildren(w.view)
+		if len(kids) < 2 {
+			t.Errorf("%d children", len(kids))
+			return
+		}
+		has := func(el darwin.ID) bool {
+			names := darwin.Send(el, "accessibilityActionNames")
+			return darwin.Get[bool](names, "containsObject:", darwin.String(axScrollToVisible))
+		}
+		if has(kids[0]) {
+			t.Error("an element outside any scroll container offers AXScrollToVisible")
+		}
+		last := kids[len(kids)-1]
+		if axString(last, "accessibilityLabel") != "J" {
+			// The list may be a group holding the buttons.
+			if inner := axChildren(last); len(inner) > 0 {
+				last = inner[len(inner)-1]
+			}
+		}
+		if axString(last, "accessibilityLabel") != "J" || !has(last) {
+			t.Errorf("last button %q does not offer AXScrollToVisible", axString(last, "accessibilityLabel"))
+			return
+		}
+		if !darwin.Get[bool](darwin.Send(last, "accessibilityActionNames"), "containsObject:", darwin.String("AXPress")) {
+			t.Error("the press action is gone")
+		}
+		darwin.Send(last, "accessibilityPerformAction:", darwin.String(axScrollToVisible))
+		list := w.findKey("list")
+		if got := list.state.scrollY; got != 240 {
+			t.Errorf("scrolled to %v, want 240", got)
+		}
+	})
+}
