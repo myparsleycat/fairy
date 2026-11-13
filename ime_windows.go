@@ -68,3 +68,7 @@ func (w *Window) updateIMEPosition() {
 
 // enableIME turns the input method on for the window or off.
 func (w *Window) enableIME(on bool) { win.ImmEnable(w.hwnd, on) }
+
+// securePassword needs nothing on Windows, where turning the input method
+// off for a password Input types the letters on the keys.
+func (w *Window) securePassword(e *El) {}

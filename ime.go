@@ -6,6 +6,7 @@ func (w *Window) updateIME() {
 	}
 	e := w.focusedEl()
 	editing := e != nil && e.kind == kindInput
+	w.securePassword(e)
 	on := w.takesIME(e)
 	if on != w.imeOn {
 		w.enableIME(on)

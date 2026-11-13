@@ -173,3 +173,66 @@ func TestDarwinKeysThroughInputMethod(t *testing.T) {
 		t.Fatalf("⌘A then h = %q, want %q", value, "h")
 	}
 }
+
+// The macOS Korean input method composes in place: it types a jamo, reads
+// the text before the caret back with attributedSubstringForProposedRange:,
+// and replaces it with the next syllable through insertText:'s replacement
+// range. It only does so when the view lists marked text attributes.
+func TestDarwinIMEReplacesInPlace(t *testing.T) {
+	value := "a"
+	w := newTestWindow(t, func() *El {
+		return Input(value, func(s string) { value = s }).Key("in").Size(200, 30)
+	})
+	view := darwin.ID(0)
+	Do(func() {
+		w.Focus("in")
+		w.renderFrame()
+		view = w.view
+	})
+	var attrs uint64
+	Do(func() { attrs = darwin.Get[uint64](darwin.Send(view, "validAttributesForMarkedText"), "count") })
+	if attrs == 0 {
+		t.Fatal("no marked text attributes: input methods would not compose")
+	}
+	insert := func(s string, loc, n uint64) {
+		Do(func() {
+			darwin.Send(view, "insertText:replacementRange:", darwin.String(s), darwin.NSRange{Location: loc, Length: n})
+		})
+	}
+	before := func(at uint64) (string, darwin.NSRange) {
+		var s string
+		actual := new(darwin.NSRange)
+		Do(func() {
+			str := darwin.Send(view, "attributedSubstringForProposedRange:actualRange:",
+				darwin.NSRange{Location: at - 1, Length: 1}, unsafe.Pointer(actual))
+			if str != 0 {
+				s = darwin.GoString(darwin.Send(str, "string"))
+			}
+		})
+		return s, *actual
+	}
+	insert("ㅎ", darwin.NSNotFound, 0)
+	if s, r := before(2); s != "ㅎ" || r != (darwin.NSRange{Location: 1, Length: 1}) {
+		t.Fatalf("text before the caret = %q %v", s, r)
+	}
+	insert("하", 1, 1)
+	insert("한", 1, 1)
+	insert("ㄱ", darwin.NSNotFound, 0)
+	insert("그", 2, 1)
+	insert("글", 2, 1)
+	if value != "a한글" {
+		t.Fatalf("value = %q, want %q", value, "a한글")
+	}
+	if s, _ := before(3); s != "글" {
+		t.Errorf("text before the caret = %q", s)
+	}
+	// Past the end there is no text.
+	var none darwin.ID
+	Do(func() {
+		none = darwin.Send(view, "attributedSubstringForProposedRange:actualRange:",
+			darwin.NSRange{Location: 10, Length: 1}, unsafe.Pointer(nil))
+	})
+	if none != 0 {
+		t.Error("text past the end")
+	}
+}

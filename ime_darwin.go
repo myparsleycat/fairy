@@ -25,9 +25,11 @@ import (
 
 // imeState is the input method part of a window.
 type imeState struct {
-	inKey      bool // interpretKeyEvents: runs for a key press
-	command    bool // the input method passed the key on as a command
-	discarding bool // discardMarkedText runs; its callbacks are ignored
+	inKey      bool   // interpretKeyEvents: runs for a key press
+	command    bool   // the input method passed the key on as a command
+	discarding bool   // discardMarkedText runs; its callbacks are ignored
+	romanOnly  bool   // a password Input has limited the input sources
+	source     string // the input source to go back to after it
 }
 
 var (
@@ -75,24 +77,39 @@ func addTextInputClient(c objc.Class) {
 			w.finishComposition()
 		}
 	})
+	// An empty list makes input methods such as Korean commit every key
+	// as it is, without composing.
 	add("validAttributesForMarkedText", "@@:", func(id, sel) id {
-		return darwin.SendClass("NSArray", "array")
+		arr := darwin.SendClass("NSMutableArray", "array")
+		for _, n := range []string{"NSUnderlineStyleAttributeName", "NSUnderlineColorAttributeName", "NSMarkedClauseSegmentAttributeName"} {
+			darwin.Send(arr, "addObject:", darwin.SymbolID(darwin.AppKit, n))
+		}
+		return arr
 	})
 	add("attributedSubstringForProposedRange:actualRange:", "@@:"+encRange+"^"+encRange,
-		func(id, sel, uint64, uint64) id { return 0 })
+		func(self id, _ sel, loc, n uint64, actual *darwin.NSRange) id {
+			if w := win(self); w != nil {
+				return w.imeSubstring(loc, n, actual)
+			}
+			return 0
+		})
 	add("characterIndexForPoint:", "Q@:{CGPoint=dd}", func(id, sel) uint64 { return darwin.NSNotFound })
-	// Replacement ranges are not read, so input methods that replace text
-	// before the caret, such as reconversion, are not supported. On amd64
-	// the second range of setMarkedText: does not arrive in registers.
-	add("insertText:replacementRange:", "v@:@"+encRange, func(self id, _ sel, str id) {
+	// Input methods such as Korean read the text before the caret and
+	// replace it with insertText:'s replacement range.
+	add("insertText:replacementRange:", "v@:@"+encRange, func(self id, _ sel, str id, loc, n uint64) {
 		if w := win(self); w != nil && !w.ime.discarding {
-			w.imeInsert(nsText(str))
+			w.imeInsert(nsText(str), loc, n)
 		}
 	})
+	// On amd64 the second range of setMarkedText: arrives on the stack, not
+	// in the registers the callback reads, so it is only read on arm64.
 	add("setMarkedText:selectedRange:replacementRange:", "v@:@"+encRange+encRange,
-		func(self id, _ sel, str id, selLoc, selLen uint64) {
+		func(self id, _ sel, str id, selLoc, selLen, repLoc, repLen uint64) {
+			if runtime.GOARCH != "arm64" {
+				repLoc = darwin.NSNotFound
+			}
 			if w := win(self); w != nil && !w.ime.discarding {
-				w.imeMark(nsText(str), selLoc)
+				w.imeMark(nsText(str), selLoc, repLoc, repLen)
 			}
 		})
 	add("doCommandBySelector:", "v@::", func(self id, _ sel, cmd sel) {
@@ -190,11 +207,22 @@ func (w *Window) composition() string {
 }
 
 // imeMark shows s as the composition, with the input method's cursor cursor
-// UTF-16 units into it.
-func (w *Window) imeMark(s string, cursor uint64) {
-	_, st := w.imeInput()
+// UTF-16 units into it, in place of the text in the replacement range when
+// it has one.
+func (w *Window) imeMark(s string, cursor, repLoc, repLen uint64) {
+	e, st := w.imeInput()
 	if st == nil {
 		return
+	}
+	if repLoc != darwin.NSNotFound && st.comp == "" {
+		w.selectUTF16(st, repLoc, repLen)
+		if st.HasSelection() {
+			w.typeText(e, "")
+			e, st = w.imeInput()
+			if st == nil {
+				return
+			}
+		}
 	}
 	st.comp = s
 	st.compCursor = len(s)
@@ -206,16 +234,53 @@ func (w *Window) imeMark(s string, cursor uint64) {
 }
 
 // imeInsert types finished text from the input method, which ends the
-// composition.
-func (w *Window) imeInsert(s string) {
-	if _, st := w.imeInput(); st != nil {
+// composition. With a replacement range, the text replaces that range.
+func (w *Window) imeInsert(s string, repLoc, repLen uint64) {
+	e, st := w.imeInput()
+	if st != nil {
+		replace := repLoc != darwin.NSNotFound && st.comp == ""
 		st.comp = ""
+		if replace {
+			w.selectUTF16(st, repLoc, repLen)
+			w.typeText(e, s)
+			w.resetBlink()
+			w.invalidate()
+			return
+		}
 	}
 	for _, r := range s {
 		w.onTypedRune(r)
 	}
 	w.resetBlink()
 	w.invalidate()
+}
+
+// selectUTF16 selects the range of the Input's text at loc of n UTF-16
+// units.
+func (w *Window) selectUTF16(st *editState, loc, n uint64) {
+	st.Anchor = utf16ToByteOffset(st.Value, int(loc))
+	st.Caret = utf16ToByteOffset(st.Value, int(loc+n))
+	st.HasPreferredX = false
+}
+
+// imeSubstring returns the Input's text in a UTF-16 range as an
+// NSAttributedString, and the part of the range it covers in actual.
+func (w *Window) imeSubstring(loc, n uint64, actual *darwin.NSRange) darwin.ID {
+	_, st := w.imeInput()
+	if st == nil || st.comp != "" {
+		return 0
+	}
+	total := uint64(utf16Len(st.Value))
+	if loc > total {
+		return 0
+	}
+	end := min(loc+n, total)
+	if actual != nil {
+		*actual = darwin.NSRange{Location: loc, Length: end - loc}
+	}
+	text := st.Value[utf16ToByteOffset(st.Value, int(loc)):utf16ToByteOffset(st.Value, int(end))]
+	str := darwin.Send(darwin.SendClass("NSAttributedString", "alloc"), "initWithString:", darwin.String(text))
+	return darwin.Send(str, "autorelease")
 }
 
 // finishComposition types the open composition as it stands.
@@ -261,6 +326,30 @@ func (w *Window) inputContext() darwin.ID {
 func (w *Window) enableIME(on bool) {
 	if !on {
 		w.discardMarkedText()
+	}
+}
+
+// securePassword lets a focused password Input take only Roman input
+// sources, as NSSecureTextField does, so that keys type the letters on
+// them; other focus allows every source again.
+func (w *Window) securePassword(e *El) {
+	password := e != nil && e.kind == kindInput && e.input.password
+	ctx := w.inputContext()
+	if ctx == 0 || password == w.ime.romanOnly {
+		return
+	}
+	w.ime.romanOnly = password
+	if password {
+		w.ime.source = darwin.GoString(darwin.Send(ctx, "selectedKeyboardInputSource"))
+		darwin.Send(ctx, "setAllowedInputSourceLocales:", darwin.SendClass("NSArray", "arrayWithObject:",
+			darwin.SymbolID(darwin.AppKit, "NSAllRomanInputSourcesLocaleIdentifier")))
+		return
+	}
+	darwin.Send(ctx, "setAllowedInputSourceLocales:", darwin.ID(0))
+	// Go back to the input source the user had before the password.
+	if w.ime.source != "" {
+		darwin.Send(ctx, "setSelectedKeyboardInputSource:", darwin.String(w.ime.source))
+		w.ime.source = ""
 	}
 }
 

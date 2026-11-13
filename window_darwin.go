@@ -165,6 +165,7 @@ func (w *Window) windowClosed() {
 	if w.closed {
 		return
 	}
+	w.securePassword(nil)
 	w.closed = true
 	for id, t := range w.timers {
 		t.Stop()
@@ -704,8 +705,14 @@ var delegateClass = sync.OnceValue(func() darwin.Class {
 			w.onResize(w.pixelSize())
 			w.invalidate()
 		})},
-		{Cmd: darwin.Sel("windowDidBecomeKey:"), Fn: on(func(w *Window) { w.onFocusChange(true) })},
-		{Cmd: darwin.Sel("windowDidResignKey:"), Fn: on(func(w *Window) { w.onFocusChange(false) })},
+		{Cmd: darwin.Sel("windowDidBecomeKey:"), Fn: on(func(w *Window) {
+			w.onFocusChange(true)
+			w.securePassword(w.focusedEl())
+		})},
+		{Cmd: darwin.Sel("windowDidResignKey:"), Fn: on(func(w *Window) {
+			w.securePassword(nil) // give other apps the user's input source back
+			w.onFocusChange(false)
+		})},
 		{Cmd: darwin.Sel("windowWillStartLiveResize:"), Fn: on(func(w *Window) { w.sizeMove = true })},
 		{Cmd: darwin.Sel("windowDidEndLiveResize:"), Fn: on(func(w *Window) {
 			w.sizeMove = false
