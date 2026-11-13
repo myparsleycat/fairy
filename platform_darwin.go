@@ -77,9 +77,6 @@ func screenPixels() int64 {
 	return n
 }
 
-// watchMemoryPressure trims image memory when the system runs low.
-func watchMemoryPressure() {}
-
 var systemDark atomic.Bool
 
 func init() { loadSystemDark() }

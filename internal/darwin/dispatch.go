@@ -19,6 +19,7 @@ var (
 	dispatchResume          func(obj uintptr)
 	dispatchSourceCancel    func(source uintptr)
 	dispatchRelease         func(obj uintptr)
+	dispatchGetGlobalQueue  func(qos, flags uintptr) uintptr
 
 	mainQueue   uintptr
 	timerType   uintptr
@@ -39,6 +40,7 @@ func init() {
 	Func(&dispatchResume, System, "dispatch_resume")
 	Func(&dispatchSourceCancel, System, "dispatch_source_cancel")
 	Func(&dispatchRelease, System, "dispatch_release")
+	Func(&dispatchGetGlobalQueue, System, "dispatch_get_global_queue")
 	mainQueue = Symbol(System, "_dispatch_main_q")
 	timerType = Symbol(System, "_dispatch_source_type_timer")
 	runCallback = purego.NewCallback(func(ctx uintptr) {
@@ -104,4 +106,23 @@ func (t *Timer) Stop() {
 	dispatchSourceCancel(t.source)
 	dispatchRelease(t.source)
 	t.source = 0
+}
+
+// Memory pressure levels (dispatch_source_memorypressure_flags_t).
+const (
+	memoryPressureWarn     = 0x2
+	memoryPressureCritical = 0x4
+	qosClassUtility        = 0x11
+)
+
+// OnMemoryPressure calls f on a background thread whenever the system's
+// memory pressure rises to the warning or critical level. The watch lasts
+// until the process exits.
+func OnMemoryPressure(f func()) {
+	id := register(f)
+	source := dispatchSourceCreate(Symbol(System, "_dispatch_source_type_memorypressure"), 0,
+		memoryPressureWarn|memoryPressureCritical, dispatchGetGlobalQueue(qosClassUtility, 0))
+	dispatchSetContext(source, id)
+	dispatchSetEventHandler(source, runCallback)
+	dispatchResume(source)
 }
