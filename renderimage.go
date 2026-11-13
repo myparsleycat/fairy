@@ -258,6 +258,11 @@ func (c *offscreenCapture) prepare(view func(*Cx) *El, pw, ph int, scale float32
 		r.Release()
 		return err
 	}
+	// Color glyphs, such as emoji, are textures where the text backend
+	// draws them as images.
+	ts.SetColorGlyphTextures(func(w, h int, rgba []byte) (*render.Texture, error) {
+		return r.NewTexture(w, h, rgba, false)
+	})
 	w := &Window{
 		opts: Options{
 			View:      view,

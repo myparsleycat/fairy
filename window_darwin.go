@@ -104,6 +104,7 @@ func NewWindow(opts Options) (*Window, error) {
 		w.closeNow()
 		return nil, fmt.Errorf("fairy: text: %w", err)
 	}
+	w.ts.SetColorGlyphTextures(w.newGlyphTexture)
 	w.link = darwin.Send(view, "displayLinkWithTarget:selector:", view, darwin.Sel("fairyFrame:"))
 	darwin.Send(w.link, "setPaused:", true)
 	darwin.Send(w.link, "addToRunLoop:forMode:", darwin.SendClass("NSRunLoop", "mainRunLoop"),

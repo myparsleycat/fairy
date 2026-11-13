@@ -592,3 +592,12 @@ func (w *Window) release() {
 		w.r = nil
 	}
 }
+
+// newGlyphTexture makes a texture for a color glyph on the window's
+// current renderer.
+func (w *Window) newGlyphTexture(width, height int, rgba []byte) (*render.Texture, error) {
+	if w.r == nil {
+		return nil, render.ErrDeviceLost
+	}
+	return w.r.NewTexture(width, height, rgba, false)
+}
