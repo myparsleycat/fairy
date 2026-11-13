@@ -173,9 +173,12 @@ func (w *Window) scriptStep(f []string, line string) error {
 	case "wheel", "hwheel":
 		m := scriptMods(f[4:]) | heldMods
 		w.scriptMods = &m
-		// A fraction of a notch is a touchpad step.
+		// A fraction of a notch is a touchpad step. Each command is a gesture
+		// of its own: script steps come milliseconds apart, or with a fixed
+		// clock at no time apart, so they would all latch to one container.
 		n := num(3)
 		precise := n != float32(int(n))
+		w.wheelLatch = wheelLatch{}
 		if f[0] == "hwheel" {
 			w.onWheel(num(1), num(2), -n, true, precise)
 		} else {

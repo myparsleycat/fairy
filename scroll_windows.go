@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"time"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/render"
@@ -195,11 +196,59 @@ func scrollBase(s *elState) (float32, float32) {
 // screen at a time.
 const wheelPageScroll = ^uint32(0)
 
+const (
+	// wheelLatchTimeout is the pause in wheel input that ends a scroll
+	// gesture, as Chromium's wheel scroll latching transaction.
+	wheelLatchTimeout = 500 * time.Millisecond
+	// wheelLatchSlop is how far, in logical pixels, the pointer may move
+	// during a gesture before the next wheel step starts a new one.
+	wheelLatchSlop = 4
+)
+
+// wheelLatch is the scroll container a wheel gesture scrolled. Until the
+// gesture pauses or the pointer moves, the wheel scrolls only it: an inner list
+// that reaches its end swallows the rest of the gesture instead of handing it
+// to the page, and an inner list that passes under the pointer while the page
+// scrolls does not take it over. A press or key ends the gesture.
+type wheelLatch struct {
+	state      *elState
+	x, y       float32 // pointer position when the gesture started
+	horizontal bool
+	mods       keyboard.Mods
+	at         time.Time // last wheel step of the gesture
+}
+
+// holding returns the latched container's state when the gesture continues
+// over it from target and it can still scroll along the gesture's axis, else
+// nil.
+func (l wheelLatch) holding(target *El, x, y float32, now time.Time, horizontal bool, mods keyboard.Mods) *elState {
+	dx, dy := x-l.x, y-l.y
+	if l.state == nil || l.horizontal != horizontal || l.mods != mods || now.Sub(l.at) >= wheelLatchTimeout ||
+		dx*dx+dy*dy > wheelLatchSlop*wheelLatchSlop {
+		return nil
+	}
+	for e := target; e != nil; e = e.parent {
+		if e.state == l.state {
+			n := &e.node
+			canY := e.style.ScrollY && n.ContentH > n.H
+			canX := e.style.ScrollX && n.ContentW > n.W
+			if !horizontal && canY || (horizontal || !e.style.ScrollY) && canX {
+				return l.state
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
 // onWheel offers a wheel step to the elements under the pointer, innermost
 // first: an OnWheel handler that returns true takes it, otherwise the first
-// scroll container that can move scrolls. delta is in notches, positive away
-// from the user or, for a tilt wheel (hwheel), to the left. Precise input,
-// already smooth, is applied at once; whole notches animate.
+// scroll container that can move scrolls. While a gesture continues over the
+// container it scrolled (wheelLatch), only that container scrolls; OnWheel
+// handlers outside it still see the steps it cannot take. delta is in
+// notches, positive away from the user or, for a tilt wheel (hwheel), to the
+// left. Precise input, already smooth, is applied at once; whole notches
+// animate.
 func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	w.hideTooltip()
 	w.stopAutoScroll()
@@ -212,7 +261,11 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 		ev.DY = -delta
 	}
 	lines := uint32(3)
-	win.SystemParametersInfo(win.SPI_GETWHEELSCROLLLINES, 0, unsafe.Pointer(&lines))
+	if w.scriptWheelLines != nil {
+		lines = *w.scriptWheelLines
+	} else {
+		win.SystemParametersInfo(win.SPI_GETWHEELSCROLLLINES, 0, unsafe.Pointer(&lines))
+	}
 	// step is how far a notch scrolls a view of the given size. A setting of
 	// 0 lines scrolls nothing.
 	step := func(view float32) float32 {
@@ -225,7 +278,10 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	if precise {
 		scroll = w.scrollNow
 	}
-	for e := w.hitTest(x, y); e != nil; e = e.parent {
+	now := w.now()
+	target := w.hitTest(x, y)
+	latch := w.wheelLatch.holding(target, x, y, now, horizontal, mods)
+	for e := target; e != nil; e = e.parent {
 		if e.onWheel != nil {
 			ev.LocalX, ev.LocalY, ev.W, ev.H = x-e.absX, y-e.absY, e.w, e.h
 			handled := e.onWheel(ev)
@@ -234,20 +290,26 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 				break
 			}
 		}
-		if e.state == nil || e.kind == kindInput {
+		if e.state == nil || e.kind == kindInput || latch != nil && e.state != latch {
 			continue
 		}
 		n := &e.node
 		canY := e.style.ScrollY && n.ContentH > n.H
 		canX := e.style.ScrollX && n.ContentW > n.W
+		moved := false
 		if !horizontal && canY {
-			if scroll(e, 0, -step(n.H)) {
-				break
-			}
+			moved = scroll(e, 0, -step(n.H))
 		} else if (horizontal || !e.style.ScrollY) && canX {
-			if scroll(e, -step(n.W), 0) {
-				break
-			}
+			moved = scroll(e, -step(n.W), 0)
+		}
+		if latch == nil && moved {
+			w.wheelLatch = wheelLatch{state: e.state, x: x, y: y, horizontal: horizontal, mods: mods}
+		}
+		if latch != nil || moved {
+			w.wheelLatch.at = now
+		}
+		if moved {
+			break
 		}
 	}
 	if w.dirty {

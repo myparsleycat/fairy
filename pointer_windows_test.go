@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
@@ -576,6 +577,65 @@ func TestWheelHandler(t *testing.T) {
 	w.onWheel(30, 20, -0.5, true, true)
 	if ev := got[len(got)-1]; ev.DX != 0.5 || ev.DY != 0 {
 		t.Fatalf("tilt event = %+v", ev)
+	}
+}
+
+// A wheel gesture stays with the container it scrolled: a list that passes
+// under the pointer does not take over the page's gesture, and a list at its
+// end does not hand the rest of its gesture to the page. Moving the pointer or
+// pausing starts a new gesture.
+func TestWheelLatchesNestedScroll(t *testing.T) {
+	pageWheels := 0
+	w := newPointerWindow(t, func() *El {
+		return Col(
+			Box().Size(100, 40),
+			Col(Box().Size(100, 120)).Size(100, 60).ScrollY().Key("list"),
+			Box().Size(100, 300),
+		).Size(200, 100).ScrollY().Key("page").OnWheel(func(WheelEvent) bool {
+			pageWheels++
+			return false
+		})
+	})
+	page, list := w.root.state, w.root.children[1].state
+	w.clock = &scriptClock{now: time.Unix(0, 0)}
+	lines := uint32(3) // a notch is 100 pixels
+	w.scriptWheelLines = &lines
+	wheel := func(x, y, notches float32) {
+		w.onWheel(x, y, notches, false, true)
+		w.placeAll()
+	}
+
+	for range 3 {
+		wheel(30, 20, -0.125)
+	}
+	if got := w.hitTest(30, 20); got == nil || got.parent == nil || got.parent.state != list {
+		t.Fatal("the list did not scroll under the pointer")
+	}
+	wheel(30, 20, -0.125)
+	if page.scrollY != 50 || list.scrollY != 0 {
+		t.Fatalf("page at %v, list at %v: the list took over the page's gesture", page.scrollY, list.scrollY)
+	}
+
+	wheel(30, 30, -1)
+	wheel(30, 30, -1)
+	if page.scrollY != 50 || list.scrollY != 60 {
+		t.Fatalf("after moving onto the list: page at %v, list at %v", page.scrollY, list.scrollY)
+	}
+
+	before := pageWheels
+	w.clock.now = w.clock.now.Add(wheelLatchTimeout / 2)
+	wheel(30, 30, -1)
+	if page.scrollY != 50 {
+		t.Fatalf("the page scrolled to %v within the list's gesture", page.scrollY)
+	}
+	if pageWheels != before+1 {
+		t.Fatal("the page's OnWheel did not see the step the list could not take")
+	}
+
+	w.clock.now = w.clock.now.Add(wheelLatchTimeout)
+	wheel(30, 30, -1)
+	if page.scrollY <= 50 {
+		t.Fatal("a new gesture after a pause did not reach the page")
 	}
 }
 

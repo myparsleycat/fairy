@@ -157,6 +157,10 @@ type Window struct {
 	resizeErr bool      // the last swap chain resize failed; logged once per failure streak
 
 	preciseWheelAt time.Time // last wheel message with a fraction of a notch
+	wheelLatch     wheelLatch
+	// scriptWheelLines replaces the system's wheel scroll lines setting, so
+	// tests scroll the same distance on every machine.
+	scriptWheelLines *uint32
 
 	hits       []hit
 	chromeHits []int

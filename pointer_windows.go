@@ -294,6 +294,7 @@ func (w *Window) setHoverPath(path []*El) bool {
 
 func (w *Window) onButtonDown(x, y float32, button int) {
 	w.hideTooltip()
+	w.wheelLatch = wheelLatch{}
 	if w.autoScroll != nil {
 		// Any press ends autoscroll and does nothing else.
 		w.stopAutoScroll()

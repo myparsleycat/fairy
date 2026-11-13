@@ -120,6 +120,7 @@ func (t *touchState) velocity() (float32, float32) {
 }
 
 func (w *Window) onTouchDown(id uint32, x, y float32, at time.Time) {
+	w.wheelLatch = wheelLatch{}
 	if w.touch != nil {
 		// A new primary contact means the last one ended without its up
 		// reaching the window.
