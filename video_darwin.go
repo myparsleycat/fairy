@@ -33,6 +33,7 @@ type Video struct {
 	blocks               []objc.Block
 	polling              bool      // a status check is scheduled
 	awaitUntil           time.Time // keep painting until a frame arrives or then
+	seeking              int       // seeks not yet finished
 
 	dev      *render.Device
 	cache    uintptr        // CVMetalTextureCacheRef on dev
@@ -73,8 +74,11 @@ const (
 	mtlPixelBGRA8     = 80         // MTLPixelFormatBGRA8Unorm
 
 	// videoFrameWait is how long a paused video keeps painting for the frame
-	// a seek or the first load brings.
-	videoFrameWait = 2 * time.Second
+	// a finished seek brings, and videoFirstFrameWait for the first frame
+	// of a video track once the video is ready, which a slow source may
+	// decode late.
+	videoFrameWait      = 2 * time.Second
+	videoFirstFrameWait = 30 * time.Second
 )
 
 var cmTimeZero = cmTime{Timescale: 1, Flags: cmTimeValid}
@@ -195,13 +199,22 @@ func (v *Video) endAction() int64 {
 	return avEndPause
 }
 
-// observe calls f on the main thread when the player item posts the
-// notification name.
+// observe calls f on the UI thread when the player item posts the
+// notification name. The main queue delivers it inside a dispatch block, in
+// which a modal dialog the user's OnEnded or OnError opened would hold up
+// every other main queue block and timer; f runs later as a Go call instead.
 func (v *Video) observe(name string, f func(note darwin.ID)) {
 	block := objc.NewBlock(func(_ objc.Block, note objc.ID) {
-		if !v.closed {
-			f(note)
+		if v.closed {
+			return
 		}
+		note = darwin.Retain(note)
+		Go(func() {
+			defer darwin.Release(note)
+			if !v.closed {
+				f(note)
+			}
+		})
 	})
 	center := darwin.SendClass("NSNotificationCenter", "defaultCenter")
 	token := darwin.Send(center, "addObserverForName:object:queue:usingBlock:",
@@ -233,7 +246,11 @@ func (v *Video) poll() {
 		if darwin.Get[float32](v.player, "rate") != 0 {
 			v.state = VideoPlaying
 		}
-		v.awaitFrame()
+		if v.videoTrack() != 0 {
+			v.awaitUntil = time.Now().Add(videoFirstFrameWait)
+		} else {
+			v.awaitFrame()
+		}
 		updateWindows()
 	case avStatusFailed:
 		v.fail(darwin.Send(v.item, "error"))
@@ -250,22 +267,30 @@ type cgAffineTransform struct{ A, B, C, D, TX, TY float64 }
 // Foundation turns them on Windows; AVPlayerItemVideoOutput does not, so a
 // video composition built from the asset applies the track's transform.
 func (v *Video) applyRotation() {
+	track := v.videoTrack()
+	if track == 0 {
+		return
+	}
+	t := darwin.Get[cgAffineTransform](track, "preferredTransform")
+	if t.A == 1 && t.B == 0 && t.C == 0 && t.D == 1 {
+		return
+	}
+	comp := darwin.SendClass("AVVideoComposition", "videoCompositionWithPropertiesOfAsset:", darwin.Send(v.item, "asset"))
+	if comp != 0 {
+		v.item.Send(darwin.Sel("setVideoComposition:"), comp)
+	}
+}
+
+// videoTrack returns the AVAssetTrack of the item's first video track, or 0.
+func (v *Video) videoTrack() darwin.ID {
 	tracks := darwin.Send(v.item, "tracks")
 	for i := range darwin.Get[uint64](tracks, "count") {
 		track := darwin.Send(darwin.Send(tracks, "objectAtIndex:", i), "assetTrack")
-		if track == 0 || darwin.GoString(darwin.Send(track, "mediaType")) != "vide" {
-			continue
+		if track != 0 && darwin.GoString(darwin.Send(track, "mediaType")) == "vide" {
+			return track
 		}
-		t := darwin.Get[cgAffineTransform](track, "preferredTransform")
-		if t.A == 1 && t.B == 0 && t.C == 0 && t.D == 1 {
-			return
-		}
-		comp := darwin.SendClass("AVVideoComposition", "videoCompositionWithPropertiesOfAsset:", darwin.Send(v.item, "asset"))
-		if comp != 0 {
-			v.item.Send(darwin.Sel("setVideoComposition:"), comp)
-		}
-		return
 	}
+	return 0
 }
 
 func (v *Video) fail(nsErr darwin.ID) {
@@ -383,14 +408,38 @@ func (v *Video) Seek(d time.Duration) {
 	}
 }
 
+// seek moves to t. The windows showing v keep painting until the seek
+// finishes, however long it takes, and then until the frame at t arrives.
 func (v *Video) seek(t cmTime) {
-	v.player.Send(darwin.Sel("seekToTime:toleranceBefore:toleranceAfter:"), t, cmTimeZero, cmTimeZero)
+	v.seeking++
+	b := objc.NewBlock(func(_ objc.Block, _ bool) {
+		// AVFoundation may finish on another thread.
+		darwin.Perform(func() {
+			v.seeking--
+			if !v.closed {
+				v.awaitFrame()
+				updateWindows()
+			}
+		})
+	})
+	v.player.Send(darwin.Sel("seekToTime:toleranceBefore:toleranceAfter:completionHandler:"), t, cmTimeZero, cmTimeZero, b)
+	b.Release()
 	v.awaitFrame()
 }
 
 // awaitFrame keeps the windows showing v painting until the next frame
 // arrives, as one does after a seek even while paused.
 func (v *Video) awaitFrame() { v.awaitUntil = time.Now().Add(videoFrameWait) }
+
+// waiting reports whether a frame the windows showing v must paint is on
+// its way: a seek's, or the first one, which a slow source may bring well
+// after the video is ready.
+func (v *Video) waiting() bool {
+	if v.closed || v.state == VideoLoading || v.state == VideoFailed {
+		return false
+	}
+	return v.seeking > 0 || !v.awaitUntil.IsZero() && time.Now().Before(v.awaitUntil)
+}
 
 // Position returns the current playback position.
 func (v *Video) Position() time.Duration {
@@ -595,7 +644,7 @@ func (w *Window) paintVideo(e *El, box rectF, radii, clip [4]float32, opacity fl
 		return
 	}
 	frame := v.currentFrame()
-	if v.Playing() || !v.awaitUntil.IsZero() && time.Now().Before(v.awaitUntil) {
+	if v.Playing() || v.waiting() {
 		w.animating = true
 	}
 	if frame == nil {

@@ -35,14 +35,24 @@ func String(s string) ID {
 		Send(Sel("autorelease"))
 }
 
-// GoString returns the text of an NSString, or "" for nil.
+// GoString returns the text of an NSString, or "" for nil. A string that
+// is not valid UTF-16, such as one with an unpaired surrogate a page or an
+// input method made, has U+FFFD in its place.
 func GoString(id ID) string {
 	if id == 0 {
 		return ""
 	}
 	p := Get[*byte](id, "UTF8String")
 	if p == nil {
-		return ""
+		// UTF8String fails for the whole string on an unpaired surrogate:
+		// decode its UTF-16 instead.
+		n := Get[uint64](id, "length")
+		if n == 0 {
+			return ""
+		}
+		u := make([]uint16, n)
+		Send(id, "getCharacters:range:", unsafe.Pointer(&u[0]), NSRange{Length: n})
+		return string(utf16.Decode(u))
 	}
 	const nsUTF8StringEncoding = 4
 	n := Get[uint64](id, "lengthOfBytesUsingEncoding:", uint64(nsUTF8StringEncoding))
