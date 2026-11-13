@@ -33,11 +33,6 @@ func (w *Window) Announce(text string) {}
 // Announce asks screen readers to speak text in the active window.
 func Announce(text string) {}
 
-// The Dock.
-
-// SetProgress shows progress on the window's Dock tile.
-func (w *Window) SetProgress(state Progress, value float64) {}
-
 // Surfaces and GPU images.
 
 type surfaceEntry struct {
