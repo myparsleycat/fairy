@@ -168,6 +168,7 @@ func (w *Window) windowClosed() {
 	}
 	w.securePassword(nil)
 	w.releaseBackdrop()
+	w.closeWebViews()
 	w.closed = true
 	for id, t := range w.timers {
 		t.Stop()
@@ -521,6 +522,7 @@ func (w *Window) eventPoint(ev darwin.ID) (float32, float32) {
 
 func (w *Window) mouseDown(ev darwin.ID, button int) {
 	defer w.handling(ev)()
+	w.focusView()
 	w.commitComposition()
 	x, y := w.eventPoint(ev)
 	if button == 0 && !w.scripted && w.inDragRegion(x, y) {
@@ -542,9 +544,16 @@ func (w *Window) mouseUp(ev darwin.ID, button int) {
 
 func (w *Window) mouseMoved(ev darwin.ID) {
 	defer w.handling(ev)()
-	if !w.scripted {
-		w.onMouseMove(w.eventPoint(ev))
+	if w.scripted {
+		return
 	}
+	x, y := w.eventPoint(ev)
+	if w.press == nil && w.overWebView(x, y) {
+		// The web view under the pointer has it, as a child window does.
+		w.onMouseLeave()
+		return
+	}
+	w.onMouseMove(x, y)
 }
 
 func (w *Window) scrollWheel(ev darwin.ID) {
@@ -553,6 +562,9 @@ func (w *Window) scrollWheel(ev darwin.ID) {
 	}
 	defer w.handling(ev)()
 	x, y := w.eventPoint(ev)
+	if w.overWebView(x, y) {
+		return // a web view passed on a scroll it did not take
+	}
 	precise := darwin.Get[bool](ev, "hasPreciseScrollingDeltas")
 	dx := darwin.Get[float64](ev, "scrollingDeltaX")
 	dy := darwin.Get[float64](ev, "scrollingDeltaY")
@@ -569,6 +581,10 @@ func (w *Window) scrollWheel(ev darwin.ID) {
 }
 
 func (w *Window) keyDown(ev darwin.ID) {
+	if w.focusedWebView() != nil {
+		w.webViewKey(ev)
+		return
+	}
 	defer w.handling(ev)()
 	code := darwin.Get[uint16](ev, "keyCode")
 	repeat := darwin.Get[bool](ev, "isARepeat")
@@ -668,6 +684,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 		panic(err)
 	}
 	addTextInputClient(c)
+	addFocusTracking(c)
 	addDropTarget(c)
 	return c
 })
@@ -707,13 +724,19 @@ var delegateClass = sync.OnceValue(func() darwin.Class {
 			w.onResize(w.pixelSize())
 			w.invalidate()
 		})},
+		// While a web view has the keyboard, the window's elements have
+		// lost focus already and do not get it back with the window.
 		{Cmd: darwin.Sel("windowDidBecomeKey:"), Fn: on(func(w *Window) {
-			w.onFocusChange(true)
-			w.securePassword(w.focusedEl())
+			if w.focusedWebView() == nil {
+				w.onFocusChange(true)
+				w.securePassword(w.focusedEl())
+			}
 		})},
 		{Cmd: darwin.Sel("windowDidResignKey:"), Fn: on(func(w *Window) {
 			w.securePassword(nil) // give other apps the user's input source back
-			w.onFocusChange(false)
+			if w.osFocus {
+				w.onFocusChange(false)
+			}
 		})},
 		{Cmd: darwin.Sel("windowWillStartLiveResize:"), Fn: on(func(w *Window) { w.sizeMove = true })},
 		{Cmd: darwin.Sel("windowDidEndLiveResize:"), Fn: on(func(w *Window) {
