@@ -279,10 +279,13 @@ func TestImageIOLeavesIncompleteAndOtherImagesToGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	camera, cut := cameraJPEG(t)
 	for name, data := range map[string][]byte{
-		"truncated jpeg": jb[:len(jb)-4],
-		"truncated png":  pb[:len(pb)-20],
-		"webp":           webp,
+		"truncated jpeg":        jb[:len(jb)-4],
+		"truncated camera jpeg": cut,
+		"truncated png":         pb[:len(pb)-20],
+		"apng":                  apng(t),
+		"webp":                  webp,
 	} {
 		in, err := Inspect(data)
 		if err != nil {
@@ -291,6 +294,9 @@ func TestImageIOLeavesIncompleteAndOtherImagesToGo(t *testing.T) {
 		if nativeAccepts(in) || DecodeNative(in, Bound{}) != nil {
 			t.Errorf("%s: ImageIO would decode it", name)
 		}
+	}
+	if in, err := Inspect(camera); err != nil || !nativeAccepts(in) {
+		t.Errorf("ImageIO does not take a complete camera jpeg: %v", err)
 	}
 	// A file whose content ImageIO reads as another format than Go does.
 	in, err := Inspect(pb)

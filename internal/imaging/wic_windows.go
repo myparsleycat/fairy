@@ -55,16 +55,17 @@ func nativeAccepts(in Input) bool { return wicDecoderClass(in) != nil }
 // wicDecoderClass returns the built-in WIC decoder for still JPEG and PNG
 // images. Images that need a guard the Go decoders give, or a color
 // conversion WIC does differently, are left to Go: truncated files, which
-// WIC decodes partially, and CMYK JPEGs.
+// WIC decodes partially, including JPEGs cut off after an EXIF thumbnail's
+// end marker, and CMYK JPEGs.
 func wicDecoderClass(in Input) *com.GUID {
 	if in.Animation.Count != 0 || in.AnimErr != nil || uint64(len(in.data)) > math.MaxUint32 ||
 		in.Config.Width <= 0 || in.Config.Height <= 0 {
 		return nil
 	}
 	switch {
-	case in.Format == "jpeg" && bytes.HasPrefix(in.data, []byte{0xff, 0xd8}) &&
+	case in.Format == "jpeg" &&
 		(in.Config.ColorModel == color.YCbCrModel || in.Config.ColorModel == color.GrayModel) &&
-		bytes.LastIndex(in.data, []byte{0xff, 0xd9}) >= 2:
+		jpegComplete(in.data):
 		return &wicJPEGDecoderClass
 	case in.Format == "png" && bytes.HasPrefix(in.data, []byte("\x89PNG\r\n\x1a\n")) &&
 		bytes.Contains(in.data, pngEnd):

@@ -1,7 +1,57 @@
 package imaging
 
+import (
+	"bytes"
+	"encoding/binary"
+)
+
 // pngEnd is the IEND chunk, which a complete PNG ends with.
 var pngEnd = []byte("\x00\x00\x00\x00IEND\xaeB`\x82")
+
+// jpegComplete reports whether a JPEG's main image runs to its end marker
+// after its first scan. It skips segments by their length, so the end
+// marker of an EXIF thumbnail, which a truncated camera JPEG still carries
+// in full, does not count. The platform decoders decode a truncated file
+// partially, filling the rest with gray, and report success.
+func jpegComplete(data []byte) bool {
+	if !bytes.HasPrefix(data, []byte{0xff, 0xd8}) {
+		return false
+	}
+	coded := false // past the first scan header
+	for i := 2; i < len(data); {
+		// Entropy-coded data, and junk between segments that decoders skip,
+		// run to the next 0xff.
+		j := bytes.IndexByte(data[i:], 0xff)
+		if j < 0 {
+			return false
+		}
+		i += j
+		for i+1 < len(data) && data[i+1] == 0xff { // fill bytes
+			i++
+		}
+		if i+1 >= len(data) {
+			return false
+		}
+		m := data[i+1]
+		i += 2
+		switch {
+		case m == 0xd9: // EOI
+			return coded
+		case m == 0x00 || m == 0x01 || m >= 0xd0 && m <= 0xd8: // stuffing, TEM, RSTn, SOI
+			continue
+		}
+		if i+2 > len(data) {
+			return false
+		}
+		n := int(binary.BigEndian.Uint16(data[i:]))
+		if n < 2 || i+n > len(data) {
+			return false
+		}
+		i += n
+		coded = coded || m == 0xda // SOS
+	}
+	return false
+}
 
 // jpegDCTSize returns the size of a JPEG decoded at 1/8, 1/4 or 1/2 scale
 // that still leaves at least twice the target dimensions, so the final
