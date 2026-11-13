@@ -95,6 +95,8 @@ func NewWindow(opts Options) (*Window, error) {
 	darwin.Send(view, "addTrackingArea:", tracking)
 	darwin.Release(tracking)
 
+	w.registerDrop()
+
 	w.delegate = darwin.New("FairyWindowDelegate")
 	byDelegate[w.delegate] = w
 	darwin.Send(nw, "setDelegate:", w.delegate)
@@ -659,6 +661,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 		panic(err)
 	}
 	addTextInputClient(c)
+	addDropTarget(c)
 	return c
 })
 

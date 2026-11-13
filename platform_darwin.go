@@ -2,7 +2,10 @@ package fairy
 
 import (
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"github.com/ebitengine/purego/objc"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
 	"github.com/myparsleycat/fairy/keyboard"
@@ -31,8 +34,7 @@ var pthreadThreadID func(thread uintptr, id *uint64) int32
 
 func init() {
 	darwin.Func(&pthreadThreadID, darwin.System, "pthread_threadid_np")
-	reducedMotion.Store(darwin.Get[bool](darwin.SendClass("NSWorkspace", "sharedWorkspace"),
-		"accessibilityDisplayShouldReduceMotion"))
+	loadReducedMotion()
 }
 
 // currentThreadID identifies the OS thread the caller runs on.
@@ -78,13 +80,57 @@ func screenPixels() int64 {
 // watchMemoryPressure trims image memory when the system runs low.
 func watchMemoryPressure() {}
 
-// SystemDark reports whether the system uses dark mode.
-func SystemDark() bool {
-	var dark bool
+var systemDark atomic.Bool
+
+func init() { loadSystemDark() }
+
+// SystemDark reports whether macOS is set to the dark appearance. When the
+// user changes it, every window builds its view again, so a View that
+// follows the system theme can read it on each build.
+func SystemDark() bool { return systemDark.Load() }
+
+func loadSystemDark() {
 	darwin.WithPool(func() {
 		v := darwin.Send(darwin.SendClass("NSUserDefaults", "standardUserDefaults"), "stringForKey:",
 			darwin.String("AppleInterfaceStyle"))
-		dark = darwin.GoString(v) == "Dark"
+		systemDark.Store(darwin.GoString(v) == "Dark")
 	})
-	return dark
+}
+
+func loadReducedMotion() {
+	reducedMotion.Store(darwin.Get[bool](darwin.SendClass("NSWorkspace", "sharedWorkspace"),
+		"accessibilityDisplayShouldReduceMotion"))
+}
+
+// watchSystemSettings rebuilds every window when the appearance or the
+// reduce motion setting changes.
+func watchSystemSettings() {
+	c, err := objc.RegisterClass("FairySettingsObserver", darwin.Cls("NSObject"), nil, nil, []objc.MethodDef{
+		{Cmd: darwin.Sel("themeChanged:"), Fn: func(darwin.ID, darwin.SEL, darwin.ID) {
+			loadSystemDark()
+			settingsChanged()
+		}},
+		{Cmd: darwin.Sel("motionChanged:"), Fn: func(darwin.ID, darwin.SEL, darwin.ID) {
+			loadReducedMotion()
+			settingsChanged()
+		}},
+	})
+	if err != nil {
+		panic(err)
+	}
+	obs := darwin.ID(c).Send(darwin.Sel("new"))
+	darwin.Send(darwin.SendClass("NSDistributedNotificationCenter", "defaultCenter"),
+		"addObserver:selector:name:object:", obs, darwin.Sel("themeChanged:"),
+		darwin.String("AppleInterfaceThemeChangedNotification"), darwin.ID(0))
+	darwin.Send(darwin.Send(darwin.SendClass("NSWorkspace", "sharedWorkspace"), "notificationCenter"),
+		"addObserver:selector:name:object:", obs, darwin.Sel("motionChanged:"),
+		darwin.SymbolID(darwin.AppKit, "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification"), darwin.ID(0))
+}
+
+// settingsChanged builds every window again after a system setting changed.
+func settingsChanged() {
+	InvalidateMemos()
+	for _, w := range openWindows {
+		w.Update()
+	}
 }

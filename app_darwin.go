@@ -30,26 +30,68 @@ var openWindows = map[darwin.ID]*Window{}
 var nsApp darwin.ID
 
 // launchApp makes the shared NSApplication once: a regular app with a Dock
-// icon and an app menu holding Quit.
+// icon, the standard app and Window menus, and watchers of the system's
+// appearance settings.
 var launchApp = sync.OnceFunc(func() {
 	nsApp = darwin.SendClass("NSApplication", "sharedApplication")
 	darwin.Send(nsApp, "setActivationPolicy:", int64(0)) // NSApplicationActivationPolicyRegular
 	delegate := darwin.New("FairyAppDelegate")
 	darwin.Send(nsApp, "setDelegate:", delegate)
 	darwin.Send(nsApp, "setMainMenu:", newMainMenu())
+	watchSystemSettings()
 	darwin.Send(nsApp, "finishLaunching")
 })
 
+// newMainMenu makes the menu bar: the app menu, with Hide and Quit, and the
+// Window menu, which AppKit fills with the open windows. Other shortcuts,
+// such as ⌘C, reach the focused window's key handlers.
 func newMainMenu() darwin.ID {
 	name := filepath.Base(os.Args[0])
 	bar := darwin.New("NSMenu")
-	appItem := darwin.New("NSMenuItem")
-	darwin.Send(bar, "addItem:", appItem)
-	appMenu := darwin.New("NSMenu")
-	quit := darwin.Send(darwin.SendClass("NSMenuItem", "alloc"), "initWithTitle:action:keyEquivalent:",
-		darwin.String("Quit "+name), darwin.Sel("terminate:"), darwin.String("q"))
-	darwin.Send(appMenu, "addItem:", quit)
-	darwin.Send(appItem, "setSubmenu:", appMenu)
+	item := func(menu darwin.ID, title, action, key string, mods uint64) {
+		it := darwin.Send(darwin.SendClass("NSMenuItem", "alloc"), "initWithTitle:action:keyEquivalent:",
+			darwin.String(title), darwin.Sel(action), darwin.String(key))
+		if mods != 0 {
+			darwin.Send(it, "setKeyEquivalentModifierMask:", mods)
+		}
+		darwin.Send(menu, "addItem:", it)
+		darwin.Release(it)
+	}
+	separator := func(menu darwin.ID) { darwin.Send(menu, "addItem:", darwin.SendClass("NSMenuItem", "separatorItem")) }
+	submenu := func(title string) darwin.ID {
+		top := darwin.New("NSMenuItem")
+		menu := darwin.Send(darwin.SendClass("NSMenu", "alloc"), "initWithTitle:", darwin.String(title))
+		darwin.Send(top, "setSubmenu:", menu)
+		darwin.Send(bar, "addItem:", top)
+		darwin.Release(top)
+		darwin.Release(menu)
+		return menu
+	}
+
+	app := submenu(name)
+	item(app, "About "+name, "orderFrontStandardAboutPanel:", "", 0)
+	separator(app)
+	services := darwin.Send(darwin.SendClass("NSMenu", "alloc"), "initWithTitle:", darwin.String("Services"))
+	servicesItem := darwin.Send(darwin.SendClass("NSMenuItem", "alloc"), "initWithTitle:action:keyEquivalent:",
+		darwin.String("Services"), darwin.SEL(0), darwin.String(""))
+	darwin.Send(servicesItem, "setSubmenu:", services)
+	darwin.Send(app, "addItem:", servicesItem)
+	darwin.Send(nsApp, "setServicesMenu:", services)
+	darwin.Release(servicesItem)
+	darwin.Release(services)
+	separator(app)
+	item(app, "Hide "+name, "hide:", "h", nsCommand)
+	item(app, "Hide Others", "hideOtherApplications:", "h", nsCommand|nsOption)
+	item(app, "Show All", "unhideAllApplications:", "", 0)
+	separator(app)
+	item(app, "Quit "+name, "terminate:", "q", nsCommand)
+
+	window := submenu("Window")
+	item(window, "Minimize", "performMiniaturize:", "m", nsCommand)
+	item(window, "Zoom", "performZoom:", "", 0)
+	separator(window)
+	item(window, "Bring All to Front", "arrangeInFront:", "", 0)
+	darwin.Send(nsApp, "setWindowsMenu:", window)
 	return bar
 }
 
