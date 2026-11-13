@@ -3,6 +3,7 @@ package fairy
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -326,12 +327,14 @@ func TestDarwinWebViewFocus(t *testing.T) {
 		w.renderFrame()
 	})
 	waitFor(t, "loaded", func() bool { return v.Title() == "First" })
+	tookKeyboard := false
 	Do(func() {
-		if darwin.Send(w.nsWindow, "firstResponder") != w.view {
-			t.Fatal("the web view took the keyboard while loading")
-		}
+		tookKeyboard = darwin.Send(w.nsWindow, "firstResponder") != w.view
 		w.osFocus = true // as in the key window
 	})
+	if tookKeyboard {
+		t.Fatal("the web view took the keyboard while loading")
+	}
 	press := func(code uint16, ch rune, flags uint64) {
 		Do(func() { darwin.WithPool(func() { w.keyDown(keyEvent(code, ch, flags)) }) })
 	}
@@ -664,4 +667,218 @@ func TestDarwinWebViewPopupMessages(t *testing.T) {
 			t.Error("popup reached opener OnMessage")
 		}
 	})
+}
+
+// A web view hidden when its window closes, such as one on a tab not shown,
+// closes with the window.
+func TestDarwinWebViewHiddenClosesWithWindow(t *testing.T) {
+	v := NewWebView(WebViewOptions{URL: "about:blank"})
+	v.ephemeral = true
+	shown := true
+	w := newTestWindow(t, func() *El {
+		if shown {
+			return WebViewHost(v).Size(200, 120)
+		}
+		return Col()
+	})
+	waitFor(t, "ready", v.Ready)
+	hidden := false
+	Do(func() {
+		shown = false
+		w.Update()
+		w.renderFrame()
+		w.renderFrame()
+		hidden = !v.visible && !v.closed
+	})
+	if !hidden {
+		t.Fatal("the web view did not hide when its element left the tree")
+	}
+	Do(w.closeNow)
+	Do(func() {
+		if !v.closed || v.wk != 0 {
+			t.Error("a hidden web view outlived its window")
+		}
+	})
+}
+
+// A load that fails before it commits reports the address that failed, not
+// the page shown before it.
+func TestDarwinWebViewFailedNavigationURL(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := "http://" + ln.Addr().String() + "/nothing"
+	ln.Close()
+	var navigated []string
+	v := NewWebView(WebViewOptions{URL: refused, OnNavigated: func(u string, ok bool) {
+		navigated = append(navigated, fmt.Sprint(u, " ", ok))
+	}})
+	v.ephemeral = true
+	newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "the failed navigation", func() bool { return len(navigated) > 0 })
+	Do(func() {
+		if want := refused + " false"; navigated[0] != want {
+			t.Errorf("OnNavigated %q, want %q", navigated[0], want)
+		}
+	})
+}
+
+// A popup's dialogs and file choosers show on the popup's own window, not
+// on the opener's, which here is hidden and would answer Cancel.
+func TestDarwinWebViewPopupDialogs(t *testing.T) {
+	srv := testServer(t)
+	v := NewWebView(WebViewOptions{URL: srv.URL + "/"})
+	v.ephemeral = true
+	w := newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "opener", func() bool { return v.Title() == "First" })
+	if _, err := runScript(t, v, `window.p = window.open('/second'); 1`); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "popup loaded", func() bool {
+		return len(v.popups) == 1 && darwin.GoString(darwin.Send(v.popups[0].wk, "title")) == "Second"
+	})
+	var popup webPopup
+	Do(func() { popup = v.popups[0] })
+	defer Do(func() { darwin.Send(popup.win, "close") })
+	sheetOf := func(what string) darwin.ID {
+		t.Helper()
+		var sheet darwin.ID
+		waitFor(t, what, func() bool {
+			sheet = darwin.Send(popup.win, "attachedSheet")
+			return sheet != 0
+		})
+		return sheet
+	}
+
+	ch := make(chan string, 1)
+	Do(func() {
+		v.ExecuteScript(`window.p.confirm('sure?')`, func(s string, err error) { ch <- fmt.Sprint(s, err) })
+	})
+	sheet := sheetOf("the popup's confirm sheet")
+	Do(func() {
+		if darwin.Send(w.nsWindow, "attachedSheet") != 0 {
+			t.Error("the popup's dialog showed on the opener's window")
+		}
+		darwin.Send(popup.win, "endSheet:returnCode:", sheet, int64(1000))
+	})
+	select {
+	case s := <-ch:
+		if s != "true<nil>" {
+			t.Errorf("popup confirm OK: %q", s)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("the popup's confirm did not finish")
+	}
+
+	if _, err := runScript(t, v, `var d = window.p.document;
+d.body.insertAdjacentHTML('beforeend', '<input type=file id=f multiple>');
+var f = d.getElementById('f');
+f.addEventListener('cancel', () => window.p.cancelled = true);
+f.click(); 1`); err != nil {
+		t.Fatal(err)
+	}
+	sheet = sheetOf("the popup's open panel")
+	Do(func() {
+		if !darwin.Get[bool](sheet, "isKindOfClass:", darwin.ID(darwin.Cls("NSOpenPanel"))) {
+			t.Errorf("the file chooser sheet is a %s", darwin.GoString(darwin.Send(sheet, "className")))
+		} else if !darwin.Get[bool](sheet, "allowsMultipleSelection") || darwin.Get[bool](sheet, "canChooseDirectories") {
+			t.Error("the open panel does not follow the input's multiple and directory settings")
+		}
+		darwin.Send(popup.win, "endSheet:returnCode:", sheet, int64(0)) // NSModalResponseCancel
+	})
+	waitFor(t, "the open panel to close", func() bool { return darwin.Send(popup.win, "attachedSheet") == 0 })
+	for range 200 {
+		if s, _ := runScript(t, v, `!!window.p.cancelled`); s == "true" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Error("the page did not hear that the file chooser was cancelled")
+}
+
+// A response WebKit cannot show, one sent as an attachment, and a link with
+// a download attribute are saved in the downloads folder, as WebView2 does.
+func TestDarwinWebViewDownloads(t *testing.T) {
+	dir := t.TempDir()
+	prev := downloadsDir
+	downloadsDir = func() string { return dir }
+	t.Cleanup(func() { downloadsDir = prev })
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			rw.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(rw, `<!doctype html><title>Links</title><a id=a href="/plain" download="linked.txt">x</a>`)
+		case "/data.bin":
+			rw.Header().Set("Content-Type", "application/x-fairy-test")
+			fmt.Fprint(rw, "binary")
+		case "/attach":
+			rw.Header().Set("Content-Type", "text/plain")
+			rw.Header().Set("Content-Disposition", `attachment; filename="note.txt"`)
+			fmt.Fprint(rw, "attached")
+		case "/plain":
+			rw.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(rw, "linked")
+		}
+	}))
+	t.Cleanup(srv.Close)
+	if err := os.WriteFile(filepath.Join(dir, "data.bin"), []byte("old"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	v := NewWebView(WebViewOptions{URL: srv.URL + "/"})
+	v.ephemeral = true
+	newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "loaded", func() bool { return v.Title() == "Links" })
+	saved := func(name, want string) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			b, err := os.ReadFile(filepath.Join(dir, name))
+			if err == nil && string(b) == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: %q, %v; want %q", name, b, err, want)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	runScript(t, v, `document.getElementById('a').click(); 1`)
+	saved("linked.txt", "linked")
+	Do(func() { v.Navigate(srv.URL + "/data.bin") })
+	saved("data (2).bin", "binary") // data.bin exists
+	Do(func() { v.Navigate(srv.URL + "/attach") })
+	saved("note.txt", "attached")
+	Do(func() {
+		if v.Title() != "Links" {
+			t.Errorf("a download replaced the page: title %q", v.Title())
+		}
+	})
+}
+
+func TestDownloadPath(t *testing.T) {
+	dir := t.TempDir()
+	prev := downloadsDir
+	downloadsDir = func() string { return dir }
+	t.Cleanup(func() { downloadsDir = prev })
+	for _, name := range []string{"a.txt", "a (2).txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, want := range map[string]string{
+		"a.txt":        "a (3).txt",
+		"b.tar":        "b.tar",
+		"../../etc/x":  "x",
+		".hidden":      "hidden",
+		"":             "download",
+		"/":            "download",
+		"..":           "download",
+		"dir/sub:name": "sub-name",
+		"noext":        "noext",
+	} {
+		if got := downloadPath(name); got != filepath.Join(dir, want) {
+			t.Errorf("downloadPath(%q) = %q, want %q", name, got, filepath.Join(dir, want))
+		}
+	}
 }

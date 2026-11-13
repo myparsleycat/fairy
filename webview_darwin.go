@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -210,7 +211,7 @@ func (v *WebView) fail(err error) {
 }
 
 func (v *WebView) update() {
-	if v.host != nil {
+	if v.host != nil && !v.host.closed {
 		v.host.Update()
 	}
 }
@@ -278,21 +279,21 @@ func (w *Window) placeWebView(e *El, box rectF) {
 	}
 }
 
-// sweepWebViews hides web views that were not placed this frame.
+// sweepWebViews hides web views that were not placed this frame. A hidden
+// one stays in w.webviews, marked not placed, until it is closed or placed
+// in another window: its WKWebView is still a subview of the window, and
+// closing the window must close it too.
 func (w *Window) sweepWebViews() {
 	for v, placed := range w.webviews {
-		if !placed {
-			if v.visible {
-				v.visible = false
-				v.applyFrame()
-			}
-			delete(w.webviews, v)
-			continue
+		if !placed && v.visible {
+			v.visible = false
+			v.applyFrame()
 		}
 		w.webviews[v] = false
 	}
 }
 
+// closeWebViews closes every web view the window hosts, shown or hidden.
 func (w *Window) closeWebViews() {
 	for v := range w.webviews {
 		v.Close()
@@ -750,12 +751,13 @@ func (v *WebView) openPopup(cfg, features darwin.ID) darwin.ID {
 	darwin.Send(win, "setContentView:", wk)
 	darwin.Send(win, "setDelegate:", v.delegate)
 	darwin.Send(wk, "setUIDelegate:", v.delegate)
+	darwin.Send(wk, "setNavigationDelegate:", v.delegate) // for downloads
 	darwin.Send(wk, "addObserver:forKeyPath:options:context:", v.delegate, darwin.String("title"), uint64(1), uintptr(0))
 	if v.opts.DevTools && darwin.Get[bool](wk, "respondsToSelector:", darwin.Sel("setInspectable:")) {
 		darwin.Send(wk, "setInspectable:", true)
 	}
 	v.popups = append(v.popups, webPopup{win: win, wk: wk})
-	if v.host != nil && v.host.nsWindow != 0 {
+	if v.host != nil && !v.host.closed && v.host.nsWindow != 0 {
 		// Offset from the host window's top left, as cascading windows are.
 		f := darwin.Get[darwin.CGRect](v.host.nsWindow, "frame")
 		darwin.Send(win, "setFrameTopLeftPoint:", darwin.CGPoint{X: f.Origin.X + 24, Y: f.Origin.Y + f.Size.H - 24})
@@ -781,8 +783,10 @@ func (v *WebView) popupOf(wk, win darwin.ID) int {
 func (v *WebView) closePopup(i int) {
 	p := v.popups[i]
 	v.popups = slices.Delete(v.popups, i, i+1)
+	endSheet(p.win)
 	darwin.Send(p.wk, "removeObserver:forKeyPath:", v.delegate, darwin.String("title"))
 	darwin.Send(p.wk, "setUIDelegate:", darwin.ID(0))
+	darwin.Send(p.wk, "setNavigationDelegate:", darwin.ID(0))
 	darwin.Send(p.wk, "stopLoading")
 	darwin.Send(p.win, "setDelegate:", darwin.ID(0))
 	darwin.Release(p.wk)
@@ -793,11 +797,40 @@ func (v *WebView) closePopup(i int) {
 
 // WebKit callbacks.
 
-func (v *WebView) navigated(ok bool) {
+func (v *WebView) navigated(ok bool, nserr darwin.ID) {
 	if v.opts.OnNavigated != nil {
-		v.opts.OnNavigated(v.URL(), ok)
+		url := failingURL(nserr)
+		if url == "" {
+			url = v.URL()
+		}
+		v.opts.OnNavigated(url, ok)
 	}
 	v.update()
+}
+
+// failingURL returns the address a navigation error is for, or "". A load
+// that fails before it commits leaves the web view at the previous page, or
+// at none, so its URL is not the one that failed.
+func failingURL(nserr darwin.ID) string {
+	if nserr == 0 {
+		return ""
+	}
+	var s string
+	darwin.WithPool(func() {
+		info := darwin.Send(nserr, "userInfo")
+		if info == 0 {
+			return
+		}
+		key := func(name string) darwin.ID {
+			return darwin.Send(info, "objectForKey:", darwin.SymbolID(darwin.Foundation, name))
+		}
+		if u := key("NSURLErrorFailingURLErrorKey"); u != 0 && darwin.Get[bool](u, "isKindOfClass:", darwin.ID(darwin.Cls("NSURL"))) {
+			s = darwin.GoString(darwin.Send(u, "absoluteString"))
+		} else if u := key("NSURLErrorFailingURLStringErrorKey"); u != 0 && darwin.Get[bool](u, "isKindOfClass:", darwin.ID(darwin.Cls("NSString"))) {
+			s = darwin.GoString(u)
+		}
+	})
+	return s
 }
 
 func (v *WebView) titleChanged() {
@@ -833,12 +866,43 @@ func callBlock(b darwin.ID, args ...uintptr) {
 	purego.SyscallN(invoke, append([]uintptr{uintptr(b)}, args...)...)
 }
 
-// panel shows a JavaScript alert, confirm or prompt dialog as a sheet on
-// the window, and calls done with whether OK was chosen and the text. A
-// hidden window shows none and answers Cancel at once, as WebKit does
-// without a UI delegate.
-func (v *WebView) panel(message string, buttons []string, input *string, done func(ok bool, text string)) {
-	if v.host == nil || v.host.closed || !darwin.Get[bool](v.host.nsWindow, "isVisible") {
+// dialogWindow returns the window that shows the dialogs of web view wk:
+// the host window for the hosted web view, or a popup's own window. It is 0
+// when that window is closed or hidden; the dialog then answers Cancel at
+// once, as WebKit does without a UI delegate.
+func (v *WebView) dialogWindow(wk darwin.ID) darwin.ID {
+	var win darwin.ID
+	switch {
+	case wk == v.wk:
+		if v.host != nil && !v.host.closed {
+			win = v.host.nsWindow
+		}
+	case wk != 0:
+		if i := v.popupOf(wk, 0); i >= 0 {
+			win = v.popups[i].win
+		}
+	}
+	if win == 0 || !darwin.Get[bool](win, "isVisible") {
+		return 0
+	}
+	return win
+}
+
+// endSheet ends the sheet shown on win, if any, so that its completion
+// handler answers the page before the window goes.
+func endSheet(win darwin.ID) {
+	if sheet := darwin.Send(win, "attachedSheet"); sheet != 0 {
+		const abort = -1001 // NSModalResponseAbort
+		darwin.Send(win, "endSheet:returnCode:", sheet, int64(abort))
+	}
+}
+
+// panel shows a JavaScript alert, confirm or prompt dialog of web view wk as
+// a sheet on its window, and calls done with whether OK was chosen and the
+// text.
+func (v *WebView) panel(wk darwin.ID, message string, buttons []string, input *string, done func(ok bool, text string)) {
+	win := v.dialogWindow(wk)
+	if win == 0 {
 		done(false, "")
 		return
 	}
@@ -864,7 +928,32 @@ func (v *WebView) panel(message string, buttons []string, input *string, done fu
 		done(resp == 1000, text) // NSAlertFirstButtonReturn
 	}
 	b := objc.NewBlock(func(_ objc.Block, resp int64) { finish(resp) })
-	darwin.Send(alert, "beginSheetModalForWindow:completionHandler:", v.host.nsWindow, b)
+	darwin.Send(alert, "beginSheetModalForWindow:completionHandler:", win, b)
+	b.Release()
+}
+
+// openPanel chooses files for an <input type=file> of web view wk with a
+// sheet on its window, and calls done once with an NSArray of file NSURLs,
+// or 0 when the user cancels or no window can show the sheet.
+func (v *WebView) openPanel(wk, params darwin.ID, done func(urls darwin.ID)) {
+	win := v.dialogWindow(wk)
+	if win == 0 {
+		done(0)
+		return
+	}
+	panel := darwin.Retain(darwin.SendClass("NSOpenPanel", "openPanel"))
+	darwin.Send(panel, "setCanChooseFiles:", true)
+	darwin.Send(panel, "setCanChooseDirectories:", darwin.Get[bool](params, "allowsDirectories"))
+	darwin.Send(panel, "setAllowsMultipleSelection:", darwin.Get[bool](params, "allowsMultipleSelection"))
+	b := objc.NewBlock(func(_ objc.Block, resp int64) {
+		var urls darwin.ID
+		if resp == 1 { // NSModalResponseOK
+			urls = darwin.Send(panel, "URLs")
+		}
+		done(urls)
+		darwin.Release(panel)
+	})
+	darwin.Send(panel, "beginSheetModalForWindow:completionHandler:", win, b)
 	b.Release()
 }
 
@@ -872,7 +961,7 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 	type id = darwin.ID
 	type sel = darwin.SEL
 	var protocols []*objc.Protocol
-	for _, name := range []string{"WKNavigationDelegate", "WKUIDelegate", "WKScriptMessageHandler"} {
+	for _, name := range []string{"WKNavigationDelegate", "WKUIDelegate", "WKScriptMessageHandler", "WKDownloadDelegate"} {
 		if p := objc.GetProtocol(name); p != nil {
 			protocols = append(protocols, p)
 		}
@@ -886,19 +975,21 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 	// held keeps a completion handler block until a dialog answers.
 	held := func(handler id) id { return id(objc.Block(handler).Copy()) }
 	c, err := objc.RegisterClass("FairyWebViewDelegate", darwin.Cls("NSObject"), protocols, nil, []objc.MethodDef{
-		{Cmd: darwin.Sel("webView:didFinishNavigation:"), Fn: func(self id, _ sel, _, _ id) {
-			if v := web(self); v != nil {
-				v.navigated(true)
+		// Popups share the delegate: only the hosted web view's navigations
+		// are reported.
+		{Cmd: darwin.Sel("webView:didFinishNavigation:"), Fn: func(self id, _ sel, wk, _ id) {
+			if v := web(self); v != nil && wk == v.wk {
+				v.navigated(true, 0)
 			}
 		}},
-		{Cmd: darwin.Sel("webView:didFailNavigation:withError:"), Fn: func(self id, _ sel, _, _, _ id) {
-			if v := web(self); v != nil {
-				v.navigated(false)
+		{Cmd: darwin.Sel("webView:didFailNavigation:withError:"), Fn: func(self id, _ sel, wk, _, nserr id) {
+			if v := web(self); v != nil && wk == v.wk {
+				v.navigated(false, nserr)
 			}
 		}},
-		{Cmd: darwin.Sel("webView:didFailProvisionalNavigation:withError:"), Fn: func(self id, _ sel, _, _, _ id) {
-			if v := web(self); v != nil {
-				v.navigated(false)
+		{Cmd: darwin.Sel("webView:didFailProvisionalNavigation:withError:"), Fn: func(self id, _ sel, wk, _, nserr id) {
+			if v := web(self); v != nil && wk == v.wk {
+				v.navigated(false, nserr)
 			}
 		}},
 		{Cmd: darwin.Sel("userContentController:didReceiveScriptMessage:"), Fn: func(self id, _ sel, _, msg id) {
@@ -906,12 +997,19 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 				v.message(msg)
 			}
 		}},
-		{Cmd: darwin.Sel("observeValueForKeyPath:ofObject:change:context:"), Fn: func(self id, _ sel, _, obj, _ id, _ uintptr) {
+		// context is a void *, which unsafe.Pointer encodes as and uintptr
+		// does not.
+		{Cmd: darwin.Sel("observeValueForKeyPath:ofObject:change:context:"), Fn: func(self id, _ sel, _, obj, _ id, _ unsafe.Pointer) {
 			if v := web(self); v != nil {
 				if obj == v.wk {
 					v.titleChanged()
 				} else if i := v.popupOf(obj, 0); i >= 0 {
-					darwin.Send(v.popups[i].win, "setTitle:", darwin.Send(obj, "title"))
+					// A page without a title has nil, which setTitle: raises on.
+					title := darwin.Send(obj, "title")
+					if title == 0 {
+						title = darwin.String("")
+					}
+					darwin.Send(v.popups[i].win, "setTitle:", title)
 				}
 			}
 		}},
@@ -937,33 +1035,33 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 			}
 		}},
 		{Cmd: darwin.Sel("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:"),
-			Fn: func(self id, _ sel, _, msg, _, handler id) {
+			Fn: func(self id, _ sel, wk, msg, _, handler id) {
 				v := web(self)
 				if v == nil {
 					callBlock(handler)
 					return
 				}
 				h := held(handler)
-				v.panel(darwin.GoString(msg), []string{"OK"}, nil, func(bool, string) {
+				v.panel(wk, darwin.GoString(msg), []string{"OK"}, nil, func(bool, string) {
 					callBlock(h)
 					objc.Block(h).Release()
 				})
 			}},
 		{Cmd: darwin.Sel("webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:"),
-			Fn: func(self id, _ sel, _, msg, _, handler id) {
+			Fn: func(self id, _ sel, wk, msg, _, handler id) {
 				v := web(self)
 				if v == nil {
 					callBlock(handler, 0)
 					return
 				}
 				h := held(handler)
-				v.panel(darwin.GoString(msg), []string{"OK", "Cancel"}, nil, func(ok bool, _ string) {
+				v.panel(wk, darwin.GoString(msg), []string{"OK", "Cancel"}, nil, func(ok bool, _ string) {
 					callBlock(h, boolWord(ok))
 					objc.Block(h).Release()
 				})
 			}},
 		{Cmd: darwin.Sel("webView:runJavaScriptTextInputPanelWithPrompt:defaultText:initiatedByFrame:completionHandler:"),
-			Fn: func(self id, _ sel, _, prompt, def, _, handler id) {
+			Fn: func(self id, _ sel, wk, prompt, def, _, handler id) {
 				v := web(self)
 				if v == nil {
 					callBlock(handler, 0)
@@ -971,7 +1069,7 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 				}
 				h := held(handler)
 				text := darwin.GoString(def)
-				v.panel(darwin.GoString(prompt), []string{"OK", "Cancel"}, &text, func(ok bool, text string) {
+				v.panel(wk, darwin.GoString(prompt), []string{"OK", "Cancel"}, &text, func(ok bool, text string) {
 					var s id
 					if ok {
 						s = darwin.String(text)
@@ -980,12 +1078,117 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 					objc.Block(h).Release()
 				})
 			}},
+		{Cmd: darwin.Sel("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:"),
+			Fn: func(self id, _ sel, wk, params, _, handler id) {
+				v := web(self)
+				if v == nil {
+					callBlock(handler, 0)
+					return
+				}
+				h := held(handler)
+				v.openPanel(wk, params, func(urls id) {
+					callBlock(h, uintptr(urls))
+					objc.Block(h).Release()
+				})
+			}},
+		// Downloads. Without these WebKit drops a response it cannot show,
+		// where WebView2 saves it; they save it in the Downloads folder.
+		{Cmd: darwin.Sel("webView:decidePolicyForNavigationAction:decisionHandler:"),
+			Fn: func(_ id, _ sel, _, action, handler id) {
+				policy := uintptr(wkPolicyAllow)
+				if darwin.Get[bool](action, "shouldPerformDownload") { // <a download>
+					policy = wkPolicyDownload
+				}
+				callBlock(handler, policy)
+			}},
+		{Cmd: darwin.Sel("webView:decidePolicyForNavigationResponse:decisionHandler:"),
+			Fn: func(_ id, _ sel, _, response, handler id) {
+				policy := uintptr(wkPolicyAllow)
+				if isDownload(response) {
+					policy = wkPolicyDownload
+				}
+				callBlock(handler, policy)
+			}},
+		{Cmd: darwin.Sel("webView:navigationAction:didBecomeDownload:"), Fn: func(self id, _ sel, _, _, download id) {
+			darwin.Send(download, "setDelegate:", self)
+		}},
+		{Cmd: darwin.Sel("webView:navigationResponse:didBecomeDownload:"), Fn: func(self id, _ sel, _, _, download id) {
+			darwin.Send(download, "setDelegate:", self)
+		}},
+		{Cmd: darwin.Sel("download:decideDestinationUsingResponse:suggestedFilename:completionHandler:"),
+			Fn: func(_ id, _ sel, _, _, name, handler id) {
+				var dest id
+				if path := downloadPath(darwin.GoString(name)); path != "" {
+					dest = darwin.SendClass("NSURL", "fileURLWithPath:", darwin.String(path))
+				}
+				callBlock(handler, uintptr(dest)) // nil cancels the download
+			}},
 	})
 	if err != nil {
 		panic(err)
 	}
 	return c
 })
+
+// WKNavigationActionPolicy and WKNavigationResponsePolicy values.
+const (
+	wkPolicyAllow    = 1
+	wkPolicyDownload = 2
+)
+
+// isDownload reports whether a WKNavigationResponse is to be saved rather
+// than shown: WebKit cannot show it, or it has Content-Disposition:
+// attachment. A 204 or 205 response has nothing to save.
+func isDownload(response darwin.ID) bool {
+	resp := darwin.Send(response, "response")
+	cd := ""
+	if resp != 0 && darwin.Get[bool](resp, "isKindOfClass:", darwin.ID(darwin.Cls("NSHTTPURLResponse"))) {
+		if code := darwin.Get[int64](resp, "statusCode"); code == 204 || code == 205 {
+			return false
+		}
+		darwin.WithPool(func() {
+			cd = darwin.GoString(darwin.Send(resp, "valueForHTTPHeaderField:", darwin.String("Content-Disposition")))
+		})
+	}
+	if !darwin.Get[bool](response, "canShowMIMEType") {
+		return true
+	}
+	kind, _, _ := strings.Cut(cd, ";")
+	return strings.EqualFold(strings.TrimSpace(kind), "attachment")
+}
+
+// downloadsDir returns the folder downloads are saved in, or "".
+var downloadsDir = func() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "Downloads")
+}
+
+// downloadPath returns a free path in the downloads folder for a file the
+// server suggests calling name, numbered as "name (2).ext" when one by that
+// name exists, or "" when there is no folder.
+func downloadPath(name string) string {
+	dir := downloadsDir()
+	if dir == "" {
+		return ""
+	}
+	// No folders, and no hidden files.
+	name = strings.TrimLeft(filepath.Base(strings.ReplaceAll(name, ":", "-")), ".")
+	if name == "" || name == "/" {
+		name = "download"
+	}
+	ext := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, ext)
+	path := filepath.Join(dir, name)
+	for n := 2; ; n++ {
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return path
+		}
+		path = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, n, ext))
+	}
+}
 
 func boolWord(b bool) uintptr {
 	if b {
