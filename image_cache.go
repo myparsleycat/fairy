@@ -38,7 +38,7 @@ type ImageCache struct {
 	decodes  slotQueue           // loads decoding or resampling
 	work     int64
 	waiting  map[*imageLoad]*imageWorkWait
-	wic      func(imaging.Input, imaging.Bound) *imaging.Bitmap
+	native   func(imaging.Input, imaging.Bound) *imaging.Bitmap
 }
 
 var errImageLoadInvalidated = errors.New("fairy: image load invalidated")
@@ -299,7 +299,7 @@ func NewImageCache(maxBytes int64, workers int) *ImageCache {
 		latest:   map[string]imageKey{},
 		reads:    newSlotQueue(2 * workers),
 		decodes:  slotQueue{limit: workers},
-		wic:      imaging.DecodeWIC,
+		native:   imaging.DecodeNative,
 		waiting:  map[*imageLoad]*imageWorkWait{},
 	}
 	cachesMu.Lock()
@@ -309,16 +309,17 @@ func NewImageCache(maxBytes int64, workers int) *ImageCache {
 }
 
 // SetNativeDecoders sets whether the cache decodes still JPEG, PNG and AVIF
-// images with the Windows Imaging Component, as it does by default. WIC and
-// the codecs it loads, such as the HEIF Image Extensions, run in this
+// images with the platform's decoders, as it does by default: the Windows
+// Imaging Component on Windows and ImageIO on macOS. They and the codecs
+// they load, such as the HEIF Image Extensions on Windows, run in this
 // process; a cache for images from untrusted sources can turn them off to
 // use only the Go decoders. AVIF images then need a registered decoder.
 func (c *ImageCache) SetNativeDecoders(on bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.wic = nil
+	c.native = nil
 	if on {
-		c.wic = imaging.DecodeWIC
+		c.native = imaging.DecodeNative
 	}
 }
 
@@ -700,7 +701,7 @@ func (c *ImageCache) decodeFit(k imageKey, p *imageLoad, read func() ([]byte, er
 	if active && !k.lazy() {
 		candidate, dw, dh = c.reuseCandidate(k)
 	}
-	wic := c.wic
+	native := c.native
 	c.mu.Unlock()
 	if !active {
 		return nil, image.Point{}, nil
@@ -746,14 +747,14 @@ func (c *ImageCache) decodeFit(k imageKey, p *imageLoad, read func() ([]byte, er
 			f()
 		})
 	}
-	decoded, usedWIC, err := in.DecodePixels(k.Bound, animationKeepBytes(c.maxBytes), c.maxBytes, false, wic, run)
+	decoded, usedNative, err := in.DecodePixels(k.Bound, animationKeepBytes(c.maxBytes), c.maxBytes, false, native, run)
 	img = wrapImage(decoded)
 	if img != nil && len(img.data.FrameData) == 0 && in.Animation.Count == 0 && !in.AnimatedWebP && in.AnimErr == nil {
 		switch in.Format {
 		case "jpeg", "png", "webp":
 			sourceSize = image.Pt(in.Config.Width, in.Config.Height)
 		case "avif":
-			if usedWIC {
+			if usedNative {
 				sourceSize = image.Pt(in.Config.Width, in.Config.Height)
 			}
 		}

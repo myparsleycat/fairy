@@ -52,13 +52,13 @@ func wicOpaque(f com.GUID) bool {
 // pngEnd is the IEND chunk, which a complete PNG ends with.
 var pngEnd = []byte("\x00\x00\x00\x00IEND\xaeB`\x82")
 
+// nativeAccepts reports whether WIC decodes in's format.
+func nativeAccepts(in Input) bool { return wicDecoderClass(in) != nil }
+
 // wicDecoderClass returns the built-in WIC decoder for still JPEG and PNG
 // images. Images that need a guard the Go decoders give, or a color
 // conversion WIC does differently, are left to Go: truncated files, which
 // WIC decodes partially, and CMYK JPEGs.
-// wicAccepts reports whether WIC decodes in's format.
-func wicAccepts(in Input) bool { return wicDecoderClass(in) != nil }
-
 func wicDecoderClass(in Input) *com.GUID {
 	if in.Animation.Count != 0 || in.AnimErr != nil || uint64(len(in.data)) > math.MaxUint32 ||
 		in.Config.Width <= 0 || in.Config.Height <= 0 {
@@ -92,13 +92,14 @@ func jpegDCTSize(sw, sh, dw, dh int) (int, int, bool) {
 }
 
 // wicScratch is the memory reserved for what WIC's decoders, converters and
-// scaler allocate besides the pixels DecodeWIC holds, given that wicCopyRows
-// requests rows in bands of about 1 MiB.
+// scaler allocate besides the pixels DecodeNative holds, given that
+// wicCopyRows requests rows in bands of about 1 MiB.
 const wicScratch = 2 << 20
 
-// wicWork estimates the memory DecodeWIC holds: the output, the DCT-scaled
-// JPEG it resamples from or the HEIF decoder's full image, and WIC's scratch.
-func wicWork(in Input, bound Bound) int64 {
+// nativeWork estimates the memory DecodeNative holds: the output, the
+// DCT-scaled JPEG it resamples from or the HEIF decoder's full image, and
+// WIC's scratch.
+func nativeWork(in Input, bound Bound) int64 {
 	sw, sh := in.srcSize()
 	dw, dh := in.srcBound(bound).Size(sw, sh)
 	n := int64(dw)*int64(dh)*4 + wicScratch
@@ -116,14 +117,14 @@ func wicWork(in Input, bound Bound) int64 {
 	return min(n, WorkBudget)
 }
 
-// DecodeWIC decodes a still JPEG or PNG with the Windows Imaging Component,
-// scaled within bound with high-quality cubic resampling, in premultiplied
-// alpha for translucent images. JPEGs reduced fourfold or more first decode
-// at a DCT scale. WIC reads the bytes in place and hands out rows on
+// DecodeNative decodes a still JPEG, PNG or AVIF with the Windows Imaging
+// Component, scaled within bound with high-quality cubic resampling, in
+// premultiplied alpha for translucent images. JPEGs reduced fourfold or more
+// first decode at a DCT scale. WIC reads the bytes in place and hands out rows on
 // request, so neither the full-size source nor a resampling buffer of
 // source height is held. It returns nil for images WIC does not take or
 // when a call fails, such as in a COM single-threaded apartment.
-func DecodeWIC(in Input, bound Bound) *Bitmap {
+func DecodeNative(in Input, bound Bound) *Bitmap {
 	img := decodeWICPixels(in, bound)
 	if img == nil {
 		return nil
