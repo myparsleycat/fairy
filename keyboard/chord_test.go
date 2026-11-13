@@ -77,6 +77,29 @@ func TestChordMatches(t *testing.T) {
 	}
 }
 
+func TestChordCanBeGlobal(t *testing.T) {
+	mac := runtime.GOOS == "darwin"
+	for _, c := range []struct {
+		chord Chord
+		want  bool
+	}{
+		{Chord{Mods: ModCtrl, Key: 'K'}, true},
+		{Chord{Mods: ModSuper, Key: 'K'}, true},
+		{Chord{Mods: ModCtrl | ModAlt | ModShift, Key: 'K'}, true},
+		{Chord{Mods: ModAlt, Key: 'E'}, !mac}, // Option+E starts an accent on macOS
+		{Chord{Mods: ModAlt | ModShift, Key: 'K'}, !mac},
+		{Chord{Mods: ModShift, Key: 'K'}, false},
+		{Chord{Key: 'K'}, false},
+		{Chord{Key: KeyF1}, true},
+		{Chord{Mods: ModShift, Key: KeyF1 + 23}, true},
+		{Chord{Key: KeyF1 + 24}, false},
+	} {
+		if got := c.chord.CanBeGlobal(); got != c.want {
+			t.Errorf("%v.CanBeGlobal() = %v, want %v", c.chord, got, c.want)
+		}
+	}
+}
+
 func TestParseKeybind(t *testing.T) {
 	kb, err := ParseKeybind("ctrl+t, ctrl+, ,ctrl+n")
 	if err != nil {

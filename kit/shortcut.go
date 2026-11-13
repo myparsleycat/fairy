@@ -17,7 +17,8 @@ type recorderState struct {
 	refusing  bool
 }
 
-// errNeedsModifier refuses a chord without Ctrl, Alt or Win before onChange.
+// errNeedsModifier refuses a chord that cannot be a global shortcut, without
+// Ctrl, Alt or Win (Control or Command on macOS), before onChange.
 var errNeedsModifier = errors.New("kit: shortcut needs Ctrl, Alt or Win")
 
 // ShortcutRecorder edits a shortcut. A click, Enter or Space starts recording;
@@ -29,8 +30,9 @@ var errNeedsModifier = errors.New("kit: shortcut needs Ctrl, Alt or Win")
 // in use."). Recording the current chord again is a no-op; pass the zero Chord
 // as value for a shortcut that failed to register, so recording it proposes it
 // again. A chord without Ctrl, Alt or Win other than F1–F24 is refused before
-// onChange unless AllowUnmodified is given. Label names what the shortcut
-// does.
+// onChange unless AllowUnmodified is given; on macOS it needs Control or
+// Command, since Option types characters (see keyboard.Chord.CanBeGlobal).
+// Label names what the shortcut does.
 func ShortcutRecorder(id string, value keyboard.Chord, onChange func(keyboard.Chord) error, opts ...Option) *fairy.El {
 	o := build(opts)
 	t := &current
@@ -114,10 +116,9 @@ func recordKey(st *recorderState, ev keyboard.KeyEvent, value keyboard.Chord, on
 	if !ev.Is(keyboard.KeyBackspace, 0) {
 		next = keyboard.ChordOf(ev)
 	}
-	fkey := next.Key >= keyboard.KeyF1 && next.Key < keyboard.KeyF1+24
 	var err error
 	switch {
-	case next.Key != 0 && !unmodified && !fkey && next.Mods&(keyboard.ModCtrl|keyboard.ModAlt|keyboard.ModSuper) == 0:
+	case next.Key != 0 && !unmodified && !next.CanBeGlobal():
 		err = errNeedsModifier
 	case next == value:
 	case onChange != nil:

@@ -33,8 +33,7 @@ func Register(chord keyboard.Chord, f func()) (ID, error) {
 	if !apphost.OnUIThread() {
 		return 0, errors.New("shortcut: Register must run on the UI thread inside fairy.Main")
 	}
-	fkey := chord.Key >= keyboard.KeyF1 && chord.Key < keyboard.KeyF1+24
-	if chord.Mods&(keyboard.ModCtrl|keyboard.ModAlt|keyboard.ModSuper) == 0 && !fkey {
+	if !chord.CanBeGlobal() {
 		return 0, fmt.Errorf("shortcut: global shortcut %q needs Ctrl, Alt or Win", chord)
 	}
 	mods := uint32(win.MOD_NOREPEAT)

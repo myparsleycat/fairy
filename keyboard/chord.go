@@ -233,6 +233,14 @@ func (c Chord) Matches(ev KeyEvent) bool {
 	return ev.Key == c.Key && ev.Mods == c.Mods
 }
 
+// CanBeGlobal reports whether c can be a global shortcut without taking a
+// key other programs type with: its key is F1–F24, or it has Ctrl, Alt or
+// Win, which on macOS means Control or Command, since Option types
+// characters there.
+func (c Chord) CanBeGlobal() bool {
+	return c.Key >= KeyF1 && c.Key < KeyF1+24 || c.Mods&modGlobal != 0
+}
+
 // Keycaps returns one label per key, modifiers first in Ctrl, Alt, Shift, Win
 // order (⌃, ⌥, ⇧, ⌘ on macOS), for drawing each as a keycap.
 func (c Chord) Keycaps() []string {
