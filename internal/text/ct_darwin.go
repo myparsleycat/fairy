@@ -27,7 +27,6 @@ const (
 
 	ctFontOrientationDefault = 0
 	ctLineTruncationEnd      = 1
-	ctRunStatusRightToLeft   = 1
 
 	cgImageAlphaPremultipliedLast = 1
 	cgImageAlphaOnly              = 7
@@ -101,7 +100,6 @@ var (
 	ctLineGetOffsetForStringIndex          func(line uintptr, i int, secondary *float64) float64
 	ctRunGetGlyphCount                     func(run uintptr) int
 	ctRunGetAttributes                     func(run uintptr) uintptr
-	ctRunGetStatus                         func(run uintptr) uint32
 	ctRunGetStringRange                    func(run uintptr) cfRange
 	ctRunGetGlyphs                         func(run uintptr, r cfRange, buf *uint16)
 	ctRunGetPositions                      func(run uintptr, r cfRange, buf *darwin.CGPoint)
@@ -212,7 +210,6 @@ func init() {
 		{&ctLineGetOffsetForStringIndex, ct, "CTLineGetOffsetForStringIndex"},
 		{&ctRunGetGlyphCount, ct, "CTRunGetGlyphCount"},
 		{&ctRunGetAttributes, ct, "CTRunGetAttributes"},
-		{&ctRunGetStatus, ct, "CTRunGetStatus"},
 		{&ctRunGetStringRange, ct, "CTRunGetStringRange"},
 		{&ctRunGetGlyphs, ct, "CTRunGetGlyphs"},
 		{&ctRunGetPositions, ct, "CTRunGetPositions"},
@@ -333,13 +330,6 @@ func cfArray(vs []uintptr) uintptr {
 		return cfArrayCreate(0, nil, 0, cfTypeArrayCallBacks)
 	}
 	return cfArrayCreate(0, &vs[0], len(vs), cfTypeArrayCallBacks)
-}
-
-// familyOf returns the family name of a font.
-func familyOf(font uintptr) string {
-	s := ctFontCopyFamilyName(font)
-	defer cfRelease(s)
-	return goString(s)
 }
 
 func sameFamily(a, b string) bool {

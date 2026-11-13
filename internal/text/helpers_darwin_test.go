@@ -104,3 +104,10 @@ func runFamilies(l *Layout) []string {
 	}
 	return out
 }
+
+// familyOf returns the family name of a font.
+func familyOf(font uintptr) string {
+	s := ctFontCopyFamilyName(font)
+	defer cfRelease(s)
+	return goString(s)
+}
