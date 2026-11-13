@@ -306,9 +306,13 @@ func mainScreenHeight() float64 {
 
 // Close asks the window to close, running Options.OnClose.
 func (w *Window) Close() {
-	if !w.closed {
-		darwin.Send(w.nsWindow, "performClose:", darwin.ID(0))
-	}
+	// Event handlers can run inside renderFrame. Keep its resources alive
+	// until it returns, as posting WM_CLOSE does on Windows.
+	darwin.Perform(func() {
+		if !w.closed {
+			darwin.Send(w.nsWindow, "performClose:", darwin.ID(0))
+		}
+	})
 }
 
 // resizeClient sizes the window for a content area of width x height
@@ -345,15 +349,17 @@ func (w *Window) setDarkFrame(dark bool) {
 // offscreen windows and closed ones do not.
 func (w *Window) hasNativeWindow() bool { return w.nsWindow != 0 && !w.closed }
 
-// wake asks the UI loop to run the posted calls. It reports false when the
-// window is gone.
+// wake asks the UI loop to run the posted calls. The UI thread discards
+// them when no native window remains.
 func (w *Window) wake() bool {
-	if w.nsWindow == 0 || w.closed {
-		return false
-	}
+	// Only inspect native state on the UI thread; Post may run elsewhere.
 	darwin.Perform(func() {
-		if !w.closed {
+		if w.hasNativeWindow() {
 			w.runPosted()
+		} else {
+			w.mu.Lock()
+			w.posted = nil
+			w.mu.Unlock()
 		}
 	})
 	return true

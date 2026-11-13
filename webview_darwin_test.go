@@ -596,3 +596,72 @@ func TestDarwinWebViewPopups(t *testing.T) {
 		}
 	})
 }
+
+func TestDarwinWebViewLocalReadScope(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "page")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>`)
+	for _, path := range []string{filepath.Join(dir, "inside.svg"), filepath.Join(root, "outside.svg")} {
+		if err := os.WriteFile(path, svg, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	html := `<html><head><title>Loading</title></head><body><script>
+ window.results = {};
+ for (const [name, src] of [['inside','inside.svg'],['outside','../outside.svg']]) {
+  const img=new Image();
+  img.onload=()=>window.results[name]=true;
+  img.onerror=()=>window.results[name]=false;
+  img.src=src;
+ }
+ </script></body></html>`
+	path := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(path, []byte(html), 0600); err != nil {
+		t.Fatal(err)
+	}
+	v := NewWebView(WebViewOptions{URL: (&url.URL{Scheme: "file", Path: path}).String()})
+	v.ephemeral = true
+	newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "local page", func() bool { return v.Ready() && v.URL() != "" })
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, err := runScript(t, v, `JSON.stringify(window.results)`)
+		if err == nil && strings.Contains(got, "inside") && strings.Contains(got, "outside") {
+			if got != `"{\"inside\":true,\"outside\":false}"` && got != `"{\"outside\":false,\"inside\":true}"` {
+				t.Fatalf("read scope: %s", got)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("local resources did not finish: %s %v", got, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestDarwinWebViewPopupMessages(t *testing.T) {
+	srv := testServer(t)
+	var messages []string
+	v := NewWebView(WebViewOptions{URL: srv.URL + "/", OnMessage: func(s string) { messages = append(messages, s) }})
+	v.ephemeral = true
+	newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "opener", func() bool { return v.Title() == "First" })
+	if _, err := runScript(t, v, `window.p=window.open('/second'); 1`); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "popup loaded", func() bool {
+		return len(v.popups) == 1 && darwin.GoString(darwin.Send(v.popups[0].wk, "title")) == "Second"
+	})
+	if _, err := runScript(t, v, `window.p.chrome.webview.postMessage('popup-only'); chrome.webview.postMessage('parent\u0000message'); 1`); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "parent message", func() bool { return slices.Contains(messages, "parent\x00message") })
+	Do(func() {
+		if slices.Contains(messages, "popup-only") {
+			t.Error("popup reached opener OnMessage")
+		}
+	})
+}

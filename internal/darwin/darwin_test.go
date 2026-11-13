@@ -6,7 +6,7 @@ import "testing"
 
 func TestStringRoundTrip(t *testing.T) {
 	WithPool(func() {
-		for _, s := range []string{"", "hello", "한글 🙂"} {
+		for _, s := range []string{"", "hello", "한글 🙂", "\x00", "before\x00한글 🙂\x00after"} {
 			if got := GoString(String(s)); got != s {
 				t.Errorf("GoString(String(%q)) = %q", s, got)
 			}

@@ -44,10 +44,8 @@ func GoString(id ID) string {
 	if p == nil {
 		return ""
 	}
-	n := 0
-	for *(*byte)(unsafe.Add(unsafe.Pointer(p), n)) != 0 {
-		n++
-	}
+	const nsUTF8StringEncoding = 4
+	n := Get[uint64](id, "lengthOfBytesUsingEncoding:", uint64(nsUTF8StringEncoding))
 	return string(unsafe.Slice(p, n))
 }
 

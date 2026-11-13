@@ -220,9 +220,10 @@ type Window struct {
 
 	backdrop Backdrop
 
-	mu     sync.Mutex
-	posted []func()
-	quit   bool
+	mu         sync.Mutex
+	posted     []func()
+	postClosed bool // guarded by mu
+	quit       bool
 }
 
 type texEntry struct {
@@ -306,15 +307,13 @@ func (w *Window) Update() {
 // Calls posted to a closed window are discarded.
 func (w *Window) Post(f func()) {
 	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.postClosed {
+		return
+	}
 	w.posted = append(w.posted, f)
-	n := len(w.posted)
-	w.mu.Unlock()
-	if n == 1 && !w.wake() {
-		// Nothing will run the queue, and a later Post wakes the window
-		// only when the queue is empty.
-		w.mu.Lock()
+	if len(w.posted) == 1 && !w.wake() {
 		w.posted = nil
-		w.mu.Unlock()
 	}
 }
 
@@ -574,6 +573,10 @@ func (w *Window) shown() {
 
 // release frees the window's GPU and text resources once it is closed.
 func (w *Window) release() {
+	w.mu.Lock()
+	w.postClosed = true
+	w.posted = nil
+	w.mu.Unlock()
 	liveMu.Lock()
 	delete(live, w)
 	liveMu.Unlock()

@@ -396,7 +396,8 @@ func (v *WebView) Ready() bool { return v.wk != 0 }
 // Err returns the error that prevented the browser from being created.
 func (v *WebView) Err() error { return v.err }
 
-// Navigate loads url.
+// Navigate loads url. Local files may load resources from their containing
+// directory and its subdirectories.
 func (v *WebView) Navigate(url string) {
 	if v.wk == 0 {
 		v.pending = url
@@ -409,8 +410,8 @@ func (v *WebView) Navigate(url string) {
 			return
 		}
 		if darwin.Get[bool](u, "isFileURL") {
-			// WebView2 pages from files may read other files, as here.
-			root := darwin.SendClass("NSURL", "fileURLWithPath:", darwin.String("/"))
+			// Allow sibling resources without exposing unrelated directories.
+			root := darwin.Send(u, "URLByDeletingLastPathComponent")
 			darwin.Send(v.wk, "loadFileURL:allowingReadAccessToURL:", u, root)
 			return
 		}
@@ -809,9 +810,9 @@ func (v *WebView) titleChanged() {
 
 // message handles window.chrome.webview.postMessage. As WebView2's
 // TryGetWebMessageAsString, it passes on strings and gives "" for other
-// values; messages from frames other than the main one are dropped.
+// values; only the hosted web view's main frame may send messages to Go.
 func (v *WebView) message(msg darwin.ID) {
-	if v.opts.OnMessage == nil {
+	if v.opts.OnMessage == nil || darwin.Send(msg, "webView") != v.wk {
 		return
 	}
 	if fi := darwin.Send(msg, "frameInfo"); fi == 0 || !darwin.Get[bool](fi, "isMainFrame") {

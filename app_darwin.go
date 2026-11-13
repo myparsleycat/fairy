@@ -15,7 +15,8 @@ import (
 
 // appPlat is the macOS part of app.
 type appPlat struct {
-	running bool // the NSApplication run loop runs
+	running      bool // the NSApplication run loop runs
+	sessionEnded bool // guarded by app.mu
 }
 
 func init() {
@@ -118,6 +119,7 @@ var appDelegateClass = sync.OnceValue(func() darwin.Class {
 			Cmd: darwin.Sel("applicationShouldTerminate:"),
 			Fn: func(self darwin.ID, _ darwin.SEL, sender darwin.ID) uint64 {
 				if systemQuit() {
+					notifySessionEnd()
 					finishMain()
 					return 1 // NSTerminateNow
 				}
@@ -168,6 +170,7 @@ func Main(start func() error) error {
 
 	app.mu.Lock()
 	app.running = true
+	app.sessionEnded = false
 	app.done = make(chan struct{})
 	app.thread.Store(currentThreadID())
 	queued := len(app.calls) != 0
@@ -214,7 +217,7 @@ func finishMain() {
 	app.mu.Unlock()
 }
 
-// keyAEQuitReason ('why?') is the attribute of the quit Apple event that
+// keyAEQuitReason ('why?') is the parameter of the quit Apple event that
 // the system sends when it logs out, restarts or shuts down.
 const keyAEQuitReason = 'w'<<24 | 'h'<<16 | 'y'<<8 | '?'
 
@@ -222,7 +225,33 @@ const keyAEQuitReason = 'w'<<24 | 'h'<<16 | 'y'<<8 | '?'
 // the system logging out, restarting or shutting down.
 func systemQuit() bool {
 	ev := darwin.Send(darwin.SendClass("NSAppleEventManager", "sharedAppleEventManager"), "currentAppleEvent")
-	return ev != 0 && darwin.Send(ev, "attributeDescriptorForKeyword:", uint32(keyAEQuitReason)) != 0
+	return sessionQuitEvent(ev)
+}
+
+func sessionQuitEvent(ev darwin.ID) bool {
+	if ev == 0 {
+		return false
+	}
+	reason := darwin.Send(ev, "paramDescriptorForKeyword:", uint32(keyAEQuitReason))
+	switch darwin.Get[uint32](reason, "enumCodeValue") {
+	case 0x72657374, 0x73687574, 0x726c676f: // rest, shut, rlgo
+		return true
+	}
+	return false
+}
+
+func notifySessionEnd() {
+	app.mu.Lock()
+	if !app.running || app.sessionEnded {
+		app.mu.Unlock()
+		return
+	}
+	app.sessionEnded = true
+	f := app.onSessionEnd
+	app.mu.Unlock()
+	if f != nil {
+		f()
+	}
 }
 
 // stopApp makes [NSApp run] return. stop: takes effect after the next
