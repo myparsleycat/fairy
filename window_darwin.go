@@ -9,6 +9,7 @@ import (
 	"github.com/ebitengine/purego/objc"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
+	"github.com/myparsleycat/fairy/internal/mackey"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/keyboard"
 )
@@ -572,7 +573,7 @@ func (w *Window) keyDown(ev darwin.ID) {
 	repeat := darwin.Get[bool](ev, "isARepeat")
 	chars := darwin.GoString(darwin.Send(ev, "characters"))
 	typed := typedText(chars)
-	k := macKey(code)
+	k := mackey.Key(code)
 	// While the input method composes, it sees keys first.
 	composing := w.composition() != ""
 	if !composing {

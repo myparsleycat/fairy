@@ -1,0 +1,95 @@
+// Package mackey converts between macOS virtual key codes (kVK_*) and the
+// Windows virtual-key codes keyboard.Key uses.
+package mackey
+
+import "github.com/myparsleycat/fairy/keyboard"
+
+// keys maps macOS virtual key codes (kVK_*) to the Windows virtual-key
+// codes keyboard.Key uses. Letters and digits are by position on an ANSI
+// keyboard, as Windows reports them on a US layout.
+var keys = [128]keyboard.Key{
+	0x00: 'A', 0x01: 'S', 0x02: 'D', 0x03: 'F', 0x04: 'H', 0x05: 'G', 0x06: 'Z', 0x07: 'X',
+	0x08: 'C', 0x09: 'V', 0x0B: 'B', 0x0C: 'Q', 0x0D: 'W', 0x0E: 'E', 0x0F: 'R',
+	0x10: 'Y', 0x11: 'T', 0x12: '1', 0x13: '2', 0x14: '3', 0x15: '4', 0x16: '6', 0x17: '5',
+	0x18: 0xBB, // = VK_OEM_PLUS
+	0x19: '9', 0x1A: '7',
+	0x1B: 0xBD, // - VK_OEM_MINUS
+	0x1C: '8', 0x1D: '0',
+	0x1E: 0xDD, // ] VK_OEM_6
+	0x1F: 'O', 0x20: 'U',
+	0x21: 0xDB, // [ VK_OEM_4
+	0x22: 'I', 0x23: 'P',
+	0x24: keyboard.KeyEnter,
+	0x25: 'L', 0x26: 'J',
+	0x27: 0xDE, // ' VK_OEM_7
+	0x28: 'K',
+	0x29: 0xBA, // ; VK_OEM_1
+	0x2A: 0xDC, // \ VK_OEM_5
+	0x2B: 0xBC, // , VK_OEM_COMMA
+	0x2C: 0xBF, // / VK_OEM_2
+	0x2D: 'N', 0x2E: 'M',
+	0x2F: 0xBE, // . VK_OEM_PERIOD
+	0x30: keyboard.KeyTab,
+	0x31: keyboard.KeySpace,
+	0x32: 0xC0, // ` VK_OEM_3
+	0x33: keyboard.KeyBackspace,
+	0x35: keyboard.KeyEscape,
+	0x37: 0x5B, // left Command: VK_LWIN
+	0x38: 0x10, // Shift: VK_SHIFT
+	0x39: 0x14, // Caps Lock: VK_CAPITAL
+	0x3A: 0x12, // Option: VK_MENU
+	0x3B: 0x11, // Control: VK_CONTROL
+	0x3C: 0x10, // right Shift
+	0x3D: 0x12, // right Option
+	0x3E: 0x11, // right Control
+	0x36: 0x5C, // right Command: VK_RWIN
+	0x41: 0x6E, // keypad . VK_DECIMAL
+	0x43: 0x6A, // keypad * VK_MULTIPLY
+	0x45: 0x6B, // keypad + VK_ADD
+	0x47: 0x0C, // keypad Clear: VK_CLEAR
+	0x4B: 0x6F, // keypad / VK_DIVIDE
+	0x4C: keyboard.KeyEnter,
+	0x4E: 0x6D,                                                 // keypad - VK_SUBTRACT
+	0x51: 0xBB,                                                 // keypad =
+	0x52: 0x60, 0x53: 0x61, 0x54: 0x62, 0x55: 0x63, 0x56: 0x64, // keypad 0-4
+	0x57: 0x65, 0x58: 0x66, 0x59: 0x67, 0x5B: 0x68, 0x5C: 0x69, // keypad 5-9
+	0x60: 0x74, 0x61: 0x75, 0x62: 0x76, 0x63: 0x72, 0x64: 0x77, 0x65: 0x78, // F5 F6 F7 F3 F8 F9
+	0x67: 0x7A, 0x69: 0x7C, 0x6A: 0x7F, 0x6B: 0x7D, 0x6D: 0x79, 0x6F: 0x7B, // F11 F13 F16 F14 F10 F12
+	0x71: 0x7E,                                     // F15
+	0x40: 0x80, 0x4F: 0x81, 0x50: 0x82, 0x5A: 0x83, // F17-F20
+	0x72: keyboard.KeyInsert, // Help, where PC keyboards have Insert
+	0x73: keyboard.KeyHome,
+	0x74: keyboard.KeyPageUp,
+	0x75: keyboard.KeyDelete,
+	0x76: 0x73, // F4
+	0x77: keyboard.KeyEnd,
+	0x78: 0x71, // F2
+	0x79: keyboard.KeyPageDown,
+	0x7A: keyboard.KeyF1,
+	0x7B: keyboard.KeyLeft,
+	0x7C: keyboard.KeyRight,
+	0x7D: keyboard.KeyDown,
+	0x7E: keyboard.KeyUp,
+}
+
+// Key returns the keyboard.Key of a macOS key code, or 0.
+func Key(code uint16) keyboard.Key {
+	if int(code) < len(keys) {
+		return keys[code]
+	}
+	return 0
+}
+
+// Code returns the macOS key code of k: the main keyboard's key where the
+// keypad has one too, and the left one of the modifier keys.
+func Code(k keyboard.Key) (uint16, bool) {
+	if k == 0 {
+		return 0, false
+	}
+	for c, key := range keys {
+		if key == k {
+			return uint16(c), true
+		}
+	}
+	return 0, false
+}
