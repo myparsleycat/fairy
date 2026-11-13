@@ -418,3 +418,71 @@ func TestVideoRotated(t *testing.T) {
 		}
 	})
 }
+
+// A window showing a paused video keeps painting while a seek runs, however
+// long it takes, and paints the frame it brings.
+func TestVideoSeekKeepsPainting(t *testing.T) {
+	path := testMovie(t)
+	var v *Video
+	var err error
+	Do(func() { v, err = OpenVideo(path, VideoOptions{Muted: true}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Do(v.Close)
+	w := newTestWindow(t, func() *El { return VideoView(v).Size(64, 64) })
+	waitVideo(t, "the first frame", func() bool { return onUI(func() bool { w.renderFrame(); return v.last != 0 }) })
+	animating := false
+	Do(func() {
+		v.Seek(1500 * time.Millisecond)
+		v.awaitUntil = time.Time{} // as if the seek took longer than videoFrameWait
+		w.renderFrame()
+		animating = w.animating
+	})
+	if !animating {
+		t.Error("the window stopped painting during a seek")
+	}
+	waitVideo(t, "the seek to finish", func() bool { return onUI(func() bool { return v.seeking == 0 }) })
+	waitVideo(t, "the frame after the seek", func() bool { return looksLike(videoPixel(t, v), movieBlue) })
+}
+
+// OnEnded runs outside a main dispatch queue block, so that a modal dialog
+// it opens does not hold up the main queue's blocks and timers.
+func TestVideoEndedOffMainQueue(t *testing.T) {
+	path := testMovie(t)
+	served := make(chan bool, 1)
+	var v *Video
+	var err error
+	Do(func() {
+		v, err = OpenVideo(path, VideoOptions{Muted: true, OnEnded: func() {
+			// A nested run loop, as a modal dialog runs.
+			ran := false
+			darwin.Async(func() { ran = true })
+			mode := darwin.SymbolID(darwin.Foundation, "NSDefaultRunLoopMode")
+			loop := darwin.SendClass("NSRunLoop", "currentRunLoop")
+			for deadline := time.Now().Add(2 * time.Second); !ran && time.Now().Before(deadline); {
+				darwin.WithPool(func() {
+					darwin.Send(loop, "runMode:beforeDate:", mode, darwin.SendClass("NSDate", "dateWithTimeIntervalSinceNow:", 0.05))
+				})
+			}
+			served <- ran
+		}})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Do(v.Close)
+	waitVideo(t, "ready", func() bool { return onUI(func() bool { return v.State() == VideoReady }) })
+	Do(func() {
+		v.Seek(1800 * time.Millisecond)
+		v.Play()
+	})
+	select {
+	case ran := <-served:
+		if !ran {
+			t.Error("the main queue stalled while OnEnded ran a nested run loop")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("OnEnded did not run")
+	}
+}
