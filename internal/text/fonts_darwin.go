@@ -11,12 +11,13 @@ import (
 	"github.com/myparsleycat/fairy/internal/darwin"
 )
 
-// fontFace is one face of a family: a font descriptor with the CSS weight
-// and style it is matched by.
+// fontFace is one face of a family: a font descriptor with the CSS weight,
+// style and width it is matched by.
 type fontFace struct {
 	desc   uintptr // CTFontDescriptor, retained
 	weight int
 	italic bool
+	width  float64 // CoreText width trait: 0 normal, below condensed, above expanded
 }
 
 var (
@@ -97,7 +98,7 @@ func descString(desc, key uintptr) string {
 	return goString(v)
 }
 
-// describeFace reads the weight and style of a descriptor from its traits.
+// describeFace reads the weight, style and width of a descriptor from its traits.
 func describeFace(desc uintptr) fontFace {
 	f := fontFace{weight: 400}
 	traits := ctFontDescriptorCopyAttribute(desc, kCTFontTraitsAttribute)
@@ -110,6 +111,9 @@ func describeFace(desc uintptr) fontFace {
 	}
 	if sym, ok := numberValue(cfDictionaryGetValue(traits, kCTFontSymbolicTrait)); ok {
 		f.italic = uint32(int64(sym))&ctFontItalicTrait != 0
+	}
+	if w, ok := numberValue(cfDictionaryGetValue(traits, kCTFontWidthTrait)); ok {
+		f.width = w
 	}
 	return f
 }
@@ -190,7 +194,8 @@ func weightRank(have, want int) int {
 }
 
 // matchFace picks the face of faces that CSS would draw weight and italic
-// with: the wanted style first, then the closest weight.
+// with: the normal width first, then the wanted style, then the closest
+// weight. Without the width, Helvetica Neue 900 would be Condensed Black.
 func matchFace(faces []fontFace, weight int, italic bool) fontFace {
 	best, found := fontFace{}, false
 	for _, f := range faces {
@@ -202,10 +207,26 @@ func matchFace(faces []fontFace, weight int, italic bool) fontFace {
 }
 
 func betterFace(a, b fontFace, weight int, italic bool) bool {
+	if wa, wb := widthRank(a.width), widthRank(b.width); wa != wb {
+		return wa < wb
+	}
 	if (a.italic == italic) != (b.italic == italic) {
 		return a.italic == italic
 	}
 	return weightRank(a.weight, weight) < weightRank(b.weight, weight)
+}
+
+// widthRank orders widths for the normal width as CSS font-stretch matching
+// does: lower is better, normal first, then the narrower widths from the
+// closest, then the wider ones.
+func widthRank(w float64) float64 {
+	switch {
+	case math.Abs(w) < 0.01:
+		return 0
+	case w < 0:
+		return -w
+	}
+	return 1 + w
 }
 
 type familyKind uint8

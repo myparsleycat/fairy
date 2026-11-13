@@ -74,6 +74,44 @@ func TestRightToLeftCaretsInLeftToRightParagraph(t *testing.T) {
 	}
 }
 
+// Heavy weights keep the normal width when the family has it, as CSS and
+// DirectWrite match fonts, rather than taking a condensed face of a closer weight.
+func TestFaceMatchingPrefersNormalWidth(t *testing.T) {
+	s := newTestSystem(t)
+	for _, c := range []struct {
+		family string
+		weight int
+		italic bool
+	}{
+		{"Helvetica Neue", 800, false},
+		{"Helvetica Neue", 900, false},
+		{"Futura", 800, false},
+		{"Futura", 900, true},
+		{"American Typewriter", 700, false},
+	} {
+		faces := s.familyFaces(c.family)
+		if len(faces) == 0 {
+			continue
+		}
+		if f := matchFace(faces, c.weight, c.italic); f.width != 0 {
+			t.Errorf("%s %d picks a face of width %v", c.family, c.weight, f.width)
+		}
+		font := s.font(c.family, c.weight, c.italic, 14, 1)
+		traits := ctFontCopyTraits(font)
+		w, _ := numberValue(cfDictionaryGetValue(traits, kCTFontWidthTrait))
+		cfRelease(traits)
+		if w != 0 {
+			t.Errorf("%s %d draws with a font of width %v", c.family, c.weight, w)
+		}
+	}
+	// A family of condensed faces only still matches by weight.
+	if faces := s.familyFaces("Avenir Next Condensed"); len(faces) > 0 {
+		if f := matchFace(faces, 700, false); f.weight != 700 || f.italic {
+			t.Errorf("Avenir Next Condensed 700 picks %+v", f)
+		}
+	}
+}
+
 // Bold text that falls back to a SetFallbackFamilies family takes its bold face.
 func TestFallbackFamiliesKeepWeight(t *testing.T) {
 	s := newTestSystem(t)

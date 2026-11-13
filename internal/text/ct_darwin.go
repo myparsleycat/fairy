@@ -134,6 +134,7 @@ var (
 	kCTFontFamilyNameAttribute     uintptr
 	kCTFontTraitsAttribute         uintptr
 	kCTFontWeightTrait             uintptr
+	kCTFontWidthTrait              uintptr
 	kCTFontSymbolicTrait           uintptr
 	kCTFontCascadeListAttribute    uintptr
 	kCTFontVariationAttribute      uintptr
@@ -271,6 +272,7 @@ func init() {
 		{&kCTFontFamilyNameAttribute, ct, "kCTFontFamilyNameAttribute"},
 		{&kCTFontTraitsAttribute, ct, "kCTFontTraitsAttribute"},
 		{&kCTFontWeightTrait, ct, "kCTFontWeightTrait"},
+		{&kCTFontWidthTrait, ct, "kCTFontWidthTrait"},
 		{&kCTFontSymbolicTrait, ct, "kCTFontSymbolicTrait"},
 		{&kCTFontCascadeListAttribute, ct, "kCTFontCascadeListAttribute"},
 		{&kCTFontVariationAttribute, ct, "kCTFontVariationAttribute"},
