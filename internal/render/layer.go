@@ -3,7 +3,6 @@
 package render
 
 import (
-	"math"
 	"slices"
 	"sort"
 	"unsafe"
@@ -126,55 +125,6 @@ func (r *Renderer) planLayers(s *Scene) ([]int, error) {
 		}
 	}
 	return top, nil
-}
-
-// backdropRegion sets the bounds of backdrop l to what it copies: the part of
-// target its composite prim p shows in, with room for the blur around it. It
-// returns the box p is drawn over, and false when none of p shows.
-func backdropRegion(l *Layer, p *Prim, target [4]float32) ([4]float32, bool) {
-	box, shown := p.Bounds, p.Bounds
-	if p.Flags&FlagXform != 0 {
-		box = xformBounds(p.Bounds, p.Xform, p.Xlate)
-		shown = xformBounds(intersect(p.Bounds, p.Clip2), p.Xform, p.Xlate)
-	}
-	shown = intersect(shown, p.Clip)
-	if shown[2] <= 0 || shown[3] <= 0 {
-		return box, false
-	}
-	m := float32(math.Ceil(float64(3 * l.Sigma)))
-	b := wholeRect(intersect([4]float32{shown[0] - m, shown[1] - m, shown[2] + 2*m, shown[3] + 2*m}, target))
-	b[2], b[3] = min(b[2], MaxLayerSize), min(b[3], MaxLayerSize)
-	l.Bounds = b
-	return box, b[2] >= 1 && b[3] >= 1
-}
-
-// blurPrim is a pass that fills a w x h target with the source region
-// (0, 0, uw, uh) of src, blurred along one axis by sigma texels.
-func blurPrim(w, h int, uw, uh float32, src *Texture, sigma float32, horizontal bool) Prim {
-	size := src.Height
-	if horizontal {
-		size = src.Width
-	}
-	// Taps reach 3 sigma, at most 64 to a side; wider blurs space them out.
-	step := max(float32(math.Ceil(float64(3*sigma/64))), 1)
-	d := step / float32(size)
-	// Taps stay on the region's texels, so its edge pixels repeat instead of
-	// fading into the cleared texels past it.
-	hx, hy := 0.5/float32(src.Width), 0.5/float32(src.Height)
-	p := Prim{
-		Bounds: [4]float32{0, 0, float32(w), float32(h)},
-		Clip:   NoClip,
-		Color:  [4]float32{1, 1, 1, 1},
-		Color2: [4]float32{hx, hy, uw - hx, uh - hy},
-		UV:     [4]float32{0, 0, uw, uh},
-		Params: [4]float32{0, d, sigma / step},
-		Kind:   KindImage,
-		Flags:  FlagPremultiplied | FlagBlur,
-	}
-	if horizontal {
-		p.Params[0], p.Params[1] = d, 0
-	}
-	return p
 }
 
 // drawRange draws prims begin to end into the current target, drawing the
@@ -309,55 +259,4 @@ func (r *Renderer) drawSeg(s *Scene, a, b int) {
 	r.drawBatch(start, b)
 	// Leave no app texture bound, so the app may render into it next.
 	r.ctx.PSSetShaderResources(2, r.emptyImage.srv)
-}
-
-// targetPool keeps offscreen layer targets between frames.
-type targetPool struct {
-	free, used []*Target
-}
-
-const poolKeep = 12
-
-// targetSize is the size of the pooled target for a w x h layer.
-func targetSize(w, h int) (int, int) { return (w + 63) / 64 * 64, (h + 63) / 64 * 64 }
-
-func (p *targetPool) acquire(d *Device, w, h int) (*Target, error) {
-	w, h = targetSize(w, h)
-	for i, t := range p.free {
-		if t.Width == w && t.Height == h {
-			p.free = append(p.free[:i], p.free[i+1:]...)
-			p.used = append(p.used, t)
-			return t, nil
-		}
-	}
-	t, err := NewTarget(d, w, h)
-	if err != nil {
-		return nil, err
-	}
-	p.used = append(p.used, t)
-	return t, nil
-}
-
-// endFrame returns the targets in use to the pool, keeping the most recent:
-// at least those this frame used, so a frame with many backdrops does not
-// create them all again the next.
-func (p *targetPool) endFrame() {
-	keep := max(poolKeep, len(p.used))
-	p.free = append(p.free, p.used...)
-	clear(p.used)
-	p.used = p.used[:0]
-	if n := len(p.free) - keep; n > 0 {
-		for _, t := range p.free[:n] {
-			t.Release()
-		}
-		p.free = append(p.free[:0], p.free[n:]...)
-	}
-}
-
-func (p *targetPool) release() {
-	p.endFrame()
-	for _, t := range p.free {
-		t.Release()
-	}
-	p.free = nil
 }

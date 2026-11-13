@@ -127,18 +127,6 @@ func (t *Texture) canMip() bool {
 	return t.tex.P != nil && t.owned && !t.mips && (t.Format == d3d.FORMAT_R8G8B8A8_UNORM || t.Format == d3d.FORMAT_B8G8R8A8_UNORM)
 }
 
-func textureBytes(w, h int, mips bool) int64 {
-	var n int64
-	for w > 0 && h > 0 {
-		n += int64(w) * int64(h) * 4
-		if !mips || w == 1 && h == 1 {
-			break
-		}
-		w, h = max(1, w/2), max(1, h/2)
-	}
-	return n
-}
-
 // ByteSize reports the texel storage, including generated mip levels.
 func (t *Texture) ByteSize() int64 {
 	t.mu.RLock()
