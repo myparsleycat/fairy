@@ -119,8 +119,8 @@ func TestImageDecodeReservationIncludesOrientation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !wicAccepts(in) {
-		t.Skip("the WIC decode path needs WIC")
+	if !nativeAccepts(in) {
+		t.Skip("the native decode path needs a platform decoder")
 	}
 	in.meta.orient = 6
 	in.Config.Width, in.Config.Height = 1, 2

@@ -30,7 +30,7 @@ func TestImageCacheWithoutNativeDecodersUsesGo(t *testing.T) {
 	}
 	want := referenceStill(t, buf.Bytes(), imaging.Bound{})
 	c := NewImageCache(1<<20, 1)
-	c.wic = func(in imaging.Input, bound imaging.Bound) *imaging.Bitmap {
+	c.native = func(in imaging.Input, bound imaging.Bound) *imaging.Bitmap {
 		w, h := bound.Size(in.Config.Width, in.Config.Height)
 		return imaging.New(image.NewRGBA(image.Rect(0, 0, w, h)))
 	}
@@ -52,7 +52,7 @@ func TestLazyImagePixelReadUsesCacheDecoder(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := NewImageCache(1<<20, 1)
-	c.wic = func(in imaging.Input, bound imaging.Bound) *imaging.Bitmap {
+	c.native = func(in imaging.Input, bound imaging.Bound) *imaging.Bitmap {
 		if in.Format != "avif" {
 			return nil
 		}

@@ -72,7 +72,7 @@ func TestWICDecodeMatchesGoDecoders(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, bound := range []Bound{{}, {W: 31, H: 31}, {W: 31, H: 31, Cover: true}} {
-				got := DecodeWIC(in, bound)
+				got := DecodeNative(in, bound)
 				if got == nil {
 					t.Fatalf("bound %+v: WIC did not decode the image", bound)
 				}
@@ -126,8 +126,8 @@ func TestWICDecodeJPEGAppliesOrientation(t *testing.T) {
 	if _, _, ok := jpegDCTSize(517, 389, 96, 72); !ok {
 		t.Fatal("the bound does not exercise the DCT-scaled decode")
 	}
-	img, usedWIC, err := in.DecodePixels(bound, 0, 0, false, DecodeWIC, nil)
-	if err != nil || !usedWIC {
+	img, usedNative, err := in.DecodePixels(bound, 0, 0, false, DecodeNative, nil)
+	if err != nil || !usedNative {
 		t.Fatalf("WIC did not decode the eligible JPEG: %v", err)
 	}
 	if w, h := bound.Size(389, 517); img.W != w || img.H != h {
@@ -150,7 +150,7 @@ func TestWICDecodeJPEGAppliesOrientation(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer win.OleUninitialize()
-		if DecodeWIC(in, bound) != nil {
+		if DecodeNative(in, bound) != nil {
 			t.Fatal("decoded in a single-threaded apartment instead of leaving it to Go")
 		}
 	})
@@ -195,7 +195,7 @@ func TestWICDecodesAVIFWithItsMatrixCoefficients(t *testing.T) {
 	}
 	// Without the HEIF Image Extensions the image is left to Go, which is
 	// fine; what WIC returns must have the colors of BT.601 coefficients.
-	img := DecodeWIC(in, Bound{})
+	img := DecodeNative(in, Bound{})
 	if img == nil {
 		return
 	}

@@ -50,7 +50,7 @@ func Inspect(data []byte) (Input, error) {
 		if a, ok := inspectAVIF(data); ok {
 			in.avif = a
 			// Without a registered decoder, the size from the boxes still
-			// lets WIC decode the image.
+			// lets the platform decoder decode the image.
 			if in.Format == "" {
 				if imageTooLarge(a.w, a.h) {
 					return in, fmt.Errorf("fairy: image of %dx%d pixels exceeds the limit of %d megapixels",
@@ -124,21 +124,21 @@ func (in Input) finish(img *Bitmap) *Bitmap {
 // DecodePixels decodes the image scaled within bound, as Decode does, or only
 // the first frame of an animation when firstOnly is set. An animation keeps
 // all its frames only when they fit keepBytes; past that it decodes them as it
-// plays, within animBytes. wic, when non-nil,
-// is tried first for the formats wicAccepts reports; if it returns nil
-// the Go decoders run instead, and usedWIC reports which produced img. run,
+// plays, within animBytes. native, the platform decoder, when non-nil,
+// is tried first for the formats nativeAccepts reports; if it returns nil
+// the Go decoders run instead, and usedNative reports which produced img. run,
 // when non-nil, runs each attempt under a memory reservation of the given
 // bytes and reports false when it did not run the attempt, in which case
 // DecodePixels returns a nil image and no error. A nil run decodes on the
 // calling goroutine without reserving memory.
 func (in Input) DecodePixels(bound Bound, keepBytes, animBytes int64, firstOnly bool,
-	wic func(Input, Bound) *Bitmap, run func(int64, func()) bool,
-) (img *Bitmap, usedWIC bool, err error) {
-	if wic != nil && wicAccepts(in) {
-		f := func() { img = in.finish(wic(in, bound)) }
+	native func(Input, Bound) *Bitmap, run func(int64, func()) bool,
+) (img *Bitmap, usedNative bool, err error) {
+	if native != nil && nativeAccepts(in) {
+		f := func() { img = in.finish(native(in, bound)) }
 		if run == nil {
 			f()
-		} else if !run(min(WorkBudget, wicWork(in, bound)+in.finishWork(bound)), f) {
+		} else if !run(min(WorkBudget, nativeWork(in, bound)+in.finishWork(bound)), f) {
 			return nil, false, nil
 		}
 		if img != nil {
