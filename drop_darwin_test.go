@@ -2,6 +2,7 @@ package fairy
 
 import (
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/ebitengine/purego/objc"
@@ -9,6 +10,22 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/darwin"
 )
+
+// testDragPasteboard is the pasteboard of the drags testDragInfoClass makes.
+var testDragPasteboard darwin.ID
+
+// testDragInfoClass is an NSDraggingInfo whose pasteboard is
+// testDragPasteboard. It is registered once: the runtime keeps classes for
+// the life of the process, and tests may run more than once.
+var testDragInfoClass = sync.OnceValue(func() darwin.Class {
+	cls, err := objc.RegisterClass("FairyTestDragInfo", darwin.Cls("NSObject"), nil, nil, []objc.MethodDef{
+		{Cmd: darwin.Sel("draggingPasteboard"), Fn: func(darwin.ID, darwin.SEL) darwin.ID { return testDragPasteboard }},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return cls
+})
 
 // The view takes file URLs, and a drag's pasteboard reads as file paths.
 func TestDarwinDraggedPaths(t *testing.T) {
@@ -35,13 +52,8 @@ func TestDarwinDraggedPaths(t *testing.T) {
 		}
 		darwin.Send(pb, "clearContents")
 		darwin.Send(pb, "writeObjects:", urls)
-		cls, err := objc.RegisterClass("FairyTestDragInfo", darwin.Cls("NSObject"), nil, nil, []objc.MethodDef{
-			{Cmd: darwin.Sel("draggingPasteboard"), Fn: func(darwin.ID, darwin.SEL) darwin.ID { return pb }},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		info := darwin.ID(cls).Send(darwin.Sel("new"))
+		testDragPasteboard = pb
+		info := darwin.ID(testDragInfoClass()).Send(darwin.Sel("new"))
 		// NSURL hands back paths decomposed (NFD), as the file system
 		// stores them.
 		for _, p := range draggedPaths(info) {
