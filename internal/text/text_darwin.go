@@ -3,10 +3,12 @@ package text
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
 	"unicode/utf16"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
 	"github.com/myparsleycat/fairy/internal/render"
@@ -28,6 +30,7 @@ type formatKey struct {
 	noWrap        bool
 	ellipsis      bool
 	letterSpacing float32
+	scale         float32
 }
 
 type layoutKey struct {
@@ -58,7 +61,11 @@ func keyOf(s Style) formatKey {
 	if w == 0 {
 		w = 400
 	}
-	return formatKey{s.Family, s.Size, w, s.Italic, s.LineHeight, s.Align, s.NoWrap, s.Ellipsis, s.LetterSpacing}
+	scale := s.Scale
+	if scale <= 0 {
+		scale = 1
+	}
+	return formatKey{s.Family, s.Size, w, s.Italic, s.LineHeight, s.Align, s.NoWrap, s.Ellipsis, s.LetterSpacing, scale}
 }
 
 // glyphAtlas is the part of render.Atlas the system uses, so tests can
@@ -78,12 +85,14 @@ type System struct {
 	fontVersion int
 	fonts       map[fontKey]uintptr   // CTFont of each run style
 	families    map[string][]fontFace // installed faces by lower-case family
-	cascade     uintptr               // CFArray of SetFallbackFamilies faces, or 0
+	fallback    []string              // the SetFallbackFamilies families
+	cascades    map[styleKey]uintptr  // CFArray of their faces for each style, or 0
 	layouts     map[layoutKey]*Layout
 	shapes      map[shapeKey]*Layout // the latest reusable layout of each shaping
 	glyphs      map[glyphKey]glyphEntry
-	faces       map[uintptr]uint32 // retained CTFonts by identity
-	colorFaces  map[uintptr]bool
+	faces       map[uintptr]uint32    // retained CTFonts, the first of each identity
+	faceHashes  map[uintptr][]uintptr // the fonts of faces by CFHash
+	colorFaces  map[uint32]bool       // by face identity
 	atlas       glyphAtlas
 	atlasGen    int
 	color       colorGlyphs
@@ -99,6 +108,7 @@ type System struct {
 	// on every frame and the whole cache only after a pass.
 	loose []layoutKey
 	srgb  uintptr // CGColorSpace for color glyphs
+	runs  runGlyphs
 }
 
 type passMark struct{ pass, frame int }
@@ -112,11 +122,13 @@ func newSystem(atlas glyphAtlas) *System {
 	return &System{
 		fonts:      map[fontKey]uintptr{},
 		families:   map[string][]fontFace{},
+		cascades:   map[styleKey]uintptr{},
 		layouts:    map[layoutKey]*Layout{},
 		shapes:     map[shapeKey]*Layout{},
 		glyphs:     map[glyphKey]glyphEntry{},
 		faces:      map[uintptr]uint32{},
-		colorFaces: map[uintptr]bool{},
+		faceHashes: map[uintptr][]uintptr{},
+		colorFaces: map[uint32]bool{},
 		latest:     map[uint64]passMark{},
 		atlas:      atlas,
 		atlasGen:   atlas.generation(),
@@ -292,14 +304,9 @@ func (s *System) Release() {
 		}
 	}
 	clear(s.families)
-	for font := range s.faces {
-		cfRelease(font)
-	}
-	clear(s.faces)
-	clear(s.colorFaces)
+	s.clearFaces()
 	clear(s.glyphs)
-	cfRelease(s.cascade)
-	s.cascade = 0
+	s.clearCascades()
 	s.color.release()
 	if s.srgb != 0 {
 		cgColorSpaceRelease(s.srgb)
@@ -344,6 +351,7 @@ type line struct {
 	top, height, baseline float32
 	x                     float32 // alignment offset
 	inkWidth              float32 // width without trailing whitespace
+	width                 float32 // width of ct with trailing whitespace
 }
 
 // decoSpan carries the Run fields that do not change shaping, for UTF-16
@@ -401,13 +409,17 @@ func (l *Layout) segments(k formatKey, runs []Run) ([]uint32, []runStyle) {
 	}
 	slices.Sort(edges)
 	edges = slices.Compact(edges)
-	styles := make([]runStyle, 0, len(edges))
-	for i := 0; i+1 < len(edges); i++ {
-		st := base
-		for _, r := range rs {
-			if r.a > edges[i] || r.b < edges[i+1] {
-				continue
-			}
+	styles := make([]runStyle, max(len(edges)-1, 0))
+	for i := range styles {
+		styles[i] = base
+	}
+	// Each run applies to the pieces between its edges, found by binary
+	// search, so runs that do not overlap, as rich text has, cost one piece each.
+	for _, r := range rs {
+		i, _ := slices.BinarySearch(edges, r.a)
+		j, _ := slices.BinarySearch(edges, r.b)
+		for p := i; p < j; p++ {
+			st := &styles[p]
 			if r.r.Weight > 0 {
 				st.weight = r.r.Weight
 			}
@@ -430,7 +442,6 @@ func (l *Layout) segments(k formatKey, runs []Run) ([]uint32, []runStyle) {
 				st.color = r.r.Color
 			}
 		}
-		styles = append(styles, st)
 	}
 	return edges, styles
 }
@@ -439,7 +450,7 @@ func (l *Layout) segments(k formatKey, runs []Run) ([]uint32, []runStyle) {
 func (l *Layout) build(k formatKey, runs []Run) {
 	s := l.sys
 	n := len(l.u16)
-	baseFont := cfRetain(s.font(k.family, k.weight, k.italic, k.size))
+	baseFont := cfRetain(s.font(k.family, k.weight, k.italic, k.size, k.scale))
 	defer cfRelease(baseFont)
 	if baseFont == 0 {
 		return
@@ -452,14 +463,30 @@ func (l *Layout) build(k formatKey, runs []Run) {
 	defer cfRelease(as)
 	cfAttributedStringBeginEditing(as)
 	edges, styles := l.segments(k, runs)
+	// Pieces that differ only in decoration share one font range, so text
+	// with a run per word is not split into a font attribute per word.
+	var font uintptr
+	from := 0
+	setFont := func(to int) {
+		if font != 0 && to > from {
+			cfAttributedStringSetAttribute(as, cfRange{from, to - from}, kCTFontAttributeName, font)
+		}
+	}
 	for i, st := range styles {
 		a, b := int(edges[i]), int(edges[i+1])
-		if f := s.font(st.family, st.weight, st.italic, st.size); f != 0 {
-			cfAttributedStringSetAttribute(as, cfRange{a, b - a}, kCTFontAttributeName, f)
+		if f := s.font(st.family, st.weight, st.italic, st.size, k.scale); f != font {
+			setFont(a)
+			font, from = f, a
 		}
 		if st.color > 0 || st.underline || st.strike {
 			l.deco = append(l.deco, decoSpan{uint32(a), uint32(b), st.color, st.underline, st.strike})
 		}
+	}
+	setFont(n)
+	if n > 0 {
+		ps := paragraphStyle(float64(k.size))
+		cfAttributedStringSetAttribute(as, cfRange{0, n}, kCTParagraphStyleAttributeName, ps)
+		cfRelease(ps)
 	}
 	if k.letterSpacing != 0 && n > 0 {
 		kern := cfFloat(float64(k.letterSpacing))
@@ -511,6 +538,7 @@ func (l *Layout) build(k formatKey, runs []Run) {
 		w := ctLineGetTypographicBounds(ct, &ascent, &descent, &leading)
 		ws := ctLineGetTrailingWhitespaceWidth(ct)
 		ln.inkWidth = float32(w - ws)
+		ln.width = float32(w)
 		lineWS := float32(w)
 		if k.ellipsis && l.width < Unbounded && ln.inkWidth > l.width {
 			if token == 0 {
@@ -566,6 +594,28 @@ func (l *Layout) build(k formatKey, runs []Run) {
 		}
 	}
 	l.ok = true
+}
+
+// paragraphStyle returns the paragraph style of DirectWrite's defaults: tab
+// stops every four font sizes, where CoreText would stop every 28 pixels
+// up to 336 and then not advance, and a left-to-right reading direction, so
+// right-to-left text does not place the caret at negative x.
+func paragraphStyle(size float64) uintptr {
+	if size <= 0 {
+		size = 14
+	}
+	stops := cfArray(nil)
+	defer cfRelease(stops)
+	interval := 4 * size
+	dir := int8(ctWritingDirectionLeftToRight)
+	settings := []ctParagraphStyleSetting{
+		{ctParagraphStyleSpecifierTabStops, unsafe.Sizeof(stops), unsafe.Pointer(&stops)},
+		{ctParagraphStyleSpecifierDefaultTabInterval, unsafe.Sizeof(interval), unsafe.Pointer(&interval)},
+		{ctParagraphStyleSpecifierBaseWritingDirection, unsafe.Sizeof(dir), unsafe.Pointer(&dir)},
+	}
+	ps := ctParagraphStyleCreate(&settings[0], len(settings))
+	runtime.KeepAlive(settings)
+	return ps
 }
 
 // ellipsisLine returns the trimming sign in font.
@@ -857,17 +907,23 @@ func (l *Layout) RangeRects(a, b int) []Rect {
 		if lo >= hi || ln.ct == 0 {
 			continue
 		}
-		out = append(out, l.lineRects(ln, lo, hi)...)
+		out = l.lineRects(out, ln, lo, hi)
 	}
 	return out
 }
 
-// lineRects returns the rectangles of the glyphs of [lo, hi) in ln, one per
+// lineRects appends the rectangles of the glyphs of [lo, hi) in ln, one per
 // visually contiguous span.
-func (l *Layout) lineRects(ln *line, lo, hi uint32) []Rect {
+func (l *Layout) lineRects(out []Rect, ln *line, lo, hi uint32) []Rect {
+	if lo == ln.start && hi == ln.start+ln.length {
+		// The glyphs of a whole line lie side by side from its start to its
+		// end. Selections cover most of their lines whole, and walking the
+		// glyphs of each on every frame would cost CoreText calls per run.
+		return append(out, Rect{ln.x, ln.top, ln.width, ln.height})
+	}
 	type span struct{ x0, x1 float32 }
 	var spans []span
-	forRuns(ln.ct, func(run uintptr, _ uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
+	l.sys.runs.forRuns(ln.ct, func(run uintptr, _ uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
 		x0, x1 := float32(math.Inf(1)), float32(math.Inf(-1))
 		for g := range glyphs {
 			if i := uint32(idx[g]); i >= lo && i < hi {
@@ -882,7 +938,7 @@ func (l *Layout) lineRects(ln *line, lo, hi uint32) []Rect {
 	if len(spans) == 0 {
 		// The range holds only characters without glyphs, such as a newline.
 		x := l.offset(ln, lo)
-		return []Rect{{x, ln.top, 0, ln.height}}
+		return append(out, Rect{x, ln.top, 0, ln.height})
 	}
 	slices.SortFunc(spans, func(a, b span) int {
 		switch {
@@ -893,7 +949,6 @@ func (l *Layout) lineRects(ln *line, lo, hi uint32) []Rect {
 		}
 		return 0
 	})
-	var out []Rect
 	cur := spans[0]
 	for _, sp := range spans[1:] {
 		if sp.x0 <= cur.x1+0.01 {
@@ -906,10 +961,20 @@ func (l *Layout) lineRects(ln *line, lo, hi uint32) []Rect {
 	return append(out, Rect{ln.x + cur.x0, ln.top, cur.x1 - cur.x0, ln.height})
 }
 
+// runGlyphs holds the glyph arrays of a CTRun, reused from run to run and
+// call to call, so that walking the lines of a layout, as painting a
+// selection does on every frame, does not allocate.
+type runGlyphs struct {
+	glyphs []uint16
+	pos    []darwin.CGPoint
+	adv    []darwin.CGSize
+	idx    []int
+}
+
 // forRuns calls f with the glyphs of each run of a CTLine: the run's font,
 // glyph indices, positions relative to the line origin (y up), advances and
-// UTF-16 string indices.
-func forRuns(ct uintptr, f func(run, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int)) {
+// UTF-16 string indices. The slices are valid only until f returns.
+func (b *runGlyphs) forRuns(ct uintptr, f func(run, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int)) {
 	runs := ctLineGetGlyphRuns(ct)
 	if runs == 0 {
 		return
@@ -920,10 +985,12 @@ func forRuns(ct uintptr, f func(run, font uintptr, glyphs []uint16, pos []darwin
 		if n <= 0 {
 			continue
 		}
-		glyphs := make([]uint16, n)
-		pos := make([]darwin.CGPoint, n)
-		adv := make([]darwin.CGSize, n)
-		idx := make([]int, n)
+		if cap(b.glyphs) < n {
+			c := max(n, 2*cap(b.glyphs))
+			b.glyphs, b.pos = make([]uint16, c), make([]darwin.CGPoint, c)
+			b.adv, b.idx = make([]darwin.CGSize, c), make([]int, c)
+		}
+		glyphs, pos, adv, idx := b.glyphs[:n], b.pos[:n], b.adv[:n], b.idx[:n]
 		all := cfRange{0, 0}
 		ctRunGetGlyphs(run, all, &glyphs[0])
 		ctRunGetPositions(run, all, &pos[0])

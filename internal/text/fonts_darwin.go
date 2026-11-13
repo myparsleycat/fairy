@@ -11,12 +11,13 @@ import (
 	"github.com/myparsleycat/fairy/internal/darwin"
 )
 
-// fontFace is one face of a family: a font descriptor with the CSS weight
-// and style it is matched by.
+// fontFace is one face of a family: a font descriptor with the CSS weight,
+// style and width it is matched by.
 type fontFace struct {
 	desc   uintptr // CTFontDescriptor, retained
 	weight int
 	italic bool
+	width  float64 // CoreText width trait: 0 normal, below condensed, above expanded
 }
 
 var (
@@ -97,7 +98,7 @@ func descString(desc, key uintptr) string {
 	return goString(v)
 }
 
-// describeFace reads the weight and style of a descriptor from its traits.
+// describeFace reads the weight, style and width of a descriptor from its traits.
 func describeFace(desc uintptr) fontFace {
 	f := fontFace{weight: 400}
 	traits := ctFontDescriptorCopyAttribute(desc, kCTFontTraitsAttribute)
@@ -110,6 +111,9 @@ func describeFace(desc uintptr) fontFace {
 	}
 	if sym, ok := numberValue(cfDictionaryGetValue(traits, kCTFontSymbolicTrait)); ok {
 		f.italic = uint32(int64(sym))&ctFontItalicTrait != 0
+	}
+	if w, ok := numberValue(cfDictionaryGetValue(traits, kCTFontWidthTrait)); ok {
+		f.width = w
 	}
 	return f
 }
@@ -190,7 +194,8 @@ func weightRank(have, want int) int {
 }
 
 // matchFace picks the face of faces that CSS would draw weight and italic
-// with: the wanted style first, then the closest weight.
+// with: the normal width first, then the wanted style, then the closest
+// weight. Without the width, Helvetica Neue 900 would be Condensed Black.
 func matchFace(faces []fontFace, weight int, italic bool) fontFace {
 	best, found := fontFace{}, false
 	for _, f := range faces {
@@ -202,10 +207,26 @@ func matchFace(faces []fontFace, weight int, italic bool) fontFace {
 }
 
 func betterFace(a, b fontFace, weight int, italic bool) bool {
+	if wa, wb := widthRank(a.width), widthRank(b.width); wa != wb {
+		return wa < wb
+	}
 	if (a.italic == italic) != (b.italic == italic) {
 		return a.italic == italic
 	}
 	return weightRank(a.weight, weight) < weightRank(b.weight, weight)
+}
+
+// widthRank orders widths for the normal width as CSS font-stretch matching
+// does: lower is better, normal first, then the narrower widths from the
+// closest, then the wider ones.
+func widthRank(w float64) float64 {
+	switch {
+	case math.Abs(w) < 0.01:
+		return 0
+	case w < 0:
+		return -w
+	}
+	return 1 + w
 }
 
 type familyKind uint8
@@ -265,26 +286,43 @@ type fontKey struct {
 	weight int
 	italic bool
 	size   float32
+	scale  float32
 }
 
 const fontCacheLimit = 128
 
-// font returns a cached CTFont for a run of text. It stays valid until the
-// next font cache eviction, which happens only between layouts.
-func (s *System) font(family string, weight int, italic bool, size float32) uintptr {
+// font returns a cached CTFont for a run of text of size device pixels, at
+// scale device pixels per point. It stays valid until the next font cache
+// eviction, which happens only between layouts.
+func (s *System) font(family string, weight int, italic bool, size, scale float32) uintptr {
 	if size <= 0 {
 		size = 14
 	}
 	if weight <= 0 {
 		weight = 400
 	}
-	k := fontKey{family, weight, italic, size}
+	if scale <= 0 {
+		scale = 1
+	}
+	k := fontKey{family, weight, italic, size, scale}
 	if f, ok := s.fonts[k]; ok {
 		return f
 	}
 	f := s.createFont(family, weight, italic, float64(size))
-	if s.cascade != 0 && f != 0 {
-		attrs := cfDict(kCTFontCascadeListAttribute, s.cascade)
+	// Fonts are made at their device size, which CoreText would otherwise
+	// also take as the optical size: SF would set text on a 2x screen with
+	// the narrower shapes and tighter tracking of twice the point size.
+	var kv []uintptr
+	if c := s.cascade(weight, italic); c != 0 {
+		kv = append(kv, kCTFontCascadeListAttribute, c)
+	}
+	if scale != 1 && kCTFontOpticalSizeAttribute != 0 {
+		opsz := cfFloat(float64(size / scale))
+		defer cfRelease(opsz)
+		kv = append(kv, kCTFontOpticalSizeAttribute, opsz)
+	}
+	if len(kv) > 0 && f != 0 {
+		attrs := cfDict(kv...)
 		d := ctFontDescriptorCreateWithAttributes(attrs)
 		cfRelease(attrs)
 		if c := ctFontCreateCopyWithAttributes(f, 0, nil, d); c != 0 {
@@ -363,7 +401,11 @@ func faceFont(face fontFace, weight int, italic bool, size float64) uintptr {
 		}
 		lo, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisMinKey))
 		hi, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisMaxKey))
-		w := min(max(float64(weight), lo), hi)
+		def, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisDefKey))
+		w, ok := axisWeight(weight, face.weight, lo, hi, variationValue(font, tagWght, def))
+		if !ok {
+			break
+		}
 		tag, val := cfInt(tagWght), cfFloat(w)
 		vars := cfDict(tag, val)
 		attrs := cfDict(kCTFontVariationAttribute, vars)
@@ -378,6 +420,42 @@ func faceFont(face fontFace, weight int, italic bool, size float64) uintptr {
 		break
 	}
 	return font
+}
+
+// axisWeight returns the value of a wght axis of range [lo, hi] for a CSS
+// weight, in a face of weight faceWeight whose axis is at cur. The OpenType
+// wght axis is on the CSS scale, but older fonts such as Skia (0.48 to 3.2)
+// have their own; their range is mapped proportionally, with faceWeight at
+// cur, 100 at lo and 900 at hi. ok is false when the axis has no range.
+func axisWeight(weight, faceWeight int, lo, hi, cur float64) (float64, bool) {
+	if hi <= lo {
+		return 0, false
+	}
+	if lo >= 1 && hi <= 1000 && hi >= 100 {
+		return min(max(float64(weight), lo), hi), true
+	}
+	cur = min(max(cur, lo), hi)
+	w, fw := float64(min(max(weight, 100), 900)), float64(min(max(faceWeight, 101), 899))
+	if w >= fw {
+		return cur + (hi-cur)*(w-fw)/(900-fw), true
+	}
+	return cur - (cur-lo)*(fw-w)/(fw-100), true
+}
+
+// variationValue returns the value of axis tag in font, or def when the font
+// does not set it.
+func variationValue(font uintptr, tag uint32, def float64) float64 {
+	vars := ctFontCopyVariation(font)
+	if vars == 0 {
+		return def
+	}
+	defer cfRelease(vars)
+	key := cfInt(int32(tag))
+	defer cfRelease(key)
+	if v, ok := numberValue(cfDictionaryGetValue(vars, key)); ok {
+		return v
+	}
+	return def
 }
 
 // italicize returns the italic face of font's family, or font slanted when
@@ -431,28 +509,55 @@ func (s *System) familyFaces(name string) []fontFace {
 	return faces
 }
 
-// setFallback builds the cascade list of families: registered or installed
-// faces of the regular weight, tried before the system fallback.
+type styleKey struct {
+	weight int
+	italic bool
+}
+
+// setFallback sets the families of SetFallbackFamilies, whose cascade lists
+// are built per style on first use.
 func (s *System) setFallback(families []string) {
-	cfRelease(s.cascade)
-	s.cascade = 0
+	s.clearCascades()
+	s.fallback = families
+}
+
+func (s *System) clearCascades() {
+	for _, c := range s.cascades {
+		cfRelease(c)
+	}
+	clear(s.cascades)
+}
+
+// cascade returns the cascade list of the fallback families for a style, or
+// 0 when there are none: the registered or installed face of each family
+// that CSS would pick for the weight and style, tried before the system
+// fallback, so bold or italic text that falls back stays bold or italic.
+func (s *System) cascade(weight int, italic bool) uintptr {
+	if len(s.fallback) == 0 {
+		return 0
+	}
+	k := styleKey{weight, italic}
+	if c, ok := s.cascades[k]; ok {
+		return c
+	}
 	var descs []uintptr
-	for _, fam := range families {
+	for _, fam := range s.fallback {
 		kind, name := classify(fam)
-		var faces []fontFace
-		switch kind {
-		case familyNamed:
-			if faces = registeredFaces(name); len(faces) == 0 {
-				faces = s.familyFaces(name)
-			}
-		default:
+		if kind != familyNamed {
 			continue // the system font is first in the system fallback anyway
 		}
+		faces := registeredFaces(name)
+		if len(faces) == 0 {
+			faces = s.familyFaces(name)
+		}
 		if len(faces) > 0 {
-			descs = append(descs, matchFace(faces, 400, false).desc)
+			descs = append(descs, matchFace(faces, weight, italic).desc)
 		}
 	}
+	var c uintptr
 	if len(descs) > 0 {
-		s.cascade = cfArray(descs)
+		c = cfArray(descs)
 	}
+	s.cascades[k] = c
+	return c
 }

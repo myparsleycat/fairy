@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"runtime"
+	"sort"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
@@ -27,27 +28,51 @@ type glyphEntry struct {
 
 // faceLimit bounds the CTFonts kept as glyph cache identities. CoreText makes
 // a font object per size, so a long session of zooming would otherwise keep
-// every size alive.
-const faceLimit = 2048
+// every size alive. It is a variable so tests can lower it.
+var faceLimit = 2048
 
+// faceID returns the glyph cache identity of font. CoreText makes a new CTFont
+// for the fallback runs (Hangul, CJK, emoji) of every typesetter, so fonts are
+// matched with CFEqual, which compares their descriptors, sizes and matrices,
+// and share the identity of the first equal font seen, which is kept alive so
+// its address stays a stable key.
 func (s *System) faceID(font uintptr) uint32 {
 	if id, ok := s.faces[font]; ok {
 		return id
 	}
-	if len(s.faces) >= faceLimit {
-		for f := range s.faces {
-			cfRelease(f)
+	h := cfHash(font)
+	for _, f := range s.faceHashes[h] {
+		if cfEqual(f, font) {
+			return s.faces[f]
 		}
-		clear(s.faces)
-		clear(s.colorFaces)
-		clear(s.glyphs)
-		s.color.reset()
 	}
-	// Keep the font alive so its address stays a stable identity.
 	cfRetain(font)
 	id := uint32(len(s.faces) + 1)
 	s.faces[font] = id
+	s.faceHashes[h] = append(s.faceHashes[h], font)
 	return id
+}
+
+// trimFaces drops the face identities and the glyphs cached under them once
+// there are faceLimit. It runs only before a layout records, never while one
+// does, so the color glyph textures it retires are none that the layout being
+// recorded already refers to.
+func (s *System) trimFaces() {
+	if len(s.faces) < faceLimit {
+		return
+	}
+	s.clearFaces()
+	clear(s.glyphs)
+	s.color.reset()
+}
+
+func (s *System) clearFaces() {
+	for f := range s.faces {
+		cfRelease(f)
+	}
+	clear(s.faces)
+	clear(s.faceHashes)
+	clear(s.colorFaces)
 }
 
 func (s *System) checkAtlas() {
@@ -57,25 +82,24 @@ func (s *System) checkAtlas() {
 	}
 }
 
-func (s *System) isColorFace(font uintptr) bool {
-	c, ok := s.colorFaces[font]
+func (s *System) isColorFace(font uintptr, face uint32) bool {
+	c, ok := s.colorFaces[face]
 	if !ok {
-		s.faceID(font) // keeps the font alive, so the address stays valid as a key
 		c = ctFontGetSymbolicTraits(font)&ctFontColorGlyphsTrait != 0
-		s.colorFaces[font] = c
+		s.colorFaces[face] = c
 	}
 	return c
 }
 
-func (s *System) glyph(font uintptr, index uint16, subpix uint8) (glyphEntry, bool) {
-	k := glyphKey{face: s.faceID(font), index: index, size: uint32(ctFontGetSize(font) * 64), subpixX: subpix}
+// glyph returns the atlas entry of glyph k of font, rasterizing it on first use.
+func (s *System) glyph(font uintptr, k glyphKey) (glyphEntry, bool) {
 	if g, ok := s.glyphs[k]; ok {
 		return g, true
 	}
 	// A glyph that cannot be rasterized is cached as empty: reporting false
 	// would make the window treat it as a full atlas and clear it every frame.
 	blank := glyphEntry{empty: true}
-	m, ok := rasterize(font, index, float64(subpix)/subpixelVariants, 0)
+	m, ok := rasterize(font, k.index, float64(k.subpixX)/subpixelVariants, 0)
 	if !ok {
 		s.glyphs[k] = blank
 		return blank, true
@@ -215,8 +239,8 @@ func (s *System) SetColorGlyphTextures(newTexture func(w, h int, rgba []byte) (*
 	s.color.newTexture = newTexture
 }
 
-func (s *System) colorGlyph(font uintptr, index uint16) (colorEntry, bool) {
-	k := glyphKey{face: s.faceID(font), index: index, size: uint32(ctFontGetSize(font) * 64)}
+// colorGlyph returns the texture of color glyph k of font, made on first use.
+func (s *System) colorGlyph(font uintptr, k glyphKey) (colorEntry, bool) {
 	if e, ok := s.color.entries[k]; ok {
 		return e, e.tex != nil
 	}
@@ -226,7 +250,7 @@ func (s *System) colorGlyph(font uintptr, index uint16) (colorEntry, bool) {
 	if s.srgb == 0 {
 		s.srgb = cgColorSpaceCreateWithName(kCGColorSpaceSRGB)
 	}
-	m, ok := rasterize(font, index, 0, s.srgb)
+	m, ok := rasterize(font, k.index, 0, s.srgb)
 	if !ok {
 		s.color.entries[k] = colorEntry{}
 		return colorEntry{}, false
@@ -348,6 +372,7 @@ func (l *Layout) DrawRuns(scene *render.Scene, x, y float32, base [4]float32, co
 // l.quads. It returns false when the atlas ran out of space.
 func (l *Layout) record() bool {
 	s := l.sys
+	s.trimFaces()
 	if len(s.color.owned) >= colorGlyphLimit {
 		s.color.reset()
 	}
@@ -359,18 +384,20 @@ func (l *Layout) record() bool {
 			continue
 		}
 		by := float32(math.Round(float64(ln.top + ln.baseline)))
-		forRuns(ln.draw, func(_, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
+		s.runs.forRuns(ln.draw, func(_, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
 			if font == 0 {
 				return
 			}
-			images := s.color.newTexture != nil && s.isColorFace(font)
+			face := s.faceID(font)
+			size := uint32(ctFontGetSize(font) * 64)
+			images := s.color.newTexture != nil && s.isColorFace(font, face)
 			for g, index := range glyphs {
 				gx := ln.x + float32(pos[g].X)
 				gy := int32(math.Round(float64(by - float32(pos[g].Y))))
 				fx := float32(math.Floor(float64(gx)))
 				q := glyphQuad{effect: uint32(l.colorAt(idx[g]))}
 				if images {
-					e, found := s.colorGlyph(font, index)
+					e, found := s.colorGlyph(font, glyphKey{face: face, index: index, size: size})
 					if !found {
 						continue
 					}
@@ -383,7 +410,7 @@ func (l *Layout) record() bool {
 					continue
 				}
 				sub := uint8(math.Floor(float64(gx-fx)*subpixelVariants)) % subpixelVariants
-				e, found := s.glyph(font, index, sub)
+				e, found := s.glyph(font, glyphKey{face: face, index: index, size: size, subpixX: sub})
 				if !found {
 					ok = false
 					continue
@@ -404,30 +431,59 @@ func (l *Layout) record() bool {
 	return ok
 }
 
+// decoAt returns the index in spans, which are sorted and disjoint, of the
+// span that holds UTF-16 index i, or -1.
+func decoAt(spans []decoSpan, i int) int {
+	u := uint32(i)
+	j := sort.Search(len(spans), func(j int) bool { return spans[j].end > u })
+	if j < len(spans) && spans[j].start <= u {
+		return j
+	}
+	return -1
+}
+
 // colorAt returns the Run.Color of UTF-16 index i.
 func (l *Layout) colorAt(i int) int {
-	for _, d := range l.deco {
-		if uint32(i) >= d.start && uint32(i) < d.end {
-			return d.color
-		}
+	if j := decoAt(l.deco, i); j >= 0 {
+		return l.deco[j].color
 	}
 	return 0
 }
 
-// decorate appends the underlines and strikethroughs of a glyph run.
+// decorate appends the underlines and strikethroughs of a glyph run, in a
+// single pass over its glyphs.
 func (l *Layout) decorate(ln *line, font uintptr, by float32, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
+	if len(idx) == 0 || len(l.deco) == 0 {
+		return
+	}
+	lo, hi := idx[0], idx[0]
+	for _, i := range idx {
+		lo, hi = min(lo, i), max(hi, i)
+	}
+	first := sort.Search(len(l.deco), func(j int) bool { return l.deco[j].end > uint32(lo) })
+	last, lined := first, false
+	for last < len(l.deco) && l.deco[last].start <= uint32(hi) {
+		lined = lined || l.deco[last].underline || l.deco[last].strike
+		last++
+	}
+	if !lined {
+		return
+	}
+	spans := l.deco[first:last]
+	type extent struct{ x0, x1 float64 }
+	ext := make([]extent, len(spans))
+	for j := range ext {
+		ext[j] = extent{math.Inf(1), math.Inf(-1)}
+	}
+	for g := range pos {
+		if j := decoAt(spans, idx[g]); j >= 0 {
+			ext[j].x0, ext[j].x1 = min(ext[j].x0, pos[g].X), max(ext[j].x1, pos[g].X+adv[g].W)
+		}
+	}
 	var m *decoMetrics
-	for _, d := range l.deco {
-		if !d.underline && !d.strike {
-			continue
-		}
-		x0, x1 := math.Inf(1), math.Inf(-1)
-		for g := range pos {
-			if i := uint32(idx[g]); i >= d.start && i < d.end {
-				x0, x1 = min(x0, pos[g].X), max(x1, pos[g].X+adv[g].W)
-			}
-		}
-		if x0 >= x1 {
+	for j, d := range spans {
+		x0, x1 := ext[j].x0, ext[j].x1
+		if !d.underline && !d.strike || x0 >= x1 {
 			continue
 		}
 		if m == nil {

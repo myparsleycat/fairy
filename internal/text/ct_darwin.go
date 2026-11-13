@@ -5,6 +5,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"github.com/myparsleycat/fairy/internal/darwin"
 )
 
@@ -27,7 +28,6 @@ const (
 
 	ctFontOrientationDefault = 0
 	ctLineTruncationEnd      = 1
-	ctRunStatusRightToLeft   = 1
 
 	cgImageAlphaPremultipliedLast = 1
 	cgImageAlphaOnly              = 7
@@ -57,6 +57,8 @@ var (
 	cfDataGetBytePtr                func(d uintptr) *byte
 	cfSetCreate                     func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
 	cfGetTypeID                     func(cf uintptr) uintptr
+	cfEqual                         func(a, b uintptr) bool
+	cfHash                          func(cf uintptr) uintptr
 	cfNumberGetTypeID               func() uintptr
 	cfStringGetTypeID               func() uintptr
 
@@ -69,6 +71,7 @@ var (
 	ctFontCopyTraits                   func(font uintptr) uintptr
 	ctFontCopyTable                    func(font uintptr, tag uint32, opts uint32) uintptr
 	ctFontCopyVariationAxes            func(font uintptr) uintptr
+	ctFontCopyVariation                func(font uintptr) uintptr
 	ctFontGetSymbolicTraits            func(font uintptr) uint32
 	ctFontGetSize                      func(font uintptr) float64
 	ctFontGetAscent                    func(font uintptr) float64
@@ -88,6 +91,7 @@ var (
 	ctFontDescriptorCopyAttribute                 func(desc, key uintptr) uintptr
 	ctFontManagerCreateFontDescriptorsFromData    func(data uintptr) uintptr
 
+	ctParagraphStyleCreate                 func(settings *ctParagraphStyleSetting, n int) uintptr
 	ctTypesetterCreateWithAttributedString func(as uintptr) uintptr
 	ctTypesetterSuggestLineBreak           func(ts uintptr, start int, width float64) int
 	ctTypesetterSuggestClusterBreak        func(ts uintptr, start int, width float64) int
@@ -101,7 +105,6 @@ var (
 	ctLineGetOffsetForStringIndex          func(line uintptr, i int, secondary *float64) float64
 	ctRunGetGlyphCount                     func(run uintptr) int
 	ctRunGetAttributes                     func(run uintptr) uintptr
-	ctRunGetStatus                         func(run uintptr) uint32
 	ctRunGetStringRange                    func(run uintptr) cfRange
 	ctRunGetGlyphs                         func(run uintptr, r cfRange, buf *uint16)
 	ctRunGetPositions                      func(run uintptr, r cfRange, buf *darwin.CGPoint)
@@ -128,16 +131,35 @@ var (
 	cfTypeDictionaryValueCallBacks uintptr
 	kCTFontAttributeName           uintptr
 	kCTKernAttributeName           uintptr
+	kCTParagraphStyleAttributeName uintptr
 	kCTFontFamilyNameAttribute     uintptr
 	kCTFontTraitsAttribute         uintptr
 	kCTFontWeightTrait             uintptr
+	kCTFontWidthTrait              uintptr
 	kCTFontSymbolicTrait           uintptr
 	kCTFontCascadeListAttribute    uintptr
 	kCTFontVariationAttribute      uintptr
 	kCTFontVariationAxisIDKey      uintptr
 	kCTFontVariationAxisMinKey     uintptr
 	kCTFontVariationAxisMaxKey     uintptr
+	kCTFontVariationAxisDefKey     uintptr
+	kCTFontOpticalSizeAttribute    uintptr // 0 where CoreText lacks it
 	kCGColorSpaceSRGB              uintptr
+)
+
+// ctParagraphStyleSetting is a CTParagraphStyleSetting.
+type ctParagraphStyleSetting struct {
+	spec  uint32
+	size  uintptr
+	value unsafe.Pointer
+}
+
+const (
+	ctParagraphStyleSpecifierTabStops             = 4
+	ctParagraphStyleSpecifierDefaultTabInterval   = 5
+	ctParagraphStyleSpecifierBaseWritingDirection = 13
+
+	ctWritingDirectionLeftToRight = 0
 )
 
 // cgAffine is a CGAffineTransform.
@@ -170,6 +192,8 @@ func init() {
 		{&cfDataGetBytePtr, cf, "CFDataGetBytePtr"},
 		{&cfSetCreate, cf, "CFSetCreate"},
 		{&cfGetTypeID, cf, "CFGetTypeID"},
+		{&cfEqual, cf, "CFEqual"},
+		{&cfHash, cf, "CFHash"},
 		{&cfNumberGetTypeID, cf, "CFNumberGetTypeID"},
 		{&cfStringGetTypeID, cf, "CFStringGetTypeID"},
 
@@ -182,6 +206,7 @@ func init() {
 		{&ctFontCopyTraits, ct, "CTFontCopyTraits"},
 		{&ctFontCopyTable, ct, "CTFontCopyTable"},
 		{&ctFontCopyVariationAxes, ct, "CTFontCopyVariationAxes"},
+		{&ctFontCopyVariation, ct, "CTFontCopyVariation"},
 		{&ctFontGetSymbolicTraits, ct, "CTFontGetSymbolicTraits"},
 		{&ctFontGetSize, ct, "CTFontGetSize"},
 		{&ctFontGetAscent, ct, "CTFontGetAscent"},
@@ -199,6 +224,7 @@ func init() {
 		{&ctFontDescriptorCreateMatchingFontDescriptors, ct, "CTFontDescriptorCreateMatchingFontDescriptors"},
 		{&ctFontDescriptorCopyAttribute, ct, "CTFontDescriptorCopyAttribute"},
 		{&ctFontManagerCreateFontDescriptorsFromData, ct, "CTFontManagerCreateFontDescriptorsFromData"},
+		{&ctParagraphStyleCreate, ct, "CTParagraphStyleCreate"},
 		{&ctTypesetterCreateWithAttributedString, ct, "CTTypesetterCreateWithAttributedString"},
 		{&ctTypesetterSuggestLineBreak, ct, "CTTypesetterSuggestLineBreak"},
 		{&ctTypesetterSuggestClusterBreak, ct, "CTTypesetterSuggestClusterBreak"},
@@ -212,7 +238,6 @@ func init() {
 		{&ctLineGetOffsetForStringIndex, ct, "CTLineGetOffsetForStringIndex"},
 		{&ctRunGetGlyphCount, ct, "CTRunGetGlyphCount"},
 		{&ctRunGetAttributes, ct, "CTRunGetAttributes"},
-		{&ctRunGetStatus, ct, "CTRunGetStatus"},
 		{&ctRunGetStringRange, ct, "CTRunGetStringRange"},
 		{&ctRunGetGlyphs, ct, "CTRunGetGlyphs"},
 		{&ctRunGetPositions, ct, "CTRunGetPositions"},
@@ -246,18 +271,24 @@ func init() {
 	}{
 		{&kCTFontAttributeName, ct, "kCTFontAttributeName"},
 		{&kCTKernAttributeName, ct, "kCTKernAttributeName"},
+		{&kCTParagraphStyleAttributeName, ct, "kCTParagraphStyleAttributeName"},
 		{&kCTFontFamilyNameAttribute, ct, "kCTFontFamilyNameAttribute"},
 		{&kCTFontTraitsAttribute, ct, "kCTFontTraitsAttribute"},
 		{&kCTFontWeightTrait, ct, "kCTFontWeightTrait"},
+		{&kCTFontWidthTrait, ct, "kCTFontWidthTrait"},
 		{&kCTFontSymbolicTrait, ct, "kCTFontSymbolicTrait"},
 		{&kCTFontCascadeListAttribute, ct, "kCTFontCascadeListAttribute"},
 		{&kCTFontVariationAttribute, ct, "kCTFontVariationAttribute"},
 		{&kCTFontVariationAxisIDKey, ct, "kCTFontVariationAxisIdentifierKey"},
 		{&kCTFontVariationAxisMinKey, ct, "kCTFontVariationAxisMinimumValueKey"},
 		{&kCTFontVariationAxisMaxKey, ct, "kCTFontVariationAxisMaximumValueKey"},
+		{&kCTFontVariationAxisDefKey, ct, "kCTFontVariationAxisDefaultValueKey"},
 		{&kCGColorSpaceSRGB, cg, "kCGColorSpaceSRGB"},
 	} {
 		*c.dst = uintptr(darwin.SymbolID(c.lib, c.name))
+	}
+	if p, err := purego.Dlsym(ct, "kCTFontOpticalSizeAttribute"); err == nil {
+		kCTFontOpticalSizeAttribute = *(*uintptr)(unsafe.Add(nil, p))
 	}
 }
 
@@ -333,13 +364,6 @@ func cfArray(vs []uintptr) uintptr {
 		return cfArrayCreate(0, nil, 0, cfTypeArrayCallBacks)
 	}
 	return cfArrayCreate(0, &vs[0], len(vs), cfTypeArrayCallBacks)
-}
-
-// familyOf returns the family name of a font.
-func familyOf(font uintptr) string {
-	s := ctFontCopyFamilyName(font)
-	defer cfRelease(s)
-	return goString(s)
 }
 
 func sameFamily(a, b string) bool {

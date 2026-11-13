@@ -138,10 +138,10 @@ func TestWeightsStylesAndFamilies(t *testing.T) {
 	if bold <= regular {
 		t.Errorf("bold width %v, regular %v", bold, regular)
 	}
-	if f := s.font("", 400, true, 14); ctFontGetSymbolicTraits(f)&ctFontItalicTrait == 0 {
+	if f := s.font("", 400, true, 14, 1); ctFontGetSymbolicTraits(f)&ctFontItalicTrait == 0 {
 		t.Error("italic system font has no italic trait")
 	}
-	if f := s.font("Helvetica Neue", 700, false, 14); ctFontGetSymbolicTraits(f)&ctFontBoldTrait == 0 {
+	if f := s.font("Helvetica Neue", 700, false, 14, 1); ctFontGetSymbolicTraits(f)&ctFontBoldTrait == 0 {
 		t.Errorf("bold Helvetica Neue is %q without the bold trait", familyOf(f))
 	}
 	// The Windows UI font names and the system font name are the system font.
@@ -284,7 +284,7 @@ func TestDrawGlyphs(t *testing.T) {
 
 func TestRasterizeCoverage(t *testing.T) {
 	s := newTestSystem(t)
-	font := s.font("", 400, false, 20)
+	font := s.font("", 400, false, 20, 1)
 	u := []uint16{'H'}
 	var g uint16
 	if !ctFontGetGlyphsForCharacters(font, &u[0], &g, 1) {
