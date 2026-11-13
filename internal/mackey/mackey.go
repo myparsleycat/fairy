@@ -5,8 +5,9 @@ package mackey
 import "github.com/myparsleycat/fairy/keyboard"
 
 // keys maps macOS virtual key codes (kVK_*) to the Windows virtual-key
-// codes keyboard.Key uses. Letters and digits are by position on an ANSI
-// keyboard, as Windows reports them on a US layout.
+// codes keyboard.Key uses, by position on an ANSI keyboard, as Windows
+// reports them on a US layout. Key and Code then follow the user's keyboard
+// layout for letter keys, as Windows virtual-key codes do.
 var keys = [128]keyboard.Key{
 	0x00: 'A', 0x01: 'S', 0x02: 'D', 0x03: 'F', 0x04: 'H', 0x05: 'G', 0x06: 'Z', 0x07: 'X',
 	0x08: 'C', 0x09: 'V', 0x0B: 'B', 0x0C: 'Q', 0x0D: 'W', 0x0E: 'E', 0x0F: 'R',
@@ -72,19 +73,36 @@ var keys = [128]keyboard.Key{
 	0x7E: keyboard.KeyUp,
 }
 
-// Key returns the keyboard.Key of a macOS key code, or 0.
+// Key returns the keyboard.Key of a macOS key code, or 0. A key that types
+// a Latin letter on the current keyboard layout is that letter's key, so ⌘Z
+// is KeyZ on a German keyboard too.
 func Key(code uint16) keyboard.Key {
-	if int(code) < len(keys) {
-		return keys[code]
+	if int(code) >= len(keys) {
+		return 0
 	}
-	return 0
+	k := keys[code]
+	if isLetter(k) {
+		if l := layoutLetter(code); l != 0 {
+			return l
+		}
+	}
+	return k
 }
+
+func isLetter(k keyboard.Key) bool { return k >= 'A' && k <= 'Z' }
 
 // Code returns the macOS key code of k: the main keyboard's key where the
 // keypad has one too, and the left one of the modifier keys.
 func Code(k keyboard.Key) (uint16, bool) {
 	if k == 0 {
 		return 0, false
+	}
+	if isLetter(k) {
+		for c, key := range keys {
+			if isLetter(key) && layoutLetter(uint16(c)) == k {
+				return uint16(c), true
+			}
+		}
 	}
 	for c, key := range keys {
 		if key == k {
