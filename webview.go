@@ -9,10 +9,15 @@ type WebViewOptions struct {
 	// UserDataFolder keeps cookies, storage and cache. Empty means
 	// %LOCALAPPDATA%\<executable name>\WebView2. Web views with the same
 	// folder share one browser process and must use the same BrowserArgs.
+	// On macOS it names a WebKit data store of its own (macOS 14 and later;
+	// earlier versions use the default store), kept in WebKit's folder;
+	// empty means the default store.
 	UserDataFolder string
 	// BrowserArgs are extra Chromium switches, such as "--proxy-server=host:port".
+	// macOS ignores them.
 	BrowserArgs string
-	DevTools    bool
+	// DevTools allows the Web Inspector (Inspect Element on macOS).
+	DevTools bool
 	// OnNavigated runs when a top-level navigation finishes.
 	OnNavigated func(url string, ok bool)
 	// OnTitle runs when the document title changes.
