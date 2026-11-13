@@ -27,6 +27,10 @@ type windowPlat struct {
 	linkOn   bool
 	timers   map[uintptr]*darwin.Timer
 	closed   bool
+	ime      imeState
+	// event is the input event being handled, whose modifiers keyMods
+	// reports.
+	event darwin.ID
 }
 
 // byView and byDelegate find the Window an AppKit callback is for.
@@ -398,9 +402,20 @@ func (w *Window) setSystemClipboardText(s string) bool {
 	return ok
 }
 
-// keyMods returns the modifier keys held down now.
+// keyMods returns the modifier keys held with the event being handled, or
+// held down now outside of events.
 func (w *Window) keyMods() keyboard.Mods {
+	if w.event != 0 {
+		return macMods(darwin.Get[uint64](w.event, "modifierFlags"))
+	}
 	return macMods(darwin.Get[uint64](darwin.ID(darwin.Cls("NSEvent")), "modifierFlags"))
+}
+
+// handling makes ev the event keyMods reads until the returned function runs.
+func (w *Window) handling(ev darwin.ID) func() {
+	prev := w.event
+	w.event = ev
+	return func() { w.event = prev }
 }
 
 // setTimer calls onTimer(id) every ms milliseconds until killTimer, replacing
@@ -482,15 +497,6 @@ func (w *Window) setPanCursor() {
 	darwin.Send(darwin.SendClass("NSCursor", "closedHandCursor"), "set")
 }
 
-// enableIME turns the input method on for the window or off.
-func (w *Window) enableIME(on bool) {}
-
-// commitComposition ends the input method's composition, keeping its text.
-func (w *Window) commitComposition() {}
-
-// updateIMEPosition moves the input method's candidate window to the caret.
-func (w *Window) updateIMEPosition() {}
-
 // Events from AppKit.
 
 func (w *Window) eventPoint(ev darwin.ID) (float32, float32) {
@@ -498,16 +504,20 @@ func (w *Window) eventPoint(ev darwin.ID) (float32, float32) {
 }
 
 func (w *Window) mouseDown(ev darwin.ID, button int) {
+	defer w.handling(ev)()
+	w.commitComposition()
 	x, y := w.eventPoint(ev)
 	w.onButtonDown(x, y, button)
 }
 
 func (w *Window) mouseUp(ev darwin.ID, button int) {
+	defer w.handling(ev)()
 	x, y := w.eventPoint(ev)
 	w.onButtonUp(x, y, button)
 }
 
 func (w *Window) mouseMoved(ev darwin.ID) {
+	defer w.handling(ev)()
 	if !w.scripted {
 		w.onMouseMove(w.eventPoint(ev))
 	}
@@ -517,6 +527,7 @@ func (w *Window) scrollWheel(ev darwin.ID) {
 	if w.scripted {
 		return
 	}
+	defer w.handling(ev)()
 	x, y := w.eventPoint(ev)
 	precise := darwin.Get[bool](ev, "hasPreciseScrollingDeltas")
 	dx := darwin.Get[float64](ev, "scrollingDeltaX")
@@ -534,15 +545,28 @@ func (w *Window) scrollWheel(ev darwin.ID) {
 }
 
 func (w *Window) keyDown(ev darwin.ID) {
+	defer w.handling(ev)()
 	code := darwin.Get[uint16](ev, "keyCode")
 	repeat := darwin.Get[bool](ev, "isARepeat")
 	chars := darwin.GoString(darwin.Send(ev, "characters"))
 	typed := typedText(chars)
-	w.wantChar = false
-	if k := macKey(code); k != 0 && w.onKeyDown(k, repeat, typed) && !w.wantChar {
-		return
+	k := macKey(code)
+	// While the input method composes, it sees keys first.
+	composing := w.composition() != ""
+	if !composing {
+		w.wantChar = false
+		if k != 0 && w.onKeyDown(k, repeat, typed) && !w.wantChar {
+			return
+		}
+		if w.keyMods()&nonTypingMods != 0 {
+			return
+		}
 	}
-	if w.keyMods()&nonTypingMods != 0 {
+	if w.imeOn {
+		if w.imeKey(ev, composing) && k != 0 {
+			w.wantChar = false
+			w.onKeyDown(k, repeat, typed)
+		}
 		return
 	}
 	for _, r := range typed {
@@ -619,6 +643,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 	if err != nil {
 		panic(err)
 	}
+	addTextInputClient(c)
 	return c
 })
 

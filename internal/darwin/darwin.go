@@ -25,6 +25,7 @@ type (
 // Library handles, loaded when the package initializes.
 var (
 	System          uintptr
+	Objc            uintptr
 	CoreFoundation  uintptr
 	Foundation      uintptr
 	CoreGraphics    uintptr
@@ -46,6 +47,7 @@ func load(path string) uintptr {
 func init() {
 	const fw = "/System/Library/Frameworks/"
 	System = load("/usr/lib/libSystem.B.dylib")
+	Objc = load("/usr/lib/libobjc.A.dylib")
 	CoreFoundation = load(fw + "CoreFoundation.framework/CoreFoundation")
 	Foundation = load(fw + "Foundation.framework/Foundation")
 	CoreGraphics = load(fw + "CoreGraphics.framework/CoreGraphics")
