@@ -24,9 +24,23 @@ var (
 	loadPixelBufferFuncs           sync.Once
 )
 
+// movieSpec describes a test movie: w x h pixels at 10 frames a second,
+// where pixel (x, y) of frame i has the color paint(i, x, y), shown turned
+// by transform when it is set.
+type movieSpec struct {
+	w, h, frames int
+	paint        func(i, x, y int) color.NRGBA
+	transform    *cgAffineTransform
+}
+
 // writeTestMovie writes an H.264 movie of size x size pixels at 10 frames a
 // second whose frame i has the color colors(i), with AVAssetWriter.
 func writeTestMovie(t *testing.T, path string, size, frames int, colors func(i int) color.NRGBA) {
+	t.Helper()
+	writeTestMovieSpec(t, path, movieSpec{w: size, h: size, frames: frames, paint: func(i, _, _ int) color.NRGBA { return colors(i) }})
+}
+
+func writeTestMovieSpec(t *testing.T, path string, m movieSpec) {
 	t.Helper()
 	if err := loadAV(); err != nil {
 		t.Fatal(err)
@@ -39,13 +53,13 @@ func writeTestMovie(t *testing.T, path string, size, frames int, colors func(i i
 		darwin.Func(&cvPixelBufferGetBytesPerRow, coreVideo, "CVPixelBufferGetBytesPerRow")
 	})
 	var err error
-	darwin.WithPool(func() { err = writeMovie(path, size, frames, colors) })
+	darwin.WithPool(func() { err = writeMovie(path, m) })
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeMovie(path string, size, frames int, colors func(i int) color.NRGBA) error {
+func writeMovie(path string, m movieSpec) error {
 	sym := func(name string) darwin.ID { return darwin.SymbolID(avFoundation, name) }
 	num := func(n int) darwin.ID { return darwin.SendClass("NSNumber", "numberWithInt:", int32(n)) }
 	url := darwin.SendClass("NSURL", "fileURLWithPath:", darwin.String(path))
@@ -57,9 +71,12 @@ func writeMovie(path string, size, frames int, colors func(i int) color.NRGBA) e
 	settings := darwin.SendClass("NSMutableDictionary", "dictionary")
 	set := func(d darwin.ID, val, key darwin.ID) { d.Send(darwin.Sel("setObject:forKey:"), val, key) }
 	set(settings, sym("AVVideoCodecTypeH264"), sym("AVVideoCodecKey"))
-	set(settings, num(size), sym("AVVideoWidthKey"))
-	set(settings, num(size), sym("AVVideoHeightKey"))
+	set(settings, num(m.w), sym("AVVideoWidthKey"))
+	set(settings, num(m.h), sym("AVVideoHeightKey"))
 	input := darwin.SendClass("AVAssetWriterInput", "assetWriterInputWithMediaType:outputSettings:", sym("AVMediaTypeVideo"), settings)
+	if m.transform != nil {
+		input.Send(darwin.Sel("setTransform:"), *m.transform)
+	}
 	input.Send(darwin.Sel("setExpectsMediaDataInRealTime:"), false)
 	adaptor := darwin.SendClass("AVAssetWriterInputPixelBufferAdaptor",
 		"assetWriterInputPixelBufferAdaptorWithAssetWriterInput:sourcePixelBufferAttributes:", input, darwin.ID(0))
@@ -68,20 +85,20 @@ func writeMovie(path string, size, frames int, colors func(i int) color.NRGBA) e
 		return errors.New("startWriting: " + darwin.GoString(darwin.Send(darwin.Send(writer, "error"), "localizedDescription")))
 	}
 	writer.Send(darwin.Sel("startSessionAtSourceTime:"), cmTimeZero)
-	for i := range frames {
+	for i := range m.frames {
 		for !darwin.Get[bool](input, "isReadyForMoreMediaData") {
 			time.Sleep(time.Millisecond)
 		}
 		var buf uintptr
-		if cvPixelBufferCreate(0, uint64(size), uint64(size), pixelFormat32BGRA, 0, &buf) != 0 {
+		if cvPixelBufferCreate(0, uint64(m.w), uint64(m.h), pixelFormat32BGRA, 0, &buf) != 0 {
 			return errors.New("CVPixelBufferCreate failed")
 		}
 		cvPixelBufferLockBaseAddress(buf, 0)
 		base, stride := cvPixelBufferGetBaseAddress(buf), int(cvPixelBufferGetBytesPerRow(buf))
-		pix := unsafe.Slice((*byte)(base), stride*size)
-		c := colors(i)
-		for y := range size {
-			for x := range size {
+		pix := unsafe.Slice((*byte)(base), stride*m.h)
+		for y := range m.h {
+			for x := range m.w {
+				c := m.paint(i, x, y)
 				copy(pix[y*stride+x*4:], []byte{c.B, c.G, c.R, 255})
 			}
 		}
@@ -93,7 +110,7 @@ func writeMovie(path string, size, frames int, colors func(i int) color.NRGBA) e
 		}
 	}
 	input.Send(darwin.Sel("markAsFinished"))
-	writer.Send(darwin.Sel("endSessionAtSourceTime:"), cmTime{Value: int64(frames), Timescale: 10, Flags: cmTimeValid})
+	writer.Send(darwin.Sel("endSessionAtSourceTime:"), cmTime{Value: int64(m.frames), Timescale: 10, Flags: cmTimeValid})
 	done := make(chan struct{})
 	block := objc.NewBlock(func(objc.Block) { close(done) })
 	defer block.Release()
@@ -356,6 +373,48 @@ func TestVideoMissingFile(t *testing.T) {
 		v.Play()
 		if v.Playing() {
 			t.Error("failed video plays")
+		}
+	})
+}
+
+// A movie recorded on a phone held upright is stored on its side with a
+// transform that turns it; it plays turned, as on Windows.
+func TestVideoRotated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rotated.mov")
+	// Stored 64x32, red on the left and blue on the right; turned a quarter
+	// clockwise it shows 32x64, red on top and blue below.
+	writeTestMovieSpec(t, path, movieSpec{w: 64, h: 32, frames: 5,
+		paint: func(_, x, _ int) color.NRGBA {
+			if x < 32 {
+				return movieRed
+			}
+			return movieBlue
+		},
+		transform: &cgAffineTransform{A: 0, B: 1, C: -1, D: 0, TX: 32},
+	})
+	var v *Video
+	var err error
+	Do(func() { v, err = OpenVideo(path, VideoOptions{Muted: true}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer Do(v.Close)
+	waitVideo(t, "ready", func() bool { return onUI(func() bool { return v.State() == VideoReady }) })
+	pixels := func() (top, bottom color.NRGBA) {
+		var img *image.NRGBA
+		Do(func() { img, err = RenderImage(VideoView(v).Size(32, 64), 32, 64, 1) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return img.NRGBAAt(16, 12), img.NRGBAAt(16, 52)
+	}
+	waitVideo(t, "a turned frame", func() bool {
+		top, bottom := pixels()
+		return looksLike(top, movieRed) && looksLike(bottom, movieBlue)
+	})
+	Do(func() {
+		if w, h := v.Size(); w != 32 || h != 64 {
+			t.Errorf("size %dx%d, want 32x64", w, h)
 		}
 	})
 }

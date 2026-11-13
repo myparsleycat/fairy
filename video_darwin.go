@@ -229,6 +229,7 @@ func (v *Video) poll() {
 	switch darwin.Get[int64](v.item, "status") {
 	case avStatusReady:
 		v.state = VideoReady
+		v.applyRotation()
 		if darwin.Get[float32](v.player, "rate") != 0 {
 			v.state = VideoPlaying
 		}
@@ -238,6 +239,32 @@ func (v *Video) poll() {
 		v.fail(darwin.Send(v.item, "error"))
 	default:
 		v.schedulePoll()
+	}
+}
+
+// cgAffineTransform is CoreGraphics' CGAffineTransform.
+type cgAffineTransform struct{ A, B, C, D, TX, TY float64 }
+
+// applyRotation makes the output hand over frames turned as the video track
+// says they show, as for a movie recorded on a phone held upright. Media
+// Foundation turns them on Windows; AVPlayerItemVideoOutput does not, so a
+// video composition built from the asset applies the track's transform.
+func (v *Video) applyRotation() {
+	tracks := darwin.Send(v.item, "tracks")
+	for i := range darwin.Get[uint64](tracks, "count") {
+		track := darwin.Send(darwin.Send(tracks, "objectAtIndex:", i), "assetTrack")
+		if track == 0 || darwin.GoString(darwin.Send(track, "mediaType")) != "vide" {
+			continue
+		}
+		t := darwin.Get[cgAffineTransform](track, "preferredTransform")
+		if t.A == 1 && t.B == 0 && t.C == 0 && t.D == 1 {
+			return
+		}
+		comp := darwin.SendClass("AVVideoComposition", "videoCompositionWithPropertiesOfAsset:", darwin.Send(v.item, "asset"))
+		if comp != 0 {
+			v.item.Send(darwin.Sel("setVideoComposition:"), comp)
+		}
+		return
 	}
 }
 
