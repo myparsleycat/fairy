@@ -7,6 +7,7 @@
 package darwin
 
 import (
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -135,9 +136,18 @@ func Release(id ID) {
 }
 
 // Pool is an autorelease pool. Every message sent off the main run loop
-// that returns autoreleased objects runs inside one.
+// that returns autoreleased objects runs inside one. A pool belongs to its
+// thread, so the goroutine must stay on one thread until it drains.
 type Pool ID
 
-func NewPool() Pool     { return Pool(New("NSAutoreleasePool")) }
-func (p Pool) Drain()   { ID(p).Send(Sel("drain")) }
-func WithPool(f func()) { p := NewPool(); defer p.Drain(); f() }
+func NewPool() Pool   { return Pool(New("NSAutoreleasePool")) }
+func (p Pool) Drain() { ID(p).Send(Sel("drain")) }
+
+// WithPool runs f inside an autorelease pool, on one thread.
+func WithPool(f func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	p := NewPool()
+	defer p.Drain()
+	f()
+}
