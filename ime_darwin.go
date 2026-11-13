@@ -114,7 +114,7 @@ func addTextInputClient(c objc.Class) {
 	})
 	add("forwardInvocation:", "v@:@", func(self id, cmd sel, inv id) {
 		if !imeInvocation(viewWindow(self), inv) {
-			self.SendSuper(cmd, inv)
+			darwin.SendSuper(self, c, cmd, inv)
 		}
 	})
 	fwd := darwin.Symbol(darwin.Objc, "_objc_msgForward")

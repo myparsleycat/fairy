@@ -907,7 +907,7 @@ func registerElementClass() darwin.Class {
 					return darwin.String(d)
 				}
 			}
-			return self.SendSuper(cmd)
+			return darwin.SendSuper(self, axElementClass, cmd)
 		}},
 		{Cmd: darwin.Sel("accessibilityLabel"), Fn: obj(func(n *a11yNode, e *El, r Role) id {
 			if axValueKindOf(e, r) == axNameValue {
@@ -1130,11 +1130,11 @@ func registerElementClass() darwin.Class {
 				n, e, r := axNode(self)
 				return n != nil && gate(e, r)
 			}
-			return objc.SendSuper[bool](self, cmd, s)
+			return darwin.GetSuper[bool](self, axElementClass, cmd, s)
 		}},
 		{Cmd: darwin.Sel("forwardInvocation:"), Fn: func(self id, cmd sel, inv id) {
 			if !axInvocation(self, inv) {
-				self.SendSuper(cmd, inv)
+				darwin.SendSuper(self, axElementClass, cmd, inv)
 			}
 		}},
 	}
@@ -1241,11 +1241,11 @@ func addAccessibility(c objc.Class) {
 	add("accessibilityChildren", "@@:", func(self id, cmd sel) id {
 		w := win(self)
 		if w == nil {
-			return self.SendSuper(cmd)
+			return darwin.SendSuper(self, c, cmd)
 		}
 		arr := w.a11yArray(w.a11yTree().kids[0])
 		// Native views placed in the window, such as a web view.
-		if sub := self.SendSuper(cmd); sub != 0 {
+		if sub := darwin.SendSuper(self, c, cmd); sub != 0 {
 			darwin.Send(arr, "addObjectsFromArray:", sub)
 		}
 		return arr
@@ -1256,7 +1256,7 @@ func addAccessibility(c objc.Class) {
 				return w.a11yElement(f)
 			}
 		}
-		return self.SendSuper(cmd)
+		return darwin.SendSuper(self, c, cmd)
 	})
 	add("accessibilityHitTest:", "@@:"+encAXPoint, func(self id, cmd sel, x, y float64) id {
 		if w := win(self); w != nil {
@@ -1264,6 +1264,6 @@ func addAccessibility(c objc.Class) {
 				return w.a11yElement(hit)
 			}
 		}
-		return self.SendSuper(cmd, darwin.CGPoint{X: x, Y: y})
+		return darwin.SendSuper(self, c, cmd, darwin.CGPoint{X: x, Y: y})
 	})
 }

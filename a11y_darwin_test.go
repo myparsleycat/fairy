@@ -405,6 +405,49 @@ func TestDarwinAccessibilityMenuOpened(t *testing.T) {
 	}
 }
 
+// Key-value observing swaps an object's class for a runtime subclass;
+// methods that call super must still reach the superclass rather than
+// themselves.
+func TestDarwinAccessibilityUnderKVO(t *testing.T) {
+	w := newTestWindow(t, func() *El {
+		return Col(Box(Text("Save")).OnClick(func() {}).Size(80, 24))
+	})
+	className := func(obj darwin.ID) string { return darwin.GoString(darwin.Send(darwin.ID(obj.Class()), "description")) }
+	var swapped []string
+	var role string
+	var allowed bool
+	var kids int
+	Do(func() {
+		darwin.WithPool(func() {
+			w.renderFrame()
+			btn := axChildren(w.view)[0]
+			observer := darwin.New("NSObject")
+			defer darwin.Release(observer)
+			key := darwin.String("accessibilityLabel")
+			for _, obj := range []darwin.ID{btn, w.view} {
+				before := className(obj)
+				darwin.Send(obj, "addObserver:forKeyPath:options:context:", observer, key, uint64(0), uintptr(0))
+				if after := className(obj); after != before {
+					swapped = append(swapped, after)
+				}
+			}
+			role = axString(btn, "accessibilityRoleDescription")
+			allowed = darwin.Get[bool](btn, "isAccessibilitySelectorAllowed:", darwin.Sel("accessibilityParent"))
+			kids = len(axChildren(w.view))
+			darwin.Send(w.view, "accessibilityFocusedUIElement")
+			for _, obj := range []darwin.ID{btn, w.view} {
+				darwin.Send(obj, "removeObserver:forKeyPath:", observer, key)
+			}
+		})
+	})
+	if len(swapped) != 2 {
+		t.Logf("observing swapped the classes of only %q", swapped)
+	}
+	if role == "" || !allowed || kids != 1 {
+		t.Errorf("observed: role description %q, parent allowed %v, %d children", role, allowed, kids)
+	}
+}
+
 // Nothing is built for a window that no assistive client has asked about.
 func TestDarwinAccessibilityLazy(t *testing.T) {
 	w := newTestWindow(t, func() *El { return Box(Text("Save")).OnClick(func() {}) })
