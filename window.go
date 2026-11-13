@@ -204,7 +204,7 @@ type Window struct {
 	capture         *offscreenCapture
 	surfaces        map[uint64]*surfaceEntry
 	invalidSurfaces map[string]bool   // InvalidateSurface keys waiting for the next paint
-	webviews        map[*WebView]bool // hosted webviews placed this frame
+	webviews        map[*WebView]bool // hosted webviews; on macOS also hidden ones, valued by whether placed this frame
 	iconTiles       map[iconKey]render.Tile
 	iconGen         int
 
