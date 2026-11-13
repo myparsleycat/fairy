@@ -24,7 +24,6 @@ const (
 	usageShaderRead   = 1
 	usageRenderTarget = 4
 
-	storageShared  = 0
 	storagePrivate = 2
 
 	resourceStorageShared = 0 // MTLResourceStorageModeShared in MTLResourceOptions
@@ -70,16 +69,6 @@ func init() {
 	darwin.Func(&pthreadSelf, darwin.System, "pthread_self")
 }
 
-// withPool runs f in an autorelease pool on one OS thread, as pools belong
-// to the thread that made them.
-func withPool(f func()) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	p := darwin.NewPool()
-	defer p.Drain()
-	f()
-}
-
 // nsError returns the description of an NSError, or a fallback.
 func nsError(what string, err id) error {
 	if err == 0 {
@@ -94,7 +83,7 @@ func newTexture2D(dev id, format, width, height int, mipmapped bool, usage, stor
 		return 0, errors.New("render: texture size out of range")
 	}
 	var tex id
-	withPool(func() {
+	darwin.WithPool(func() {
 		desc := darwin.SendClass("MTLTextureDescriptor", "texture2DDescriptorWithPixelFormat:width:height:mipmapped:",
 			uint64(format), uint64(width), uint64(height), mipmapped)
 		desc.Send(darwin.Sel("setUsage:"), usage)
@@ -134,7 +123,7 @@ func blitUpload(blit, buf id, offset, rowBytes int, tex id, x, y, w, h int) {
 // any committed later, and regenerates its mips when it has them.
 func uploadTexture(d *Device, tex id, x, y, w, h int, data []byte, rowBytes int, mips bool) error {
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		buf := darwin.Send(d.dev, "newBufferWithBytes:length:options:", unsafe.Pointer(&data[0]), uint64(rowBytes*h), uint64(resourceStorageShared))
 		runtime.KeepAlive(data)
 		if buf == 0 {
@@ -164,7 +153,7 @@ func uploadTexture(d *Device, tex id, x, y, w, h int, data []byte, rowBytes int,
 func readTexture(d *Device, tex id, w, h int) ([]byte, error) {
 	var out []byte
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		buf, e := newBuffer(d.dev, w*h*4)
 		if e != nil {
 			err = e

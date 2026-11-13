@@ -101,17 +101,18 @@ func New(view uintptr, width, height int, transparent bool) (*Renderer, error) {
 	}
 	layer := id(view)
 	var isLayer bool
-	withPool(func() { isLayer = darwin.Get[bool](layer, "isKindOfClass:", darwin.Cls("CAMetalLayer")) })
+	darwin.WithPool(func() { isLayer = darwin.Get[bool](layer, "isKindOfClass:", darwin.Cls("CAMetalLayer")) })
 	if !isLayer {
 		return nil, errors.New("render: view is not a CAMetalLayer")
 	}
-	r := &Renderer{width: max(width, 1), height: max(height, 1)}
+	width, height = drawableSize(width, height)
+	r := &Renderer{width: width, height: height}
 	var err error
 	if r.ds, err = AcquireDevice(); err != nil {
 		return nil, err
 	}
 	r.layer = darwin.Retain(layer)
-	withPool(func() { r.configureLayer(transparent) })
+	darwin.WithPool(func() { r.configureLayer(transparent) })
 	if err = r.init(); err != nil {
 		r.Release()
 		return nil, err
@@ -192,10 +193,16 @@ func (r *Renderer) Device() *Device { return r.ds }
 // Size returns the drawable size in device pixels.
 func (r *Renderer) Size() (int, int) { return r.width, r.height }
 
-// Resize sets the layer's drawable size. Call it on the main thread when
-// the view's size or backing scale changes.
+// drawableSize clamps a requested drawable size to what a CAMetalLayer
+// takes: it ignores a size above the largest texture and keeps its old one.
+func drawableSize(width, height int) (int, int) {
+	return min(max(width, 1), maxTextureSize), min(max(height, 1), maxTextureSize)
+}
+
+// Resize sets the layer's drawable size, clamped to the largest texture.
+// Call it on the main thread when the view's size or backing scale changes.
 func (r *Renderer) Resize(width, height int) error {
-	width, height = max(width, 1), max(height, 1)
+	width, height = drawableSize(width, height)
 	if width == r.width && height == r.height || r.target != nil {
 		return nil
 	}
@@ -275,6 +282,12 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) (wait time.Duration, err err
 
 	if drawable != 0 {
 		back = darwin.Send(drawable, "texture")
+		// The viewport, backdrop copies and snapshot use the drawable's real
+		// size, in case the layer did not take the one Resize asked for.
+		w, h := int(darwin.Get[uint64](back, "width")), int(darwin.Get[uint64](back, "height"))
+		if w > 0 && h > 0 {
+			r.width, r.height = w, h
+		}
 	} else {
 		back = r.target.tex
 	}

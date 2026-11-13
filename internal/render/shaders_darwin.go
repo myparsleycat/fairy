@@ -49,7 +49,7 @@ func (d *Device) pipelines() (*pipelines, error) {
 	}
 	var p pipelines
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		opts := darwin.New("MTLCompileOptions")
 		defer darwin.Release(opts)
 		var e id
