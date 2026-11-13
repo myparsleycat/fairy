@@ -112,6 +112,40 @@ func TestFaceMatchingPrefersNormalWidth(t *testing.T) {
 	}
 }
 
+// A wght axis on the CSS scale takes CSS weights; another, such as Skia's
+// 0.48 to 3.2, is mapped onto its range rather than clamped to its ends.
+func TestAxisWeight(t *testing.T) {
+	for _, c := range []struct {
+		weight, face      int
+		lo, hi, cur, want float64
+	}{
+		{700, 400, 1, 1000, 400, 700},
+		{950, 400, 100, 900, 400, 900},
+		{300, 400, 200, 800, 400, 300},
+		{500, 500, 0.48, 3.2, 1, 1},
+		{900, 500, 0.48, 3.2, 1, 3.2},
+		{100, 500, 0.48, 3.2, 1, 0.48},
+		{700, 500, 0.48, 3.2, 1, 2.1},
+		{300, 500, 0.48, 3.2, 1, 0.74},
+	} {
+		if got, ok := axisWeight(c.weight, c.face, c.lo, c.hi, c.cur); !ok || math.Abs(got-c.want) > 1e-9 {
+			t.Errorf("axisWeight(%d, %d, %v, %v, %v) = %v, %v; want %v", c.weight, c.face, c.lo, c.hi, c.cur, got, ok, c.want)
+		}
+	}
+	s := newTestSystem(t)
+	if len(s.familyFaces("Skia")) == 0 {
+		t.Skip("Skia is not installed")
+	}
+	prev := float32(0)
+	for _, w := range []int{100, 400, 700, 900} {
+		got, _ := s.Measure("Hello world", Style{Family: "Skia", Size: 14, Weight: w}, Unbounded)
+		if got <= prev {
+			t.Errorf("Skia %d is %v wide, no wider than the weight before it (%v)", w, got, prev)
+		}
+		prev = got
+	}
+}
+
 // Bold text that falls back to a SetFallbackFamilies family takes its bold face.
 func TestFallbackFamiliesKeepWeight(t *testing.T) {
 	s := newTestSystem(t)

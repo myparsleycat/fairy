@@ -401,7 +401,11 @@ func faceFont(face fontFace, weight int, italic bool, size float64) uintptr {
 		}
 		lo, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisMinKey))
 		hi, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisMaxKey))
-		w := min(max(float64(weight), lo), hi)
+		def, _ := numberValue(cfDictionaryGetValue(axis, kCTFontVariationAxisDefKey))
+		w, ok := axisWeight(weight, face.weight, lo, hi, variationValue(font, tagWght, def))
+		if !ok {
+			break
+		}
 		tag, val := cfInt(tagWght), cfFloat(w)
 		vars := cfDict(tag, val)
 		attrs := cfDict(kCTFontVariationAttribute, vars)
@@ -416,6 +420,42 @@ func faceFont(face fontFace, weight int, italic bool, size float64) uintptr {
 		break
 	}
 	return font
+}
+
+// axisWeight returns the value of a wght axis of range [lo, hi] for a CSS
+// weight, in a face of weight faceWeight whose axis is at cur. The OpenType
+// wght axis is on the CSS scale, but older fonts such as Skia (0.48 to 3.2)
+// have their own; their range is mapped proportionally, with faceWeight at
+// cur, 100 at lo and 900 at hi. ok is false when the axis has no range.
+func axisWeight(weight, faceWeight int, lo, hi, cur float64) (float64, bool) {
+	if hi <= lo {
+		return 0, false
+	}
+	if lo >= 1 && hi <= 1000 && hi >= 100 {
+		return min(max(float64(weight), lo), hi), true
+	}
+	cur = min(max(cur, lo), hi)
+	w, fw := float64(min(max(weight, 100), 900)), float64(min(max(faceWeight, 101), 899))
+	if w >= fw {
+		return cur + (hi-cur)*(w-fw)/(900-fw), true
+	}
+	return cur - (cur-lo)*(fw-w)/(fw-100), true
+}
+
+// variationValue returns the value of axis tag in font, or def when the font
+// does not set it.
+func variationValue(font uintptr, tag uint32, def float64) float64 {
+	vars := ctFontCopyVariation(font)
+	if vars == 0 {
+		return def
+	}
+	defer cfRelease(vars)
+	key := cfInt(int32(tag))
+	defer cfRelease(key)
+	if v, ok := numberValue(cfDictionaryGetValue(vars, key)); ok {
+		return v
+	}
+	return def
 }
 
 // italicize returns the italic face of font's family, or font slanted when

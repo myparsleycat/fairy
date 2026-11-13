@@ -71,6 +71,7 @@ var (
 	ctFontCopyTraits                   func(font uintptr) uintptr
 	ctFontCopyTable                    func(font uintptr, tag uint32, opts uint32) uintptr
 	ctFontCopyVariationAxes            func(font uintptr) uintptr
+	ctFontCopyVariation                func(font uintptr) uintptr
 	ctFontGetSymbolicTraits            func(font uintptr) uint32
 	ctFontGetSize                      func(font uintptr) float64
 	ctFontGetAscent                    func(font uintptr) float64
@@ -141,6 +142,7 @@ var (
 	kCTFontVariationAxisIDKey      uintptr
 	kCTFontVariationAxisMinKey     uintptr
 	kCTFontVariationAxisMaxKey     uintptr
+	kCTFontVariationAxisDefKey     uintptr
 	kCTFontOpticalSizeAttribute    uintptr // 0 where CoreText lacks it
 	kCGColorSpaceSRGB              uintptr
 )
@@ -204,6 +206,7 @@ func init() {
 		{&ctFontCopyTraits, ct, "CTFontCopyTraits"},
 		{&ctFontCopyTable, ct, "CTFontCopyTable"},
 		{&ctFontCopyVariationAxes, ct, "CTFontCopyVariationAxes"},
+		{&ctFontCopyVariation, ct, "CTFontCopyVariation"},
 		{&ctFontGetSymbolicTraits, ct, "CTFontGetSymbolicTraits"},
 		{&ctFontGetSize, ct, "CTFontGetSize"},
 		{&ctFontGetAscent, ct, "CTFontGetAscent"},
@@ -279,6 +282,7 @@ func init() {
 		{&kCTFontVariationAxisIDKey, ct, "kCTFontVariationAxisIdentifierKey"},
 		{&kCTFontVariationAxisMinKey, ct, "kCTFontVariationAxisMinimumValueKey"},
 		{&kCTFontVariationAxisMaxKey, ct, "kCTFontVariationAxisMaximumValueKey"},
+		{&kCTFontVariationAxisDefKey, ct, "kCTFontVariationAxisDefaultValueKey"},
 		{&kCGColorSpaceSRGB, cg, "kCGColorSpaceSRGB"},
 	} {
 		*c.dst = uintptr(darwin.SymbolID(c.lib, c.name))
