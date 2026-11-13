@@ -12,7 +12,8 @@ import (
 const suggestions = 5
 
 // The macOS spell checker (NSSpellChecker) serves every call from the
-// goroutine that makes it; mu keeps one call at a time.
+// goroutine that makes it; mu keeps one call at a time and guards the
+// state below.
 var (
 	mu       sync.Mutex
 	checker  darwin.ID
@@ -60,33 +61,71 @@ func language(lang string) darwin.ID {
 	return l
 }
 
-// Check returns the misspelled ranges of text.
+// chunkUnits is about how many UTF-16 units Check hands the spell checker at
+// once. One call scans from where it starts to the next misspelling, so
+// chunks bound how long a call, and so mu, can be held.
+const chunkUnits = 4096
+
+// Check returns the misspelled ranges of text. It takes mu for one spell
+// checker call at a time, so that Suggest, Add and Ignore, which the context
+// menu calls on the UI thread, wait for a call, not for the whole text.
 func Check(ctx context.Context, lang, text string) []Range {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	n := uint64(len(utf16.Encode([]rune(text))))
+	u := utf16.Encode([]rune(text))
 	var units []Range
-	mu.Lock()
-	defer mu.Unlock()
-	darwin.WithPool(func() {
-		l := language(lang)
-		if l == 0 {
-			return
-		}
-		s := darwin.String(text)
-		for at := uint64(0); at < n && ctx.Err() == nil; {
-			r := darwin.Get[darwin.NSRange](checker,
-				"checkSpellingOfString:startingAt:language:wrap:inSpellDocumentWithTag:wordCount:",
-				s, int64(at), l, false, docTag, uintptr(0))
-			if r.Location == notFound || r.Length == 0 || r.Location < at {
-				break
+	for start := 0; start < len(u) && ctx.Err() == nil; {
+		end := chunkEnd(u, start)
+		ok := true
+		darwin.WithPool(func() {
+			mu.Lock()
+			l := language(lang)
+			mu.Unlock()
+			if l == 0 {
+				ok = false
+				return
 			}
-			units = append(units, Range{int(r.Location), int(r.Location + r.Length)})
-			at = r.Location + r.Length
+			s := darwin.String(string(utf16.Decode(u[start:end])))
+			n := uint64(end - start)
+			for at := uint64(0); at < n && ctx.Err() == nil; {
+				mu.Lock()
+				r := darwin.Get[darwin.NSRange](checker,
+					"checkSpellingOfString:startingAt:language:wrap:inSpellDocumentWithTag:wordCount:",
+					s, int64(at), l, false, docTag, uintptr(0))
+				mu.Unlock()
+				if r.Location == notFound || r.Length == 0 || r.Location < at {
+					break
+				}
+				units = append(units, Range{start + int(r.Location), start + int(r.Location+r.Length)})
+				at = r.Location + r.Length
+			}
+		})
+		if !ok {
+			return nil
 		}
-	})
+		start = end
+	}
 	return utf16ToBytes(text, units)
+}
+
+// chunkEnd returns where the chunk of u that starts at start ends: after the
+// first space or line break past chunkUnits, so that no word is split, or
+// past twice that, before a surrogate pair rather than inside one.
+func chunkEnd(u []uint16, start int) int {
+	if len(u)-start <= 2*chunkUnits {
+		return len(u)
+	}
+	for i := start + chunkUnits; i < start+2*chunkUnits; i++ {
+		if c := u[i]; c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == 0x3000 {
+			return i + 1
+		}
+	}
+	end := start + 2*chunkUnits
+	if utf16.IsSurrogate(rune(u[end-1])) && u[end-1] < 0xDC00 {
+		end--
+	}
+	return end
 }
 
 // Suggest returns up to five replacements for word.

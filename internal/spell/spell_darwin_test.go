@@ -5,7 +5,55 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
+
+// A long text is checked in chunks that keep every misspelling, including
+// those next to a chunk's end.
+func TestSpellLongText(t *testing.T) {
+	text := strings.Repeat("😀 This is a test of speling. ", 1000) + strings.Repeat("x", 3*chunkUnits) + " speling"
+	errs := Check(context.Background(), "en-US", text)
+	n := 0
+	for _, r := range errs {
+		if text[r.Start:r.End] == "speling" {
+			n++
+		}
+	}
+	if n != 1001 {
+		t.Errorf("found %d of 1001 misspellings in %d ranges", n, len(errs))
+	}
+}
+
+// The right-click menu must not wait for a background check of a long text
+// to finish.
+func TestSpellSuggestDuringCheck(t *testing.T) {
+	text := strings.Repeat("This is a tset of speling in a long documnet. ", 4000)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		Check(ctx, "en-US", text)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-done:
+		t.Skip("the check finished before Suggest ran")
+	default:
+	}
+	start := time.Now()
+	s := Suggest("en-US", "speling")
+	took := time.Since(start)
+	if !slices.Contains(s, "spelling") {
+		t.Errorf("suggestions for speling = %q", s)
+	}
+	if took > 300*time.Millisecond {
+		t.Errorf("Suggest waited %v for the running check", took)
+	}
+}
 
 // runs counts the runs of TestSpellDarwin.
 var runs int
