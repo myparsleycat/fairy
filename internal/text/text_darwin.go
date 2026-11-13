@@ -83,7 +83,8 @@ type System struct {
 	fontVersion int
 	fonts       map[fontKey]uintptr   // CTFont of each run style
 	families    map[string][]fontFace // installed faces by lower-case family
-	cascade     uintptr               // CFArray of SetFallbackFamilies faces, or 0
+	fallback    []string              // the SetFallbackFamilies families
+	cascades    map[styleKey]uintptr  // CFArray of their faces for each style, or 0
 	layouts     map[layoutKey]*Layout
 	shapes      map[shapeKey]*Layout // the latest reusable layout of each shaping
 	glyphs      map[glyphKey]glyphEntry
@@ -118,6 +119,7 @@ func newSystem(atlas glyphAtlas) *System {
 	return &System{
 		fonts:      map[fontKey]uintptr{},
 		families:   map[string][]fontFace{},
+		cascades:   map[styleKey]uintptr{},
 		layouts:    map[layoutKey]*Layout{},
 		shapes:     map[shapeKey]*Layout{},
 		glyphs:     map[glyphKey]glyphEntry{},
@@ -301,8 +303,7 @@ func (s *System) Release() {
 	clear(s.families)
 	s.clearFaces()
 	clear(s.glyphs)
-	cfRelease(s.cascade)
-	s.cascade = 0
+	s.clearCascades()
 	s.color.release()
 	if s.srgb != 0 {
 		cgColorSpaceRelease(s.srgb)

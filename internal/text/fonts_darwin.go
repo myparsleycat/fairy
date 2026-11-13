@@ -292,8 +292,8 @@ func (s *System) font(family string, weight int, italic bool, size, scale float3
 	// also take as the optical size: SF would set text on a 2x screen with
 	// the narrower shapes and tighter tracking of twice the point size.
 	var kv []uintptr
-	if s.cascade != 0 {
-		kv = append(kv, kCTFontCascadeListAttribute, s.cascade)
+	if c := s.cascade(weight, italic); c != 0 {
+		kv = append(kv, kCTFontCascadeListAttribute, c)
 	}
 	if scale != 1 && kCTFontOpticalSizeAttribute != 0 {
 		opsz := cfFloat(float64(size / scale))
@@ -448,28 +448,55 @@ func (s *System) familyFaces(name string) []fontFace {
 	return faces
 }
 
-// setFallback builds the cascade list of families: registered or installed
-// faces of the regular weight, tried before the system fallback.
+type styleKey struct {
+	weight int
+	italic bool
+}
+
+// setFallback sets the families of SetFallbackFamilies, whose cascade lists
+// are built per style on first use.
 func (s *System) setFallback(families []string) {
-	cfRelease(s.cascade)
-	s.cascade = 0
+	s.clearCascades()
+	s.fallback = families
+}
+
+func (s *System) clearCascades() {
+	for _, c := range s.cascades {
+		cfRelease(c)
+	}
+	clear(s.cascades)
+}
+
+// cascade returns the cascade list of the fallback families for a style, or
+// 0 when there are none: the registered or installed face of each family
+// that CSS would pick for the weight and style, tried before the system
+// fallback, so bold or italic text that falls back stays bold or italic.
+func (s *System) cascade(weight int, italic bool) uintptr {
+	if len(s.fallback) == 0 {
+		return 0
+	}
+	k := styleKey{weight, italic}
+	if c, ok := s.cascades[k]; ok {
+		return c
+	}
 	var descs []uintptr
-	for _, fam := range families {
+	for _, fam := range s.fallback {
 		kind, name := classify(fam)
-		var faces []fontFace
-		switch kind {
-		case familyNamed:
-			if faces = registeredFaces(name); len(faces) == 0 {
-				faces = s.familyFaces(name)
-			}
-		default:
+		if kind != familyNamed {
 			continue // the system font is first in the system fallback anyway
 		}
+		faces := registeredFaces(name)
+		if len(faces) == 0 {
+			faces = s.familyFaces(name)
+		}
 		if len(faces) > 0 {
-			descs = append(descs, matchFace(faces, 400, false).desc)
+			descs = append(descs, matchFace(faces, weight, italic).desc)
 		}
 	}
+	var c uintptr
 	if len(descs) > 0 {
-		s.cascade = cfArray(descs)
+		c = cfArray(descs)
 	}
+	s.cascades[k] = c
+	return c
 }

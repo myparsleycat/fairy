@@ -3,6 +3,8 @@ package text
 import (
 	"math"
 	"testing"
+
+	"github.com/myparsleycat/fairy/internal/darwin"
 )
 
 // Text on a 2x screen keeps the optical size and tracking of its point size,
@@ -32,6 +34,37 @@ func TestRetinaKeepsPointSizeOpticalSize(t *testing.T) {
 		w2, h2 := s.Measure(pangram, hi, Unbounded)
 		if math.Abs(float64(w2/2-w1)) > 0.002*float64(w1) || math.Abs(float64(h2/2-h1)) > 1 {
 			t.Errorf("%+v: %vx%v at 1x, %vx%v points at 2x", st, w1, h1, w2/2, h2/2)
+		}
+	}
+}
+
+// Bold text that falls back to a SetFallbackFamilies family takes its bold face.
+func TestFallbackFamiliesKeepWeight(t *testing.T) {
+	s := newTestSystem(t)
+	const family = "Apple SD Gothic Neo"
+	if len(s.familyFaces(family)) < 2 {
+		t.Skip(family + " is not installed")
+	}
+	SetFallbackFamilies([]string{family})
+	defer SetFallbackFamilies(nil)
+	for _, weight := range []int{400, 700} {
+		l := s.Layout("Hello 한국어", Style{Size: 14, Weight: weight}, Unbounded)
+		found := false
+		for _, ln := range l.lines {
+			forRuns(ln.draw, func(_, font uintptr, _ []uint16, _ []darwin.CGPoint, _ []darwin.CGSize, _ []int) {
+				if familyOf(font) != family {
+					return
+				}
+				found = true
+				desc := ctFontCopyFontDescriptor(font)
+				defer cfRelease(desc)
+				if got := describeFace(desc).weight; got != weight {
+					t.Errorf("weight %d falls back to %s %d", weight, family, got)
+				}
+			})
+		}
+		if !found {
+			t.Errorf("weight %d: the Hangul did not fall back to %s", weight, family)
 		}
 	}
 }
