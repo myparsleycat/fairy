@@ -420,3 +420,127 @@ func (t *a11yTree) exposedAncestor(e *El) uint64 {
 	}
 	return 0
 }
+
+// a11yRoots returns the trees assistive technology sees: the view and its
+// layers, or only the topmost modal overlay and the layers above it.
+func (w *Window) a11yRoots() []*El {
+	start := -1
+	for i, l := range w.layers {
+		if l.modal && !l.hidden {
+			start = i
+		}
+	}
+	var roots []*El
+	if start < 0 && w.root != nil {
+		roots = append(roots, w.root)
+	}
+	for _, l := range w.layers[max(start, 0):] {
+		if !l.hidden {
+			roots = append(roots, l.root)
+		}
+	}
+	return roots
+}
+
+// a11yFocus returns the element assistive technology should treat as
+// focused, or 0.
+func (w *Window) a11yFocus() uint64 {
+	f := w.focusedEl()
+	if f == nil {
+		return 0
+	}
+	t := w.a11yTree()
+	if a := t.el[t.active]; a != nil && w.activeFor(a, f) {
+		return t.active
+	}
+	return t.exposedAncestor(f)
+}
+
+// activeFor reports whether the ActiveDescendant a belongs to the focused
+// element f: it is inside f, in the same popover, or in a popover anchored at
+// f or one of f's ancestors.
+func (w *Window) activeFor(a, f *El) bool {
+	ra, rf := a, f
+	for ; ra.parent != nil; ra = ra.parent {
+		if ra == f {
+			return true
+		}
+	}
+	for rf.parent != nil {
+		rf = rf.parent
+	}
+	for _, l := range w.layers {
+		if l.root != ra || l.pop == nil {
+			continue
+		}
+		if ra == rf {
+			return true
+		}
+		anchor := w.byID[l.anchor]
+		for e := f; e != nil; e = e.parent {
+			if e == anchor {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// visibleRect returns the part of e that is on screen, or false when it is
+// scrolled out, culled or inside a culled ancestor.
+func visibleRect(e *El) (rectF, bool) {
+	for a := e; a != nil; a = a.parent {
+		if a.culled {
+			return rectF{}, false
+		}
+	}
+	r := rectF{e.absX, e.absY, e.w, e.h}.intersect(e.clipR)
+	return r, !r.empty()
+}
+
+// setPosition returns the element's 1-based position in its set and the set's
+// size: as set with PositionInSet, or for a virtual list row, its index among
+// all rows of the list, built or not.
+func setPosition(e *El) (int32, int32) {
+	if a := e.a11y; a != nil && a.size > 0 {
+		return a.pos, a.size
+	}
+	if e.rowIndex > 0 && e.parent != nil && e.parent.virtual != nil {
+		return e.rowIndex, int32(e.parent.virtual.count)
+	}
+	return 0, 0
+}
+
+// a11yValue returns the value of an element exposed with role r as text:
+// its ValueText, the shown choice of a combo box, or the text of an edit
+// field, which is empty for a password.
+func (e *El) a11yValue(r Role) string {
+	if e.a11y != nil && e.a11y.valueText != "" {
+		return e.a11y.valueText
+	}
+	if r == RoleComboBox {
+		// The shown choice, not the label that names the combo box.
+		var b strings.Builder
+		for _, c := range e.children {
+			textContent(c, &b)
+		}
+		return b.String()
+	}
+	if e.input == nil {
+		return e.text // a read-only field drawn as Text
+	}
+	if e.input.password {
+		return ""
+	}
+	return e.input.value
+}
+
+// steps returns the amounts a range moves by for a small step, such as an
+// arrow key, and for a large one, such as Page Up.
+func (g *rangeProps) steps() (small, large float64) {
+	small = g.step
+	if small <= 0 {
+		small = (g.max - g.min) / 100
+	}
+	return small, max((g.max-g.min)/10, small)
+}

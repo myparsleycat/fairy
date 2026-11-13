@@ -69,27 +69,6 @@ func (w *Window) a11yShutdown() {
 	w.acc = nil
 }
 
-// a11yRoots returns the trees UI Automation sees: the view and its layers, or
-// only the topmost modal overlay and the layers above it.
-func (w *Window) a11yRoots() []*El {
-	start := -1
-	for i, l := range w.layers {
-		if l.modal && !l.hidden {
-			start = i
-		}
-	}
-	var roots []*El
-	if start < 0 && w.root != nil {
-		roots = append(roots, w.root)
-	}
-	for _, l := range w.layers[max(start, 0):] {
-		if !l.hidden {
-			roots = append(roots, l.root)
-		}
-	}
-	return roots
-}
-
 func (w *Window) a11yTree() *a11yTree {
 	a := w.acc
 	if a.tree == nil || a.ver != w.treeVer {
@@ -120,49 +99,6 @@ func (w *Window) a11yProvider(id uint64) *uia.Provider {
 		w.acc.nodes[id] = n
 	}
 	return n.prov
-}
-
-// a11yFocus returns the element UI Automation should treat as focused, or 0.
-func (w *Window) a11yFocus() uint64 {
-	f := w.focusedEl()
-	if f == nil {
-		return 0
-	}
-	t := w.a11yTree()
-	if a := t.el[t.active]; a != nil && w.activeFor(a, f) {
-		return t.active
-	}
-	return t.exposedAncestor(f)
-}
-
-// activeFor reports whether the ActiveDescendant a belongs to the focused
-// element f: it is inside f, in the same popover, or in a popover anchored at
-// f or one of f's ancestors.
-func (w *Window) activeFor(a, f *El) bool {
-	ra, rf := a, f
-	for ; ra.parent != nil; ra = ra.parent {
-		if ra == f {
-			return true
-		}
-	}
-	for rf.parent != nil {
-		rf = rf.parent
-	}
-	for _, l := range w.layers {
-		if l.root != ra || l.pop == nil {
-			continue
-		}
-		if ra == rf {
-			return true
-		}
-		anchor := w.byID[l.anchor]
-		for e := f; e != nil; e = e.parent {
-			if e == anchor {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // a11yAfterFrame raises focus, structure and property change events.
@@ -240,18 +176,6 @@ func (w *Window) screenRect(r rectF) uia.Rect {
 		Width:  float64(r.w) * s,
 		Height: float64(r.h) * s,
 	}
-}
-
-// visibleRect returns the part of e that is on screen, or false when it is
-// scrolled out, culled or inside a culled ancestor.
-func visibleRect(e *El) (rectF, bool) {
-	for a := e; a != nil; a = a.parent {
-		if a.culled {
-			return rectF{}, false
-		}
-	}
-	r := rectF{e.absX, e.absY, e.w, e.h}.intersect(e.clipR)
-	return r, !r.empty()
 }
 
 var controlTypes = map[Role]int32{
@@ -435,19 +359,6 @@ func (n *a11yNode) Property(id int32) any {
 	return nil
 }
 
-// setPosition returns the element's 1-based position in its set and the set's
-// size: as set with PositionInSet, or for a virtual list row, its index among
-// all rows of the list, built or not.
-func setPosition(e *El) (int32, int32) {
-	if a := e.a11y; a != nil && a.size > 0 {
-		return a.pos, a.size
-	}
-	if e.rowIndex > 0 && e.parent != nil && e.parent.virtual != nil {
-		return e.rowIndex, int32(e.parent.virtual.count)
-	}
-	return 0, 0
-}
-
 func (n *a11yNode) Pattern(id int32) any {
 	e, r := n.el()
 	a := e.a11y
@@ -588,24 +499,7 @@ func (n *a11yNode) Collapse() {
 
 func (n *a11yNode) Value() string {
 	e, r := n.el()
-	if e.a11y != nil && e.a11y.valueText != "" {
-		return e.a11y.valueText
-	}
-	if r == RoleComboBox {
-		// The shown choice, not the label that names the combo box.
-		var b strings.Builder
-		for _, c := range e.children {
-			textContent(c, &b)
-		}
-		return b.String()
-	}
-	if e.input == nil {
-		return e.text // a read-only field drawn as Text
-	}
-	if e.input.password {
-		return ""
-	}
-	return e.input.value
+	return e.a11yValue(r)
 }
 
 func (n *a11yNode) ReadOnly() bool {
@@ -633,11 +527,8 @@ func (n *a11yNode) SetValue(s string) {
 func (n *a11yNode) Range() (value, lo, hi, small, large float64) {
 	e, _ := n.el()
 	g := e.a11y.rng
-	small = g.step
-	if small <= 0 {
-		small = (g.max - g.min) / 100
-	}
-	return g.value, g.min, g.max, small, max((g.max-g.min)/10, small)
+	small, large = g.steps()
+	return g.value, g.min, g.max, small, large
 }
 
 func (n *a11yNode) SetRangeValue(v float64) {
