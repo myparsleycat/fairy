@@ -1,6 +1,6 @@
 // Command shell shows the kit's app shell: a frameless window with a
 // SplitView, a Sidebar with sections and rows, and an inspector pane.
-// Ctrl+Shift+B shows and hides the sidebar; F5 switches the theme.
+// Ctrl+Shift+B (⇧⌘B on macOS) shows and hides the sidebar; F5 switches the theme.
 package main
 
 import (
@@ -120,17 +120,19 @@ func (a *app) view(cx *fairy.Cx) *fairy.El {
 		fairy.Spacer(),
 		kit.IconButton(lucide.Info, a.inspector.Toggle, kit.Small, kit.Tooltip(inspectorLabel)).
 			Label(inspectorLabel).Expanded(a.inspector.Open()),
-		fairy.Box().W(8),
-		// Glyphs of Segoe MDL2 Assets: ChromeMinimize, ChromeMaximize and ChromeClose.
-		caption("\uE921", false, w.Minimize),
-		caption("\uE922", false, w.ToggleMaximize).MaximizeButton(),
-		caption("\uE8BB", true, w.Close),
 	).HFull().Gap(4).Align(fairy.Center)
+	if !fairy.SystemWindowControls {
+		toolbar.Child(fairy.Box().W(8),
+			// Glyphs of Segoe MDL2 Assets: ChromeMinimize, ChromeMaximize and ChromeClose.
+			caption("\uE921", false, w.Minimize),
+			caption("\uE922", false, w.ToggleMaximize).MaximizeButton(),
+			caption("\uE8BB", true, w.Close))
+	}
 
 	main := fairy.Col(
 		fairy.Text(a.title()).FontSize(20).SemiBold(),
-		fairy.Text(fmt.Sprintf("Sidebar %v px, open %v. Drag its edge, double-click it to reset, or press Ctrl+Shift+B.",
-			a.sidebar.Width(), a.sidebar.Open())).Color(t.MutedForeground),
+		fairy.Text(fmt.Sprintf("Sidebar %v px, open %v. Drag its edge, double-click it to reset, or press %s.",
+			a.sidebar.Width(), a.sidebar.Open(), keyboard.MustChord("mod+shift+b").Label())).Color(t.MutedForeground),
 		fairy.Row(kit.ProgressCircle(0.25, 24), kit.ProgressCircle(0.5, 24), kit.ProgressCircle(0.75, 24), kit.ProgressCircle(1, 24),
 			fairy.Spacer(),
 			kit.Segmented(a.diffMode(), []kit.Item{{Value: "unified", Label: "Unified"}, {Value: "split", Label: "Split"}},

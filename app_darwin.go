@@ -174,15 +174,5 @@ func updateWindows() {
 	}
 }
 
-// SingleInstance makes the program run once per user session. Call it
-// before Main. In the first process it returns true, and onLaunch later
-// receives the arguments of every further start on the UI thread.
-func SingleInstance(id string, onLaunch func(Launch)) (bool, error) {
-	if id == "" {
-		return false, errors.New("fairy: SingleInstance needs an id")
-	}
-	return false, errNoBackend
-}
-
 // errNoBackend is returned by features the macOS backend does not have yet.
 var errNoBackend = errors.New("fairy: not implemented on macOS yet")

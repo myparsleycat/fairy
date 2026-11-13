@@ -286,15 +286,19 @@ func (a *app) titleBar(cx *fairy.Cx, t theme) *fairy.El {
 	if w.IsMaximized() {
 		maxLabel = "\uE923"
 	}
-	return fairy.Row(
+	bar := fairy.Row(
 		fairy.Box().Size(14, 14).Radius(4).Gradient(135, t.accent, fairy.Hex(0xec4899)),
 		fairy.Text("Fairy Demo").FontSize(12).Color(t.muted),
 		fairy.Spacer(),
-		btn("\uE921", false, w.Minimize),
-		btn(maxLabel, false, w.ToggleMaximize).MaximizeButton(),
-		btn("\uE8BB", true, w.Close),
-	).H(36).PadEdges(0, 0, 0, 12).Gap(8).Align(fairy.Center).
+	).H(36).PadEdges(0, 0, 0, 12+w.ControlsInset()).Gap(8).Align(fairy.Center).
 		Fill(t.sidebar).BorderEdges(0, 0, 1, 0, t.border).DragRegion()
+	if !fairy.SystemWindowControls {
+		bar.Child(
+			btn("\uE921", false, w.Minimize),
+			btn(maxLabel, false, w.ToggleMaximize).MaximizeButton(),
+			btn("\uE8BB", true, w.Close))
+	}
+	return bar
 }
 
 func (a *app) sidebar(t theme) *fairy.El {

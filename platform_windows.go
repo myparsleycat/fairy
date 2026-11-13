@@ -10,6 +10,17 @@ import (
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
+// SystemWindowControls reports whether frameless windows keep the system's
+// own close, minimize and zoom buttons, as on macOS. Draw your own only
+// where it is false; Window.ControlsInset is the room the system's take.
+const SystemWindowControls = false
+
+// ControlsInset returns how far the system's window controls reach into a
+// frameless window from its left edge, in logical pixels: the traffic
+// lights and the margin after them on macOS. It is 0 for windows with a
+// system title bar, and on Windows, where frameless windows draw their own.
+func (w *Window) ControlsInset() float32 { return 0 }
+
 // nonTypingMods are the modifiers that keep a key from typing into an
 // Input. AltGr arrives as Ctrl+Alt.
 const nonTypingMods = keyboard.ModCtrl | keyboard.ModAlt

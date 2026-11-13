@@ -34,6 +34,9 @@ var (
 	selMarkedRange   = darwin.Sel("markedRange")
 	selSelectedRange = darwin.Sel("selectedRange")
 	selFirstRect     = darwin.Sel("firstRectForCharacterRange:actualRange:")
+	// selOpaqueTitleBar is the private NSView method that tells AppKit
+	// which part of the title bar the view handles itself.
+	selOpaqueTitleBar = darwin.Sel("_opaqueRectForWindowMoveWhenInTitlebar")
 )
 
 // Type encodings of the NSTextInputClient methods with struct arguments or
@@ -111,9 +114,11 @@ func addTextInputClient(c objc.Class) {
 	c.AddMethod(selMarkedRange, objc.IMP(fwd), encRangeFn)
 	c.AddMethod(selSelectedRange, objc.IMP(fwd), encRangeFn)
 	c.AddMethod(selFirstRect, objc.IMP(rectFwd), encFirstRect)
+	c.AddMethod(selOpaqueTitleBar, objc.IMP(rectFwd), encRect+"@:")
 }
 
-// imeInvocation answers a forwarded NSTextInputClient call. It reports false
+// imeInvocation answers a forwarded call to a method that returns a struct:
+// NSTextInputClient's, and the title bar's. It reports false
 // for a selector it does not answer. w is nil once the window is closed.
 func imeInvocation(w *Window, inv darwin.ID) bool {
 	switch darwin.Get[darwin.SEL](inv, "selector") {
@@ -141,6 +146,10 @@ func imeInvocation(w *Window, inv darwin.ID) bool {
 		if w != nil {
 			*r = w.caretScreenRect()
 		}
+		darwin.Send(inv, "setReturnValue:", unsafe.Pointer(r))
+	case selOpaqueTitleBar:
+		r := new(darwin.CGRect)
+		*r = w.opaqueTitleBarRect()
 		darwin.Send(inv, "setReturnValue:", unsafe.Pointer(r))
 	default:
 		return false

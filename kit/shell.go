@@ -68,10 +68,19 @@ func SplitView(p SplitProps) *fairy.El {
 	inspectorOpen := p.Inspector != nil && p.Inspector.Open()
 	toggle := p.Sidebar != nil && !p.HideSidebarToggle
 
+	// On macOS the window's own controls sit at the top left of a
+	// frameless window.
+	var inset float32
+	if w := fairy.CurrentWindow(); w != nil {
+		inset = w.ControlsInset()
+	}
 	band := fairy.Row().Key("kit.split.band").H(TitleBarHeight).Align(fairy.Center).DragRegion()
 	lead := float32(12)
 	if toggle && !sidebarOpen {
 		lead = 12 + 24 + 8
+	}
+	if !sidebarOpen {
+		lead += inset
 	}
 	band.Child(fairy.Box().W(lead).Shrink(0).AnimateLayout(motion.Default).Role(fairy.RoleHidden))
 	if p.Toolbar != nil {
@@ -103,9 +112,9 @@ func SplitView(p SplitProps) *fairy.El {
 			label = Messages.HideSidebar
 		}
 		pane := p.Sidebar
-		b := IconButton(panelLeft, pane.Toggle, Small, Tooltip(label+" (Ctrl+Shift+B)")).
+		b := IconButton(panelLeft, pane.Toggle, Small, Tooltip(label+" ("+sidebarChord.Label()+")")).
 			Key(splitToggleKey).Label(label).Expanded(sidebarOpen).Size(24, 24)
-		root.Child(b.Left(12).Top((TitleBarHeight - 24) / 2))
+		root.Child(b.Left(12 + inset).Top((TitleBarHeight - 24) / 2))
 	}
 	return root
 }

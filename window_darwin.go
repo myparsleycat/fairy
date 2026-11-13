@@ -60,6 +60,9 @@ func NewWindow(opts Options) (*Window, error) {
 	delegateClass()
 
 	style := uint64(nsTitled | nsClosable | nsMiniaturizable | nsResizable)
+	if opts.Frameless {
+		style |= nsFullSizeContentView
+	}
 	nw := darwin.Send(darwin.SendClass("NSWindow", "alloc"), "initWithContentRect:styleMask:backing:defer:",
 		darwin.Rect(0, 0, float64(opts.Width), float64(opts.Height)), style, uint64(2), false)
 	if nw == 0 {
@@ -73,6 +76,9 @@ func NewWindow(opts Options) (*Window, error) {
 	darwin.Send(nw, "setAcceptsMouseMovedEvents:", true)
 	darwin.Send(nw, "center")
 	w.nsWindow = nw
+	if opts.Frameless {
+		w.setupFrameless()
+	}
 	w.setDarkFrame(opts.Dark)
 	w.setWindowBackground()
 
@@ -341,6 +347,7 @@ func (w *Window) requestPaint() {
 func (w *Window) onDisplayLink() {
 	if w.needPaint {
 		w.renderFrame()
+		w.placeControls()
 	}
 	if !w.needPaint && w.linkOn && w.link != 0 {
 		w.linkOn = false
@@ -507,6 +514,14 @@ func (w *Window) mouseDown(ev darwin.ID, button int) {
 	defer w.handling(ev)()
 	w.commitComposition()
 	x, y := w.eventPoint(ev)
+	if button == 0 && !w.scripted && w.inDragRegion(x, y) {
+		if darwin.Get[int64](ev, "clickCount") == 2 {
+			w.titleBarDoubleClick()
+		} else {
+			darwin.Send(w.nsWindow, "performWindowDragWithEvent:", ev)
+		}
+		return
+	}
 	w.onButtonDown(x, y, button)
 }
 
@@ -666,7 +681,10 @@ var delegateClass = sync.OnceValue(func() darwin.Class {
 			w.windowClosed()
 			quitIfIdle()
 		})},
-		{Cmd: darwin.Sel("windowDidResize:"), Fn: on(func(w *Window) { w.onResize(w.pixelSize()) })},
+		{Cmd: darwin.Sel("windowDidResize:"), Fn: on(func(w *Window) {
+			w.onResize(w.pixelSize())
+			w.placeControls()
+		})},
 		{Cmd: darwin.Sel("windowDidChangeBackingProperties:"), Fn: on(func(w *Window) {
 			s := float32(darwin.Get[float64](w.nsWindow, "backingScaleFactor"))
 			if s == w.scale {
