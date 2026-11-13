@@ -1,11 +1,17 @@
 package kit
 
-import "strings"
-
-// macOS names the modifiers by their symbols: ⌃ Control, ⌥ Option, ⌘ Command.
+// macOS names the modifiers by their symbols: ⌃ Control, ⌘ Command. A
+// global shortcut needs one of them; Option alone types characters there.
 func init() {
-	r := strings.NewReplacer("Ctrl", "⌘", "Alt", "⌥", "Win", "⌃")
+	mac := map[string]string{
+		EnglishStrings.ShortcutNeedsModifier:  "Add ⌘ or ⌃.",
+		KoreanStrings.ShortcutNeedsModifier:   "⌘, ⌃ 중 하나를 함께 누르세요.",
+		JapaneseStrings.ShortcutNeedsModifier: "⌘、⌃ のいずれかを一緒に押してください。",
+		ChineseStrings.ShortcutNeedsModifier:  "请同时按下 ⌘ 或 ⌃。",
+	}
 	for _, s := range []*Strings{&EnglishStrings, &KoreanStrings, &JapaneseStrings, &ChineseStrings, &Messages} {
-		s.ShortcutNeedsModifier = r.Replace(s.ShortcutNeedsModifier)
+		if m, ok := mac[s.ShortcutNeedsModifier]; ok {
+			s.ShortcutNeedsModifier = m
+		}
 	}
 }
