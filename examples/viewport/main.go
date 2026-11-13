@@ -1,12 +1,11 @@
-//go:build windows
-
-// Command viewport drives a Direct3D surface the way a 3D model viewer does:
-// left drag turns the camera, right or middle drag pans, Shift+left drag
-// scales the model, the wheel zooms about the pointer, the pointer picks the
-// corner under it, and a right click without moving opens a context menu.
+// Command viewport drives a GPU surface the way a 3D model viewer does: left
+// drag turns the camera, right or middle drag pans, Shift+left drag scales
+// the model, the wheel zooms about the pointer, the pointer picks the corner
+// under it, and a right click without moving opens a context menu.
 //
-// The cube is drawn with the d3d package into a retained surface with a
-// depth buffer: it draws again only when the camera changes, so hovering the
+// The cube is drawn with Direct3D 11 (through the d3d package) on Windows and
+// with Metal on macOS into a retained surface with a depth buffer: it draws
+// again only when the camera changes, so hovering the
 // buttons below leaves the draw count alone. "Thumbnail" renders the cube
 // offscreen into an Image shown beside them.
 //
