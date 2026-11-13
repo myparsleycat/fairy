@@ -36,7 +36,8 @@ type Strings struct {
 	RecordShortcut string
 	PressShortcut  string
 	ShortcutHelp   string
-	// ShortcutNeedsModifier refuses a chord without Ctrl, Alt or Win.
+	// ShortcutNeedsModifier refuses a chord without Ctrl, Alt or Win (⌘, ⌥ or
+	// ⌃ on macOS, where the names are replaced with these symbols).
 	// ShortcutTaken and ShortcutFailed are formats given the chord's label.
 	ShortcutNeedsModifier string
 	ShortcutTaken         string

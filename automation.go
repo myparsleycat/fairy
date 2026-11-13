@@ -312,8 +312,12 @@ func scriptMods(names []string) keyboard.Mods {
 			m |= keyboard.ModShift
 		case "ctrl":
 			m |= keyboard.ModCtrl
-		case "alt":
+		case "alt", "option":
 			m |= keyboard.ModAlt
+		case "cmd", "super":
+			m |= keyboard.ModSuper
+		case "mod", "primary":
+			m |= keyboard.ModPrimary
 		}
 	}
 	return m

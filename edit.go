@@ -70,8 +70,12 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 	}
 	editable := props.onChange != nil
 	shift := ev.Mods&keyboard.ModShift != 0
-	ctrl := ev.Mods&keyboard.ModCtrl != 0
+	primary := ev.Mods&keyboard.ModPrimary != 0
+	word := ev.Mods&keyboard.ModWord != 0
 	alt := ev.Mods&keyboard.ModAlt != 0
+	// macOS moves to the ends of the line with ⌘← and ⌘→, and to the ends of
+	// the text with ⌘↑ and ⌘↓; Home and End do that elsewhere.
+	lineKeys := keyboard.ModPrimary != keyboard.ModWord && primary
 	s := st.Value
 	move := func(to int) {
 		st.Caret = to
@@ -92,13 +96,32 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		st.Caret, st.Anchor = a, a
 		w.commitEdit(e, st, st.Value)
 	}
+	home := func(all bool) {
+		if props.multiline && !all {
+			a, _, _ := w.visualLine(st)
+			move(a)
+		} else {
+			move(0)
+		}
+	}
+	end := func(all bool) {
+		if props.multiline && !all {
+			_, b, up := w.visualLine(st)
+			move(b)
+			st.upstream = up
+		} else {
+			move(len(s))
+		}
+	}
 	switch ev.Key {
 	case keyboard.KeyLeft:
 		switch {
+		case lineKeys:
+			home(false)
 		case !shift && st.HasSelection():
 			a, _ := st.Selection()
 			move(a)
-		case ctrl:
+		case word:
 			move(text.PrevWord(s, st.Caret))
 		default:
 			move(text.PrevBoundary(s, st.Caret))
@@ -106,33 +129,32 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		return true
 	case keyboard.KeyRight:
 		switch {
+		case lineKeys:
+			end(false)
 		case !shift && st.HasSelection():
 			_, b := st.Selection()
 			move(b)
-		case ctrl:
+		case word:
 			move(text.NextWord(s, st.Caret))
 		default:
 			move(text.NextBoundary(s, st.Caret))
 		}
 		return true
 	case keyboard.KeyHome:
-		if props.multiline && !ctrl {
-			a, _, _ := w.visualLine(st)
-			move(a)
-		} else {
-			move(0)
-		}
+		home(primary)
 		return true
 	case keyboard.KeyEnd:
-		if props.multiline && !ctrl {
-			_, b, up := w.visualLine(st)
-			move(b)
-			st.upstream = up
-		} else {
-			move(len(s))
-		}
+		end(primary)
 		return true
 	case keyboard.KeyUp, keyboard.KeyDown:
+		if lineKeys {
+			if ev.Key == keyboard.KeyUp {
+				home(true)
+			} else {
+				end(true)
+			}
+			return true
+		}
 		if !props.multiline {
 			return false
 		}
@@ -142,28 +164,31 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		if st.HasSelection() {
 			a, b := st.Selection()
 			del(a, b, edit.Other)
-		} else if ctrl {
+		} else if lineKeys {
+			a, _, _ := w.visualLine(st)
+			del(a, st.Caret, edit.Other)
+		} else if word {
 			del(text.PrevWord(s, st.Caret), st.Caret, edit.Other)
 		} else {
 			del(text.PrevDeleteBoundary(s, st.Caret), st.Caret, edit.Deleting)
 		}
 		return true
 	case keyboard.KeyDelete:
-		if shift && !ctrl && !alt {
+		if ev.Mods == keyboard.ModShift {
 			w.runEdit(e, st, EditCut)
 			return true
 		}
 		if st.HasSelection() {
 			a, b := st.Selection()
 			del(a, b, edit.Other)
-		} else if ctrl {
+		} else if word {
 			del(st.Caret, text.NextWord(s, st.Caret), edit.Other)
 		} else {
 			del(st.Caret, text.NextBoundary(s, st.Caret), edit.Deleting)
 		}
 		return true
 	case keyboard.KeyEnter:
-		if props.multiline && editable && !ctrl {
+		if props.multiline && editable && !primary {
 			w.typeText(e, "\n")
 			return true
 		}
@@ -175,7 +200,7 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		}
 		return false
 	}
-	if ctrl && !alt {
+	if primary && !alt {
 		switch ev.Key {
 		case keyboard.KeyA:
 			w.runEdit(e, st, EditSelectAll)
@@ -205,9 +230,9 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		w.runEdit(e, st, EditPaste)
 		return true
 	}
-	if !ctrl && !alt && isTypingKey(ev.Key) {
+	if ev.Mods&nonTypingMods == 0 && isTypingKey(ev.Key) {
 		w.wantChar = true
-		return true // the character arrives through WM_CHAR
+		return true // the character arrives with the key's text
 	}
 	return false
 }

@@ -111,7 +111,7 @@ func TestTreeFilterAndRange(t *testing.T) {
 	if got := m.Selected(); !slices.Equal(got, []string{"a/1", "a/2", "b", "c"}) {
 		t.Fatalf("Shift-click range = %v", got)
 	}
-	m.Click("b", keyboard.ModCtrl)
+	m.Click("b", keyboard.ModPrimary)
 	if got := m.Selected(); !slices.Equal(got, []string{"a/1", "a/2", "c"}) {
 		t.Fatalf("Ctrl-click = %v", got)
 	}

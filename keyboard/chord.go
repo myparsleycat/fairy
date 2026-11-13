@@ -8,8 +8,9 @@ import (
 
 // Chord is a key with modifiers, as an app binds it: ParseChord("ctrl+shift+t").
 // Parsing is case-insensitive and ignores spaces around each "+". Modifiers
-// are ctrl (aliases mod, primary, control), alt (option, opt), shift and
-// super (win, cmd, command, meta, logo). Keys are a character or a name:
+// are mod (alias primary: ModPrimary, ⌘ on macOS and Ctrl elsewhere), ctrl
+// (control), alt (option, opt), shift and super (win, cmd, command, meta,
+// logo; ⌘ on macOS). Keys are a character or a name:
 // enter (return), tab, escape (esc), backspace, delete (del), insert (ins),
 // home, end, pageup (pgup), pagedown (pgdn), left/right/up/down (arrowleft,
 // …), space, plus (or a trailing "+": "ctrl++"), comma, the punctuation names
@@ -17,7 +18,8 @@ import (
 // bracketleft, bracketright), f1–f24, contextmenu (menu), printscreen
 // (prtsc), scrolllock and pause (break). A character is the one the key types
 // without Shift on a US layout; "{" and "}" read as Shift with "[" and "]".
-// String writes the canonical form back ("ctrl+shift+t") for settings files.
+// String writes the canonical form back ("ctrl+shift+t", "cmd+shift+t" on
+// macOS) for settings files.
 type Chord struct {
 	Mods Mods
 	Key  Key
@@ -34,15 +36,16 @@ const (
 	vkOEMPlus     Key = 0xBB
 )
 
+// chordMods are the modifiers in the order labels and String write them,
+// which is also the order macOS draws them in: ⌃⌥⇧⌘.
 var chordMods = []struct {
 	mod   Mods
 	names []string
-	label string
 }{
-	{ModCtrl, []string{"ctrl", "mod", "primary", "control"}, "Ctrl"},
-	{ModAlt, []string{"alt", "option", "opt"}, "Alt"},
-	{ModShift, []string{"shift"}, "Shift"},
-	{ModSuper, []string{"super", "win", "cmd", "command", "meta", "logo"}, "Win"},
+	{ModCtrl, []string{"ctrl", "control"}},
+	{ModAlt, []string{"alt", "option", "opt"}},
+	{ModShift, []string{"shift"}},
+	{ModSuper, superNames},
 }
 
 var chordKeys = []struct {
@@ -143,6 +146,9 @@ func MustChord(s string) Chord {
 }
 
 func chordMod(name string) (Mods, bool) {
+	if name == "mod" || name == "primary" {
+		return ModPrimary, true
+	}
 	for _, m := range chordMods {
 		for _, n := range m.names {
 			if n == name {
@@ -228,21 +234,24 @@ func (c Chord) Matches(ev KeyEvent) bool {
 }
 
 // Keycaps returns one label per key, modifiers first in Ctrl, Alt, Shift, Win
-// order, for drawing each as a keycap.
+// order (⌃, ⌥, ⇧, ⌘ on macOS), for drawing each as a keycap.
 func (c Chord) Keycaps() []string {
 	var caps []string
-	for _, m := range chordMods {
+	for i, m := range chordMods {
 		if c.Mods&m.mod != 0 {
-			caps = append(caps, m.label)
+			caps = append(caps, modLabels[i])
 		}
 	}
 	return append(caps, c.keyLabel())
 }
 
-// Label is how the chord reads: "Ctrl+Shift+T".
-func (c Chord) Label() string { return strings.Join(c.Keycaps(), "+") }
+// Label is how the chord reads: "Ctrl+Shift+T", or "⇧⌘T" on macOS.
+func (c Chord) Label() string { return strings.Join(c.Keycaps(), labelSep) }
 
 func (c Chord) keyLabel() string {
+	if s, ok := platformKeyLabel(c.Key); ok && c.ch != ' ' {
+		return s
+	}
 	switch {
 	case c.ch == ' ' || c.Key == KeySpace:
 		return "Space"

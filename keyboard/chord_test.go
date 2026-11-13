@@ -1,24 +1,30 @@
 package keyboard
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestParseChord(t *testing.T) {
+	mac := runtime.GOOS == "darwin"
 	for _, c := range []struct {
-		in, label, canon string
-		key              Key
-		mods             Mods
+		in, label, canon   string
+		macLabel, macCanon string
+		key                Key
+		mods               Mods
 	}{
-		{"ctrl+shift+t", "Ctrl+Shift+T", "ctrl+shift+t", 'T', ModCtrl | ModShift},
-		{"Mod + B", "Ctrl+B", "ctrl+b", 'B', ModCtrl},
-		{"alt+f4", "Alt+F4", "alt+f4", KeyF1 + 3, ModAlt},
-		{"ctrl++", "Ctrl++", "ctrl+plus", vkOEMPlus, ModCtrl},
-		{"ctrl+plus", "Ctrl++", "ctrl+plus", vkOEMPlus, ModCtrl},
-		{"ctrl+,", "Ctrl+,", "ctrl+comma", 0xBC, ModCtrl},
-		{"ctrl+{", "Ctrl+Shift+[", "ctrl+shift+[", 0xDB, ModCtrl | ModShift},
-		{"win+space", "Win+Space", "super+space", KeySpace, ModSuper},
-		{"shift+pgdn", "Shift+Page Down", "shift+pagedown", KeyPageDown, ModShift},
-		{"esc", "Esc", "escape", KeyEscape, 0},
-		{"ctrl+1", "Ctrl+1", "ctrl+1", '1', ModCtrl},
+		{"ctrl+shift+t", "Ctrl+Shift+T", "ctrl+shift+t", "⌃⇧T", "ctrl+shift+t", 'T', ModCtrl | ModShift},
+		{"Mod + B", "Ctrl+B", "ctrl+b", "⌘B", "cmd+b", 'B', ModPrimary},
+		{"primary+shift+z", "Ctrl+Shift+Z", "ctrl+shift+z", "⇧⌘Z", "shift+cmd+z", 'Z', ModPrimary | ModShift},
+		{"alt+f4", "Alt+F4", "alt+f4", "⌥F4", "alt+f4", KeyF1 + 3, ModAlt},
+		{"ctrl++", "Ctrl++", "ctrl+plus", "⌃+", "ctrl+plus", vkOEMPlus, ModCtrl},
+		{"ctrl+plus", "Ctrl++", "ctrl+plus", "⌃+", "ctrl+plus", vkOEMPlus, ModCtrl},
+		{"ctrl+,", "Ctrl+,", "ctrl+comma", "⌃,", "ctrl+comma", 0xBC, ModCtrl},
+		{"ctrl+{", "Ctrl+Shift+[", "ctrl+shift+[", "⌃⇧[", "ctrl+shift+[", 0xDB, ModCtrl | ModShift},
+		{"win+space", "Win+Space", "super+space", "⌘Space", "cmd+space", KeySpace, ModSuper},
+		{"shift+pgdn", "Shift+Page Down", "shift+pagedown", "⇧⇟", "shift+pagedown", KeyPageDown, ModShift},
+		{"esc", "Esc", "escape", "⎋", "escape", KeyEscape, 0},
+		{"ctrl+1", "Ctrl+1", "ctrl+1", "⌃1", "ctrl+1", '1', ModCtrl},
 	} {
 		ch, err := ParseChord(c.in)
 		if err != nil {
@@ -28,11 +34,15 @@ func TestParseChord(t *testing.T) {
 		if ch.Key != c.key || ch.Mods != c.mods {
 			t.Errorf("%q = key %#x mods %v, want %#x %v", c.in, ch.Key, ch.Mods, c.key, c.mods)
 		}
-		if got := ch.Label(); got != c.label {
-			t.Errorf("%q label = %q, want %q", c.in, got, c.label)
+		label, canon := c.label, c.canon
+		if mac {
+			label, canon = c.macLabel, c.macCanon
 		}
-		if got := ch.String(); got != c.canon {
-			t.Errorf("%q string = %q, want %q", c.in, got, c.canon)
+		if got := ch.Label(); got != label {
+			t.Errorf("%q label = %q, want %q", c.in, got, label)
+		}
+		if got := ch.String(); got != canon {
+			t.Errorf("%q string = %q, want %q", c.in, got, canon)
 		}
 		if back, err := ParseChord(ch.String()); err != nil || back != ch {
 			t.Errorf("%q does not read back from %q: %v %v", c.in, ch.String(), back, err)
@@ -75,7 +85,7 @@ func TestParseKeybind(t *testing.T) {
 	if got := kb.String(); got != "ctrl+t, ctrl+comma, ctrl+n" {
 		t.Errorf("keybind = %q", got)
 	}
-	if !kb.Matches(KeyEvent{Key: 'N', Mods: ModCtrl}) || kb.Label() != "Ctrl+T" {
+	if !kb.Matches(KeyEvent{Key: 'N', Mods: ModCtrl}) || kb.Label() != MustChord("ctrl+t").Label() {
 		t.Errorf("keybind %v does not match Ctrl+N or label Ctrl+T", kb)
 	}
 	if kb, err := ParseKeybind("none"); err != nil || len(kb) != 0 || kb.String() != "none" {

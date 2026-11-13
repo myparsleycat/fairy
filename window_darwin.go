@@ -538,7 +538,7 @@ func (w *Window) keyDown(ev darwin.ID) {
 	if k := macKey(code); k != 0 && w.onKeyDown(k, repeat, typed) && !w.wantChar {
 		return
 	}
-	if w.keyMods()&(keyboard.ModCtrl|keyboard.ModSuper) != 0 {
+	if w.keyMods()&nonTypingMods != 0 {
 		return
 	}
 	for _, r := range typed {

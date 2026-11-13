@@ -2,7 +2,9 @@
 // chords.
 package keyboard
 
-// Mods is a set of held modifier keys.
+// Mods is a set of held modifier keys. On macOS, Control is ModCtrl, Option
+// is ModAlt and Command is ModSuper. Bind app commands to ModPrimary, which
+// is the modifier the platform's own shortcuts use.
 type Mods uint8
 
 const (

@@ -5,7 +5,12 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
+	"github.com/myparsleycat/fairy/keyboard"
 )
+
+// nonTypingMods are the modifiers that keep a key from typing into an
+// Input. Option types characters on macOS.
+const nonTypingMods = keyboard.ModCtrl | keyboard.ModSuper
 
 var processStart = time.Now()
 

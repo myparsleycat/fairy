@@ -184,7 +184,7 @@ func IsSidebarToggle(ev keyboard.KeyEvent) bool {
 	return !ev.Repeat && keyboard.ChordOf(ev) == sidebarChord
 }
 
-var sidebarChord = keyboard.MustChord("ctrl+shift+b")
+var sidebarChord = keyboard.MustChord("mod+shift+b")
 
 // paneDrag applies a drag of a pane's grip.
 func paneDrag(p *PaneState, sign float32, d fairy.DragEvent) {

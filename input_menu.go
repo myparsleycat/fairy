@@ -2,6 +2,7 @@ package fairy
 
 import (
 	"github.com/myparsleycat/fairy/internal/edit"
+	"github.com/myparsleycat/fairy/keyboard"
 )
 
 // EditCommand is an editing action on a text Input, as its keys and its
@@ -125,17 +126,17 @@ func (w *Window) inputMenu(e *El, x, y float32) []MenuItem {
 			label = fallback
 		}
 		return MenuItem{
-			Label:    label + "\t" + chord,
+			Label:    label + "\t" + keyboard.MustChord(chord).Label(),
 			Disabled: !editAllowed(e, st, cmd, hasText),
 			OnClick:  func() { w.runEdit(e, st, cmd) },
 		}
 	}
 	return append(w.spellMenu(e, st, x, y, l),
-		item(l.Cut, defaultEditMenu.Cut, "Ctrl+X", EditCut),
-		item(l.Copy, defaultEditMenu.Copy, "Ctrl+C", EditCopy),
-		item(l.Paste, defaultEditMenu.Paste, "Ctrl+V", EditPaste),
+		item(l.Cut, defaultEditMenu.Cut, "mod+x", EditCut),
+		item(l.Copy, defaultEditMenu.Copy, "mod+c", EditCopy),
+		item(l.Paste, defaultEditMenu.Paste, "mod+v", EditPaste),
 		MenuItem{Separator: true},
-		item(l.SelectAll, defaultEditMenu.SelectAll, "Ctrl+A", EditSelectAll),
+		item(l.SelectAll, defaultEditMenu.SelectAll, "mod+a", EditSelectAll),
 	)
 }
 

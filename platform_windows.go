@@ -7,7 +7,12 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/pancursor"
 	"github.com/myparsleycat/fairy/internal/win"
+	"github.com/myparsleycat/fairy/keyboard"
 )
+
+// nonTypingMods are the modifiers that keep a key from typing into an
+// Input. AltGr arrives as Ctrl+Alt.
+const nonTypingMods = keyboard.ModCtrl | keyboard.ModAlt
 
 // defaultFont is the font family of Options.Font when it is empty.
 const defaultFont = "Segoe UI"

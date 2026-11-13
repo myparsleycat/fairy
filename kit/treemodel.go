@@ -421,7 +421,7 @@ func (m *TreeModel[T]) Click(id string, mods keyboard.Mods) bool {
 		m.SelectRange(id)
 		return false
 	}
-	if m.multi && mods&keyboard.ModCtrl != 0 {
+	if m.multi && mods&keyboard.ModPrimary != 0 {
 		m.nodes[i].selected = !m.nodes[i].selected
 		m.cursor, m.anchor = i, i
 		return false
@@ -615,20 +615,20 @@ func (m *TreeModel[T]) moveTo(i int, extend bool) {
 // Tree calls it from its key handler and scrolls the cursor's row into view.
 func (m *TreeModel[T]) HandleKey(ev keyboard.KeyEvent, label func(T) string) TreeKeyResult {
 	mods := ev.Mods
-	if mods&(keyboard.ModAlt|keyboard.ModSuper) != 0 {
+	if mods&^(keyboard.ModPrimary|keyboard.ModShift) != 0 {
 		return TreeKeyIgnored
 	}
 	n := m.VisibleLen()
 	if n == 0 {
 		return TreeKeyIgnored
 	}
-	if ev.Is(keyboard.KeyA, keyboard.ModCtrl) && m.multi {
+	if ev.Is(keyboard.KeyA, keyboard.ModPrimary) && m.multi {
 		for _, i := range m.rows().rows {
 			m.nodes[i].selected = true
 		}
 		return TreeKeyHandled
 	}
-	if mods&keyboard.ModCtrl != 0 {
+	if mods&keyboard.ModPrimary != 0 {
 		return TreeKeyIgnored
 	}
 	at := -1

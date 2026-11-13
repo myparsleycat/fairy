@@ -80,7 +80,7 @@ func (s *TableState) click(i, n int, mods keyboard.Mods, idAt func(int) string) 
 	}
 	s.cursorHint, s.anchorHint = i, i
 	id := idAt(i)
-	if s.Multi && mods&keyboard.ModCtrl != 0 {
+	if s.Multi && mods&keyboard.ModPrimary != 0 {
 		if s.selected[id] {
 			delete(s.selected, id)
 		} else {
@@ -121,11 +121,11 @@ const (
 // handleKey applies a key to n rows named by idAt. It returns the row it moved
 // to or opened, or -1.
 func (s *TableState) handleKey(ev keyboard.KeyEvent, n int, idAt func(int) string) (tableKeyResult, int) {
-	if n == 0 || ev.Mods&(keyboard.ModAlt|keyboard.ModSuper) != 0 {
+	if n == 0 || ev.Mods&^(keyboard.ModPrimary|keyboard.ModShift) != 0 {
 		return tableKeyIgnored, -1
 	}
-	if ev.Mods&keyboard.ModCtrl != 0 {
-		if ev.Is(keyboard.KeyA, keyboard.ModCtrl) && s.Multi {
+	if ev.Mods&keyboard.ModPrimary != 0 {
+		if ev.Is(keyboard.KeyA, keyboard.ModPrimary) && s.Multi {
 			s.selected = make(map[string]bool, n)
 			for i := range n {
 				s.selected[idAt(i)] = true

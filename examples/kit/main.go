@@ -129,7 +129,7 @@ type viewerMenus struct {
 
 func main() {
 	a := &app{radio: "b", tab: "general", seg: "grid", volume: 40, notify: true, sortCol: -1, tableSel: kit.TableState{Multi: true},
-		shortcut: keyboard.MustChord("ctrl+shift+space"),
+		shortcut: keyboard.MustChord("mod+shift+space"),
 		bar:      viewerMenus{grid: true, camera: "perspective", tone: "neutral", exposure: 1, exposureText: "1.00"},
 		tint:     fairy.HexA(0x38bdf8b3), cat: i18n.New("en"), progress: 0.62}
 	for lang, js := range messages {
@@ -376,11 +376,11 @@ func (a *app) menubar() *fairy.El {
 	return section(a.t("menubar"), kit.Menubar("gallery", []kit.MenubarMenu{
 		{Label: "File", Items: func() []kit.MenuItem {
 			return []kit.MenuItem{
-				{Label: "New", Shortcut: "Ctrl+N"},
-				{Label: "Open…", Icon: lucide.FolderOpen, Shortcut: "Ctrl+O"},
+				{Label: "New", Shortcut: keyboard.MustChord("mod+n").Label()},
+				{Label: "Open…", Icon: lucide.FolderOpen, Shortcut: keyboard.MustChord("mod+o").Label()},
 				{Label: "Open recent", Submenu: []kit.MenuItem{{Label: "Report.pdf"}, {Label: "Notes.txt"}, {Label: "Budget.xlsx"}}},
 				{Separator: true},
-				{Label: "Save", Icon: lucide.Save, Shortcut: "Ctrl+S", OnClick: saved},
+				{Label: "Save", Icon: lucide.Save, Shortcut: keyboard.MustChord("mod+s").Label(), OnClick: saved},
 				{Label: "Export…", Disabled: true},
 			}
 		}},
@@ -439,8 +439,8 @@ func (a *app) buttons() *fairy.El {
 			kit.IconButton(lucide.Plus, nop, kit.Outline, kit.Tooltip("Add")),
 			kit.DropdownMenu("more", kit.Button(a.t("more"), nil, kit.Outline, kit.IconRight(lucide.ChevronDown)), []kit.MenuItem{
 				{Heading: true, Label: "Document"},
-				{Label: "Open folder", Icon: lucide.FolderOpen, Shortcut: "Ctrl+O"},
-				{Label: "Copy name", Icon: lucide.Copy, Shortcut: keyboard.MustChord("ctrl+c").Label()},
+				{Label: "Open folder", Icon: lucide.FolderOpen, Shortcut: keyboard.MustChord("mod+o").Label()},
+				{Label: "Copy name", Icon: lucide.Copy, Shortcut: keyboard.MustChord("mod+c").Label()},
 				{Label: "Sort by", Submenu: []kit.MenuItem{
 					{Label: a.t("name"), Radio: true, Checked: a.sortCol == 0, OnClick: func() { a.sortCol = 0 }},
 					{Label: a.t("project"), Radio: true, Checked: a.sortCol == 1, OnClick: func() { a.sortCol = 1 }},
@@ -557,10 +557,10 @@ func (a *app) navigation() *fairy.El {
 		fairy.Row(
 			kit.Segmented(a.seg, []kit.Item{{Value: "grid", Label: "Grid"}, {Value: "list", Label: "List"}, {Value: "table", Label: "Table"}},
 				func(v string) { a.seg = v }),
-			kit.Kbd("Ctrl+K"),
+			kit.Kbd(keyboard.MustChord("mod+k").Label()),
 		).Gap(12).Align(fairy.Center),
 		kit.ShortcutRecorder("show", a.shortcut, func(c keyboard.Chord) error {
-			if c == keyboard.MustChord("ctrl+c") {
+			if c == keyboard.MustChord("mod+c") {
 				return shortcut.ErrTaken // as shortcut.Register reports a chord another program holds
 			}
 			a.shortcut = c

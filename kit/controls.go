@@ -583,7 +583,7 @@ func TextArea(value string, onChange func(string), opts ...Option) *fairy.El {
 	fieldBox(e, o)
 	if submit != nil {
 		e.OnInputKey(func(k keyboard.KeyEvent) bool {
-			if k.Key != keyboard.KeyEnter || k.Mods&^keyboard.ModCtrl != 0 {
+			if k.Key != keyboard.KeyEnter || k.Mods&^keyboard.ModPrimary != 0 {
 				return false
 			}
 			submit()

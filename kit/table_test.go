@@ -37,7 +37,7 @@ func TestTableKeys(t *testing.T) {
 	if res, _ := key(&s, keyboard.KeyDown, keyboard.ModShift); s.SelectedLen() != 1 || res != tableKeyMoved {
 		t.Fatalf("Shift+Down without Multi selected %d rows", s.SelectedLen())
 	}
-	if res, _ := key(&s, keyboard.KeyA, keyboard.ModCtrl); res != tableKeyIgnored {
+	if res, _ := key(&s, keyboard.KeyA, keyboard.ModPrimary); res != tableKeyIgnored {
 		t.Fatalf("Ctrl+A without Multi: %v, want ignored", res)
 	}
 }
@@ -52,7 +52,7 @@ func TestTableMultiSelect(t *testing.T) {
 	if got := sorted(s.Selected()); !slices.Equal(got, []string{"b", "c", "d"}) || s.Cursor() != "d" {
 		t.Fatalf("Shift+Down twice from b: %v cursor %q", got, s.Cursor())
 	}
-	s.click(0, len(ids), keyboard.ModCtrl, idAt)
+	s.click(0, len(ids), keyboard.ModPrimary, idAt)
 	if !s.IsSelected("a") || s.SelectedLen() != 4 {
 		t.Fatalf("Ctrl+click added nothing: %v", sorted(s.Selected()))
 	}
@@ -64,7 +64,7 @@ func TestTableMultiSelect(t *testing.T) {
 	if got := s.Selected(); !slices.Equal(got, []string{"e"}) {
 		t.Fatalf("Escape kept %v, want only the cursor's row e", got)
 	}
-	s.handleKey(keyboard.KeyEvent{Key: keyboard.KeyA, Mods: keyboard.ModCtrl}, len(ids), idAt)
+	s.handleKey(keyboard.KeyEvent{Key: keyboard.KeyA, Mods: keyboard.ModPrimary}, len(ids), idAt)
 	if s.SelectedLen() != 5 {
 		t.Fatalf("Ctrl+A selected %d rows", s.SelectedLen())
 	}

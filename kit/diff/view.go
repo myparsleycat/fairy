@@ -149,7 +149,7 @@ func (v *view) gutterW(f int) float32 {
 
 func (v *view) key(ev keyboard.KeyEvent, w *fairy.Window) bool {
 	s := v.s
-	if ev.Is(keyboard.KeyC, keyboard.ModCtrl) {
+	if ev.Is(keyboard.KeyC, keyboard.ModPrimary) {
 		text, ok := s.SelectedText()
 		if ok && w != nil {
 			w.SetClipboardText(text)

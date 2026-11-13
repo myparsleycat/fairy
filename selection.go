@@ -295,9 +295,10 @@ func (w *Window) ClearSelection() {
 	}
 }
 
-// selectionKey handles Ctrl+C, Ctrl+Insert and Ctrl+A for the selection.
+// selectionKey handles Ctrl+C, Ctrl+Insert and Ctrl+A (⌘C and ⌘A on macOS)
+// for the selection.
 func (w *Window) selectionKey(ev keyboard.KeyEvent) bool {
-	if w.sel == nil || ev.Mods != keyboard.ModCtrl {
+	if w.sel == nil || ev.Mods != keyboard.ModPrimary {
 		return false
 	}
 	switch ev.Key {
