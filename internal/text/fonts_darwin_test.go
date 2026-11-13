@@ -2,6 +2,7 @@ package text
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
@@ -34,6 +35,41 @@ func TestRetinaKeepsPointSizeOpticalSize(t *testing.T) {
 		w2, h2 := s.Measure(pangram, hi, Unbounded)
 		if math.Abs(float64(w2/2-w1)) > 0.002*float64(w1) || math.Abs(float64(h2/2-h1)) > 1 {
 			t.Errorf("%+v: %vx%v at 1x, %vx%v points at 2x", st, w1, h1, w2/2, h2/2)
+		}
+	}
+}
+
+// Tabs stop every four font sizes, as DirectWrite's default incremental tab
+// stop does, however many there are; CoreText's own stops end at 336 pixels.
+func TestTabStops(t *testing.T) {
+	s := newTestSystem(t)
+	for _, n := range []int{1, 3, 10} {
+		str := strings.Repeat("\t", n) + "x"
+		l := s.Layout(str, Style{Size: 14}, Unbounded)
+		if x, _, _ := l.Caret(n); math.Abs(float64(x)-float64(n*56)) > 0.5 {
+			t.Errorf("%d tabs end at %v, want %v", n, x, n*56)
+		}
+	}
+	l := s.Layout("ab\tx", Style{Size: 20}, Unbounded)
+	if x, _, _ := l.Caret(3); math.Abs(float64(x)-80) > 0.5 {
+		t.Errorf("a tab after text ends at %v, want 80", x)
+	}
+}
+
+// Paragraphs read left to right, as DirectWrite's reading direction does, so
+// right-to-left text starts at the left edge and no caret is left of it.
+func TestRightToLeftCaretsInLeftToRightParagraph(t *testing.T) {
+	s := newTestSystem(t)
+	for _, str := range []string{"שלום ", "שלום עולם", "abc שלום", "مرحبا "} {
+		l := s.Layout(str, Style{Size: 14}, Unbounded)
+		w, _ := l.Size()
+		for _, b := range Clusters(str) {
+			if x, _, _ := l.Caret(b); x < 0 || x > w+0.5 {
+				t.Errorf("%q: caret at byte %d is at %v, outside [0, %v]", str, b, x, w)
+			}
+		}
+		if rects := l.RangeRects(0, len(str)); len(rects) == 0 || rects[0].X < 0 {
+			t.Errorf("%q: selection %v", str, rects)
 		}
 	}
 }

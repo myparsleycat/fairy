@@ -3,10 +3,12 @@ package text
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
 	"unicode/utf16"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
 	"github.com/myparsleycat/fairy/internal/render"
@@ -465,6 +467,11 @@ func (l *Layout) build(k formatKey, runs []Run) {
 			l.deco = append(l.deco, decoSpan{uint32(a), uint32(b), st.color, st.underline, st.strike})
 		}
 	}
+	if n > 0 {
+		ps := paragraphStyle(float64(k.size))
+		cfAttributedStringSetAttribute(as, cfRange{0, n}, kCTParagraphStyleAttributeName, ps)
+		cfRelease(ps)
+	}
 	if k.letterSpacing != 0 && n > 0 {
 		kern := cfFloat(float64(k.letterSpacing))
 		cfAttributedStringSetAttribute(as, cfRange{0, n}, kCTKernAttributeName, kern)
@@ -570,6 +577,28 @@ func (l *Layout) build(k formatKey, runs []Run) {
 		}
 	}
 	l.ok = true
+}
+
+// paragraphStyle returns the paragraph style of DirectWrite's defaults: tab
+// stops every four font sizes, where CoreText would stop every 28 pixels
+// up to 336 and then not advance, and a left-to-right reading direction, so
+// right-to-left text does not place the caret at negative x.
+func paragraphStyle(size float64) uintptr {
+	if size <= 0 {
+		size = 14
+	}
+	stops := cfArray(nil)
+	defer cfRelease(stops)
+	interval := 4 * size
+	dir := int8(ctWritingDirectionLeftToRight)
+	settings := []ctParagraphStyleSetting{
+		{ctParagraphStyleSpecifierTabStops, unsafe.Sizeof(stops), unsafe.Pointer(&stops)},
+		{ctParagraphStyleSpecifierDefaultTabInterval, unsafe.Sizeof(interval), unsafe.Pointer(&interval)},
+		{ctParagraphStyleSpecifierBaseWritingDirection, unsafe.Sizeof(dir), unsafe.Pointer(&dir)},
+	}
+	ps := ctParagraphStyleCreate(&settings[0], len(settings))
+	runtime.KeepAlive(settings)
+	return ps
 }
 
 // ellipsisLine returns the trimming sign in font.

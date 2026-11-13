@@ -90,6 +90,7 @@ var (
 	ctFontDescriptorCopyAttribute                 func(desc, key uintptr) uintptr
 	ctFontManagerCreateFontDescriptorsFromData    func(data uintptr) uintptr
 
+	ctParagraphStyleCreate                 func(settings *ctParagraphStyleSetting, n int) uintptr
 	ctTypesetterCreateWithAttributedString func(as uintptr) uintptr
 	ctTypesetterSuggestLineBreak           func(ts uintptr, start int, width float64) int
 	ctTypesetterSuggestClusterBreak        func(ts uintptr, start int, width float64) int
@@ -129,6 +130,7 @@ var (
 	cfTypeDictionaryValueCallBacks uintptr
 	kCTFontAttributeName           uintptr
 	kCTKernAttributeName           uintptr
+	kCTParagraphStyleAttributeName uintptr
 	kCTFontFamilyNameAttribute     uintptr
 	kCTFontTraitsAttribute         uintptr
 	kCTFontWeightTrait             uintptr
@@ -140,6 +142,21 @@ var (
 	kCTFontVariationAxisMaxKey     uintptr
 	kCTFontOpticalSizeAttribute    uintptr // 0 where CoreText lacks it
 	kCGColorSpaceSRGB              uintptr
+)
+
+// ctParagraphStyleSetting is a CTParagraphStyleSetting.
+type ctParagraphStyleSetting struct {
+	spec  uint32
+	size  uintptr
+	value unsafe.Pointer
+}
+
+const (
+	ctParagraphStyleSpecifierTabStops             = 4
+	ctParagraphStyleSpecifierDefaultTabInterval   = 5
+	ctParagraphStyleSpecifierBaseWritingDirection = 13
+
+	ctWritingDirectionLeftToRight = 0
 )
 
 // cgAffine is a CGAffineTransform.
@@ -203,6 +220,7 @@ func init() {
 		{&ctFontDescriptorCreateMatchingFontDescriptors, ct, "CTFontDescriptorCreateMatchingFontDescriptors"},
 		{&ctFontDescriptorCopyAttribute, ct, "CTFontDescriptorCopyAttribute"},
 		{&ctFontManagerCreateFontDescriptorsFromData, ct, "CTFontManagerCreateFontDescriptorsFromData"},
+		{&ctParagraphStyleCreate, ct, "CTParagraphStyleCreate"},
 		{&ctTypesetterCreateWithAttributedString, ct, "CTTypesetterCreateWithAttributedString"},
 		{&ctTypesetterSuggestLineBreak, ct, "CTTypesetterSuggestLineBreak"},
 		{&ctTypesetterSuggestClusterBreak, ct, "CTTypesetterSuggestClusterBreak"},
@@ -249,6 +267,7 @@ func init() {
 	}{
 		{&kCTFontAttributeName, ct, "kCTFontAttributeName"},
 		{&kCTKernAttributeName, ct, "kCTKernAttributeName"},
+		{&kCTParagraphStyleAttributeName, ct, "kCTParagraphStyleAttributeName"},
 		{&kCTFontFamilyNameAttribute, ct, "kCTFontFamilyNameAttribute"},
 		{&kCTFontTraitsAttribute, ct, "kCTFontTraitsAttribute"},
 		{&kCTFontWeightTrait, ct, "kCTFontWeightTrait"},
