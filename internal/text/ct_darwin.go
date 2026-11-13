@@ -56,6 +56,8 @@ var (
 	cfDataGetBytePtr                func(d uintptr) *byte
 	cfSetCreate                     func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
 	cfGetTypeID                     func(cf uintptr) uintptr
+	cfEqual                         func(a, b uintptr) bool
+	cfHash                          func(cf uintptr) uintptr
 	cfNumberGetTypeID               func() uintptr
 	cfStringGetTypeID               func() uintptr
 
@@ -168,6 +170,8 @@ func init() {
 		{&cfDataGetBytePtr, cf, "CFDataGetBytePtr"},
 		{&cfSetCreate, cf, "CFSetCreate"},
 		{&cfGetTypeID, cf, "CFGetTypeID"},
+		{&cfEqual, cf, "CFEqual"},
+		{&cfHash, cf, "CFHash"},
 		{&cfNumberGetTypeID, cf, "CFNumberGetTypeID"},
 		{&cfStringGetTypeID, cf, "CFStringGetTypeID"},
 

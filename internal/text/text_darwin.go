@@ -82,8 +82,9 @@ type System struct {
 	layouts     map[layoutKey]*Layout
 	shapes      map[shapeKey]*Layout // the latest reusable layout of each shaping
 	glyphs      map[glyphKey]glyphEntry
-	faces       map[uintptr]uint32 // retained CTFonts by identity
-	colorFaces  map[uintptr]bool
+	faces       map[uintptr]uint32    // retained CTFonts, the first of each identity
+	faceHashes  map[uintptr][]uintptr // the fonts of faces by CFHash
+	colorFaces  map[uint32]bool       // by face identity
 	atlas       glyphAtlas
 	atlasGen    int
 	color       colorGlyphs
@@ -116,7 +117,8 @@ func newSystem(atlas glyphAtlas) *System {
 		shapes:     map[shapeKey]*Layout{},
 		glyphs:     map[glyphKey]glyphEntry{},
 		faces:      map[uintptr]uint32{},
-		colorFaces: map[uintptr]bool{},
+		faceHashes: map[uintptr][]uintptr{},
+		colorFaces: map[uint32]bool{},
 		latest:     map[uint64]passMark{},
 		atlas:      atlas,
 		atlasGen:   atlas.generation(),
@@ -292,11 +294,7 @@ func (s *System) Release() {
 		}
 	}
 	clear(s.families)
-	for font := range s.faces {
-		cfRelease(font)
-	}
-	clear(s.faces)
-	clear(s.colorFaces)
+	s.clearFaces()
 	clear(s.glyphs)
 	cfRelease(s.cascade)
 	s.cascade = 0
