@@ -81,7 +81,7 @@ func NewWindow(opts Options) (*Window, error) {
 	darwin.Send(nw, "setContentView:", view)
 	darwin.Send(nw, "makeFirstResponder:", view)
 	tracking := darwin.Send(darwin.SendClass("NSTrackingArea", "alloc"), "initWithRect:options:owner:userInfo:",
-		darwin.CGRect{}, uint64(0x01|0x02|0x20|0x200), view, darwin.ID(0)) // entered/exited, moved, always active, in visible rect
+		darwin.CGRect{}, uint64(0x01|0x02|0x80|0x200), view, darwin.ID(0)) // entered/exited, moved, always active, in visible rect
 	darwin.Send(view, "addTrackingArea:", tracking)
 	darwin.Release(tracking)
 
@@ -169,6 +169,9 @@ func (w *Window) windowClosed() {
 	darwin.Release(w.delegate)
 	darwin.Release(w.view)
 	w.layer = 0
+	// The window may be closing inside its own close: release it afterwards.
+	nw := w.nsWindow
+	darwin.Async(func() { darwin.Release(nw) })
 }
 
 // Show shows and activates the window.
@@ -571,7 +574,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 		{Cmd: darwin.Sel("acceptsFirstMouse:"), Fn: func(id, sel, id) bool { return true }},
 		{Cmd: darwin.Sel("wantsUpdateLayer"), Fn: func(id, sel) bool { return true }},
 		{Cmd: darwin.Sel("makeBackingLayer"), Fn: func(self id, _ sel) id {
-			return darwin.Send(darwin.SendClass("CAMetalLayer", "layer"), "retain")
+			return darwin.SendClass("CAMetalLayer", "layer")
 		}},
 		{Cmd: darwin.Sel("fairyFrame:"), Fn: on(func(w *Window, _ id) { w.onDisplayLink() })},
 		{Cmd: darwin.Sel("mouseDown:"), Fn: on(func(w *Window, ev id) { w.mouseDown(ev, 0) })},
