@@ -33,26 +33,6 @@ func (w *Window) Announce(text string) {}
 // Announce asks screen readers to speak text in the active window.
 func Announce(text string) {}
 
-// Clipboard formats beyond text.
-
-// SetClipboardRich puts text and its HTML form on the clipboard.
-func (w *Window) SetClipboardRich(text, html string) bool { return w.SetClipboardText(text) }
-
-// ClipboardHTML returns the HTML on the clipboard.
-func (w *Window) ClipboardHTML() (string, bool) { return "", false }
-
-// SetClipboardSecret puts text on the clipboard, kept out of clipboard
-// history, and clears it after clearAfter unless it changed.
-func (w *Window) SetClipboardSecret(text string, clearAfter time.Duration) bool {
-	return w.SetClipboardText(text)
-}
-
-// ClipboardImage returns the image on the clipboard.
-func (w *Window) ClipboardImage() (image.Image, bool) { return nil, false }
-
-// SetClipboardImage puts img on the clipboard.
-func (w *Window) SetClipboardImage(img image.Image) bool { return false }
-
 // The Dock.
 
 // SetProgress shows progress on the window's Dock tile.

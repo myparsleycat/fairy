@@ -378,7 +378,8 @@ func (w *Window) NSWindow() uintptr {
 // viewHandle is the CAMetalLayer the renderer draws into.
 func (w *Window) viewHandle() uintptr { return uintptr(w.layer) }
 
-func pasteboard() darwin.ID { return darwin.SendClass("NSPasteboard", "generalPasteboard") }
+// pasteboard is the clipboard. Tests swap in a private pasteboard.
+var pasteboard = func() darwin.ID { return darwin.SendClass("NSPasteboard", "generalPasteboard") }
 
 var pasteboardString = sync.OnceValue(func() darwin.ID {
 	return darwin.SymbolID(darwin.AppKit, "NSPasteboardTypeString")
