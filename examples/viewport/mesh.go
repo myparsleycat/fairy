@@ -61,10 +61,12 @@ func cubeMesh() ([]vertex, []uint16) {
 			}
 			verts = append(verts, vertex{p, f.color})
 		}
-		// Corners 0, 2, 1 run clockwise in the (u, v) plane as seen from
-		// outside the face, so the face is clockwise on screen when it is
-		// toward the viewer: the Direct3D front face.
-		idx = append(idx, base, base+2, base+1, base, base+3, base+2)
+		// The view maps model x right and y down on screen, so for the face
+		// toward the viewer at the start (-z: u right, v down) corners 0, 1,
+		// 2 run clockwise on screen, and every face does when it is toward the
+		// viewer: the front face of Direct3D and Metal, whose back-face
+		// culling then drops the far faces.
+		idx = append(idx, base, base+1, base+2, base, base+2, base+3)
 	}
 	return verts, idx
 }

@@ -37,7 +37,7 @@ const (
 	storeStore         = 1   // MTLStoreActionStore
 	compareLess        = 1   // MTLCompareFunctionLess
 	cullBack           = 2   // MTLCullModeBack
-	windingCCW         = 1   // MTLWindingCounterClockwise
+	windingClockwise   = 0   // MTLWindingClockwise
 	primitiveTriangle  = 3   // MTLPrimitiveTypeTriangle
 	indexUInt16        = 0   // MTLIndexTypeUInt16
 	resourceSharedMode = 0   // MTLResourceStorageModeShared
@@ -216,8 +216,7 @@ func (c *cubeRenderer) draw(f fairy.SurfaceFrame, cam camera, bg [4]float32) err
 	enc := msg(cb, "renderCommandEncoderWithDescriptor:", pass)
 	msg(enc, "setRenderPipelineState:", pipe)
 	msg(enc, "setDepthStencilState:", c.depthState)
-	// cubeMesh winds the faces toward the viewer counter-clockwise on screen.
-	msg(enc, "setFrontFacingWinding:", uint64(windingCCW))
+	msg(enc, "setFrontFacingWinding:", uint64(windingClockwise))
 	msg(enc, "setCullMode:", uint64(cullBack))
 	msg(enc, "setVertexBuffer:offset:atIndex:", c.vb, uint64(0), uint64(0))
 	// The camera is small, so Metal copies it with the commands: no buffer
