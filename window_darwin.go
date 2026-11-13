@@ -26,9 +26,12 @@ type windowPlat struct {
 	delegate darwin.ID // FairyWindowDelegate
 	link     darwin.ID // CADisplayLink that paces frames while one is wanted
 	linkOn   bool
-	timers   map[uintptr]*darwin.Timer
-	closed   bool
-	ime      imeState
+	// frameTimer paces frames in place of the display link before macOS 14,
+	// whose NSView has no displayLinkWithTarget:selector:.
+	frameTimer *darwin.Timer
+	timers     map[uintptr]*darwin.Timer
+	closed     bool
+	ime        imeState
 	// event is the input event being handled, whose modifiers keyMods
 	// reports.
 	event darwin.ID
@@ -39,6 +42,15 @@ var (
 	byView     = map[darwin.ID]*Window{}
 	byDelegate = map[darwin.ID]*Window{}
 )
+
+// viewWindow returns the open Window whose view is self, or nil once it is
+// closed.
+func viewWindow(self darwin.ID) *Window {
+	if w := byView[self]; w != nil && !w.closed {
+		return w
+	}
+	return nil
+}
 
 // NSWindowStyleMask bits.
 const (
@@ -118,10 +130,12 @@ func NewWindow(opts Options) (*Window, error) {
 		return nil, fmt.Errorf("fairy: text: %w", err)
 	}
 	w.ts.SetColorGlyphTextures(w.newGlyphTexture)
-	w.link = darwin.Send(view, "displayLinkWithTarget:selector:", view, darwin.Sel("fairyFrame:"))
-	darwin.Send(w.link, "setPaused:", true)
-	darwin.Send(w.link, "addToRunLoop:forMode:", darwin.SendClass("NSRunLoop", "mainRunLoop"),
-		darwin.SymbolID(darwin.Foundation, "NSRunLoopCommonModes"))
+	if darwin.Get[bool](view, "respondsToSelector:", darwin.Sel("displayLinkWithTarget:selector:")) {
+		w.link = darwin.Send(view, "displayLinkWithTarget:selector:", view, darwin.Sel("fairyFrame:"))
+		darwin.Send(w.link, "setPaused:", true)
+		darwin.Send(w.link, "addToRunLoop:forMode:", darwin.SendClass("NSRunLoop", "mainRunLoop"),
+			darwin.SymbolID(darwin.Foundation, "NSRunLoopCommonModes"))
+	}
 
 	w.renderFrame()
 	if !opts.StartHidden {
@@ -179,6 +193,8 @@ func (w *Window) windowClosed() {
 		darwin.Send(w.link, "invalidate")
 		w.link = 0
 	}
+	w.frameTimer.Stop()
+	w.frameTimer = nil
 	w.release()
 	delete(openWindows, w.nsWindow)
 	delete(byView, w.view)
@@ -344,25 +360,46 @@ func (w *Window) wake() bool {
 }
 
 // requestPaint starts the display link, which draws a frame on the next
-// refresh of the display.
+// refresh of the display, or the frame timer where there is no link.
 func (w *Window) requestPaint() {
-	if w.link != 0 && !w.linkOn {
+	switch {
+	case w.closed:
+	case w.link != 0 && !w.linkOn:
 		w.linkOn = true
 		darwin.Send(w.link, "setPaused:", false)
+	case w.link == 0 && w.frameTimer == nil:
+		// The timer calls the view's fairyFrame:, as the display link does.
+		view := w.view
+		w.frameTimer = darwin.NewTimer(time.Second/60, func() { darwin.Send(view, "fairyFrame:", darwin.ID(0)) })
 	}
 }
 
+// nsWindowOcclusionStateVisible is the NSWindowOcclusionState bit of a
+// window some part of which is on screen.
+const nsWindowOcclusionStateVisible = 1 << 1
+
 // onDisplayLink draws the frame the window asked for, and stops the display
-// link once none is wanted.
+// link once none is wanted. A window entirely out of sight draws nothing,
+// since no drawable comes for it; it draws again once it shows.
 func (w *Window) onDisplayLink() {
-	if w.needPaint {
+	occluded := darwin.Get[uint64](w.nsWindow, "occlusionState")&nsWindowOcclusionStateVisible == 0
+	if w.needPaint && !occluded {
 		w.renderFrame()
 		w.placeControls()
 	}
-	if !w.needPaint && w.linkOn && w.link != 0 {
+	if !w.needPaint || occluded {
+		w.stopPaint()
+	}
+}
+
+// stopPaint pauses the display link or stops the frame timer.
+func (w *Window) stopPaint() {
+	if w.linkOn && w.link != 0 {
 		w.linkOn = false
 		darwin.Send(w.link, "setPaused:", true)
 	}
+	w.frameTimer.Stop()
+	w.frameTimer = nil
 }
 
 // redrawAsync repaints the window without rebuilding it. It is safe from
@@ -411,13 +448,7 @@ func (w *Window) systemClipboardHasText() bool {
 }
 
 func (w *Window) setSystemClipboardText(s string) bool {
-	ok := false
-	darwin.WithPool(func() {
-		pb := pasteboard()
-		darwin.Send(pb, "clearContents")
-		ok = darwin.Get[bool](pb, "setString:forType:", darwin.String(s), pasteboardString())
-	})
-	return ok
+	return setPasteboard(map[string]any{"public.utf8-plain-text": s})
 }
 
 // keyMods returns the modifier keys held with the event being handled, or
@@ -633,7 +664,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 	type sel = darwin.SEL
 	on := func(f func(w *Window, ev id)) func(self id, _ sel, ev id) {
 		return func(self id, _ sel, ev id) {
-			if w := byView[self]; w != nil && !w.closed {
+			if w := viewWindow(self); w != nil {
 				f(w, ev)
 			}
 		}
@@ -753,6 +784,12 @@ var delegateClass = sync.OnceValue(func() darwin.Class {
 			w.releaseTextures()
 		})},
 		{Cmd: darwin.Sel("windowDidDeminiaturize:"), Fn: on(func(w *Window) { w.invalidate() })},
+		// Draw the frames held back while the window was out of sight.
+		{Cmd: darwin.Sel("windowDidChangeOcclusionState:"), Fn: on(func(w *Window) {
+			if w.needPaint {
+				w.requestPaint()
+			}
+		})},
 	})
 	if err != nil {
 		panic(err)

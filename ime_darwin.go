@@ -57,23 +57,17 @@ func addTextInputClient(c objc.Class) {
 	if p := objc.GetProtocol("NSTextInputClient"); p != nil {
 		c.AddProtocol(p)
 	}
-	win := func(self id) *Window {
-		if w := byView[self]; w != nil && !w.closed {
-			return w
-		}
-		return nil
-	}
 	add := func(name, types string, fn any) {
 		if !c.AddMethod(darwin.Sel(name), objc.NewIMP(fn), types) {
 			panic("fairy: add method " + name)
 		}
 	}
 	add("hasMarkedText", "B@:", func(self id, _ sel) bool {
-		w := win(self)
+		w := viewWindow(self)
 		return w != nil && w.composition() != ""
 	})
 	add("unmarkText", "v@:", func(self id, _ sel) {
-		if w := win(self); w != nil && !w.ime.discarding {
+		if w := viewWindow(self); w != nil && !w.ime.discarding {
 			w.finishComposition()
 		}
 	})
@@ -88,7 +82,7 @@ func addTextInputClient(c objc.Class) {
 	})
 	add("attributedSubstringForProposedRange:actualRange:", "@@:"+encRange+"^"+encRange,
 		func(self id, _ sel, loc, n uint64, actual *darwin.NSRange) id {
-			if w := win(self); w != nil {
+			if w := viewWindow(self); w != nil {
 				return w.imeSubstring(loc, n, actual)
 			}
 			return 0
@@ -97,7 +91,7 @@ func addTextInputClient(c objc.Class) {
 	// Input methods such as Korean read the text before the caret and
 	// replace it with insertText:'s replacement range.
 	add("insertText:replacementRange:", "v@:@"+encRange, func(self id, _ sel, str id, loc, n uint64) {
-		if w := win(self); w != nil && !w.ime.discarding {
+		if w := viewWindow(self); w != nil && !w.ime.discarding {
 			w.imeInsert(nsText(str), loc, n)
 		}
 	})
@@ -108,17 +102,17 @@ func addTextInputClient(c objc.Class) {
 			if runtime.GOARCH != "arm64" {
 				repLoc = darwin.NSNotFound
 			}
-			if w := win(self); w != nil && !w.ime.discarding {
+			if w := viewWindow(self); w != nil && !w.ime.discarding {
 				w.imeMark(nsText(str), selLoc, repLoc, repLen)
 			}
 		})
 	add("doCommandBySelector:", "v@::", func(self id, _ sel, cmd sel) {
-		if w := win(self); w != nil {
+		if w := viewWindow(self); w != nil {
 			w.ime.command = true
 		}
 	})
 	add("forwardInvocation:", "v@:@", func(self id, cmd sel, inv id) {
-		if !imeInvocation(win(self), inv) {
+		if !imeInvocation(viewWindow(self), inv) {
 			self.SendSuper(cmd, inv)
 		}
 	})

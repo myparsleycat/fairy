@@ -1,2 +1,6 @@
 *.exe
 /bin/
+
+# Binaries built from examples/ and cmd/ at the repository root.
+/shell
+/genlucide

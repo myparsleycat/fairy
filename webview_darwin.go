@@ -331,7 +331,8 @@ func (w *Window) overWebView(x, y float32) bool {
 }
 
 // webViewEditActions are the edit commands of the shortcuts a page did not
-// handle. The app has no Edit menu to send them, so the window does.
+// handle and the Edit menu did not take, such as one its item was disabled
+// for; the window sends them.
 var webViewEditActions = map[string]string{
 	"c": "copy:", "x": "cut:", "v": "paste:", "a": "selectAll:", "z": "undo:", "Z": "redo:",
 }
@@ -368,26 +369,20 @@ func (w *Window) webViewKey(ev darwin.ID) {
 func addFocusTracking(c objc.Class) {
 	type id = darwin.ID
 	type sel = darwin.SEL
-	win := func(self id) *Window {
-		if w := byView[self]; w != nil && !w.closed {
-			return w
-		}
-		return nil
-	}
 	add := func(name string, fn any) {
 		if !c.AddMethod(darwin.Sel(name), objc.NewIMP(fn), "B@:") {
 			panic("fairy: add method " + name)
 		}
 	}
 	add("becomeFirstResponder", func(self id, _ sel) bool {
-		if w := win(self); w != nil && !w.osFocus && darwin.Get[bool](w.nsWindow, "isKeyWindow") {
+		if w := viewWindow(self); w != nil && !w.osFocus && darwin.Get[bool](w.nsWindow, "isKeyWindow") {
 			w.onFocusChange(true)
 			w.securePassword(w.focusedEl())
 		}
 		return true
 	})
 	add("resignFirstResponder", func(self id, _ sel) bool {
-		if w := win(self); w != nil && w.osFocus {
+		if w := viewWindow(self); w != nil && w.osFocus {
 			w.securePassword(nil)
 			w.onFocusChange(false)
 		}

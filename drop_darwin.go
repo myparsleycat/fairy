@@ -18,12 +18,6 @@ const (
 func addDropTarget(c objc.Class) {
 	type id = darwin.ID
 	type sel = darwin.SEL
-	win := func(self id) *Window {
-		if w := byView[self]; w != nil && !w.closed {
-			return w
-		}
-		return nil
-	}
 	op := func(copy bool) uint64 {
 		if copy {
 			return nsDragOperationCopy
@@ -36,7 +30,7 @@ func addDropTarget(c objc.Class) {
 		}
 	}
 	add("draggingEntered:", "Q@:@", func(self id, _ sel, info id) uint64 {
-		w := win(self)
+		w := viewWindow(self)
 		if w == nil {
 			return nsDragOperationNone
 		}
@@ -44,20 +38,20 @@ func addDropTarget(c objc.Class) {
 		return op(w.fileDragEnter(draggedPaths(info), x, y))
 	})
 	add("draggingUpdated:", "Q@:@", func(self id, _ sel, info id) uint64 {
-		w := win(self)
+		w := viewWindow(self)
 		if w == nil {
 			return nsDragOperationNone
 		}
 		return op(w.fileDragOver(w.dragPoint(info)))
 	})
 	add("draggingExited:", "v@:@", func(self id, _ sel, info id) {
-		if w := win(self); w != nil {
+		if w := viewWindow(self); w != nil {
 			w.fileDragLeave()
 		}
 	})
-	add("prepareForDragOperation:", "B@:@", func(self id, _ sel, info id) bool { return win(self) != nil })
+	add("prepareForDragOperation:", "B@:@", func(self id, _ sel, info id) bool { return viewWindow(self) != nil })
 	add("performDragOperation:", "B@:@", func(self id, _ sel, info id) bool {
-		w := win(self)
+		w := viewWindow(self)
 		if w == nil {
 			return false
 		}

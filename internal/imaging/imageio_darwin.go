@@ -204,11 +204,6 @@ func DecodeNative(in Input, bound Bound) (img *Bitmap) {
 	if dw <= 0 || dh <= 0 {
 		return nil
 	}
-	darwin.WithPool(func() { img = decodeImageIO(in, sw, sh, dw, dh) })
-	return img
-}
-
-func decodeImageIO(in Input, sw, sh, dw, dh int) *Bitmap {
 	var pin runtime.Pinner
 	pin.Pin(unsafe.SliceData(in.data))
 	defer pin.Unpin()
@@ -217,17 +212,20 @@ func decodeImageIO(in Input, sw, sh, dw, dh int) *Bitmap {
 	if data == 0 {
 		return nil
 	}
-	defer func() {
-		// The source and images, released by now, were all that held the
-		// data. Should ImageIO keep it past them, the bytes stay reachable
-		// for good rather than be collected under it.
-		if cfGetRetainCount(data) != 1 {
-			imageIOHeldMu.Lock()
-			imageIOHeld = append(imageIOHeld, in.data)
-			imageIOHeldMu.Unlock()
-		}
-		darwin.CFRelease(data)
-	}()
+	darwin.WithPool(func() { img = decodeImageIO(data, in, sw, sh, dw, dh) })
+	// The source and images, released with the pool drained, were all that
+	// held the data. Should ImageIO keep it past them, the bytes stay
+	// reachable for good rather than be collected under it.
+	if cfGetRetainCount(data) != 1 {
+		imageIOHeldMu.Lock()
+		imageIOHeld = append(imageIOHeld, in.data)
+		imageIOHeldMu.Unlock()
+	}
+	darwin.CFRelease(data)
+	return img
+}
+
+func decodeImageIO(data uintptr, in Input, sw, sh, dw, dh int) *Bitmap {
 	noCache := cfDict([]uintptr{kCGImageSourceShouldCache}, []uintptr{kCFBooleanFalse})
 	defer darwin.CFRelease(noCache)
 	src := cgImageSourceCreateWithData(data, noCache)

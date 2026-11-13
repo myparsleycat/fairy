@@ -240,10 +240,23 @@ func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 func (r *Renderer) draw(s *Scene, clear [4]float32) (wait time.Duration, err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	r.ds.Lock()
-	defer r.ds.Unlock()
 	pool := darwin.NewPool()
 	defer pool.Drain()
+	// The drawable comes before the device lock: waiting for one, as Metal
+	// does for the display, must not hold up other users of the device.
+	var back, drawable id
+	if r.layer != 0 {
+		t := time.Now()
+		drawable = darwin.Send(r.layer, "nextDrawable")
+		wait = time.Since(t)
+		// None comes within a second while the window is hidden; skip the frame.
+		r.occluded = drawable == 0
+		if drawable == 0 {
+			return wait, nil
+		}
+	}
+	r.ds.Lock()
+	defer r.ds.Unlock()
 	if r.timer != nil {
 		sample := r.timer.collect()
 		r.stats.GPU, r.stats.GPUFrame, r.stats.GPUValid = sample.duration, sample.frame, sample.valid
@@ -260,16 +273,7 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) (wait time.Duration, err err
 	r.cb = cb
 	defer r.abandon()
 
-	var back, drawable id
-	if r.layer != 0 {
-		t := time.Now()
-		drawable = darwin.Send(r.layer, "nextDrawable")
-		wait = time.Since(t)
-		// None comes within a second while the window is hidden; skip the frame.
-		r.occluded = drawable == 0
-		if drawable == 0 {
-			return wait, nil
-		}
+	if drawable != 0 {
 		back = darwin.Send(drawable, "texture")
 	} else {
 		back = r.target.tex

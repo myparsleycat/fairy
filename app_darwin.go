@@ -42,9 +42,10 @@ var launchApp = sync.OnceFunc(func() {
 	darwin.Send(nsApp, "finishLaunching")
 })
 
-// newMainMenu makes the menu bar: the app menu, with Hide and Quit, and the
-// Window menu, which AppKit fills with the open windows. Other shortcuts,
-// such as ⌘C, reach the focused window's key handlers.
+// newMainMenu makes the menu bar: the app menu, with Hide and Quit, the Edit
+// menu, and the Window menu, which AppKit fills with the open windows. Other
+// shortcuts, and ⌘C and the like while the Edit menu has nothing to send
+// them to, reach the focused window's key handlers.
 func newMainMenu() darwin.ID {
 	name := filepath.Base(os.Args[0])
 	bar := darwin.New("NSMenu")
@@ -86,6 +87,18 @@ func newMainMenu() darwin.ID {
 	separator(app)
 	item(app, "Quit "+name, "terminate:", "q", nsCommand)
 
+	// The Edit menu gives AppKit's text fields and web views their editing
+	// shortcuts. Its items are disabled while the window's own view has the
+	// keyboard, so the keys reach its handlers.
+	edit := submenu("Edit")
+	item(edit, "Undo", "undo:", "z", nsCommand)
+	item(edit, "Redo", "redo:", "z", nsCommand|nsShift)
+	separator(edit)
+	item(edit, "Cut", "cut:", "x", nsCommand)
+	item(edit, "Copy", "copy:", "c", nsCommand)
+	item(edit, "Paste", "paste:", "v", nsCommand)
+	item(edit, "Select All", "selectAll:", "a", nsCommand)
+
 	window := submenu("Window")
 	item(window, "Minimize", "performMiniaturize:", "m", nsCommand)
 	item(window, "Zoom", "performZoom:", "", 0)
@@ -99,9 +112,15 @@ var appDelegateClass = sync.OnceValue(func() darwin.Class {
 	c, err := objc.RegisterClass("FairyAppDelegate", darwin.Cls("NSObject"), nil, nil, []objc.MethodDef{
 		{
 			// Quit from the app menu or the Dock ends Main rather than the
-			// process, as Quit does.
+			// process, as Quit does. Logging out, restarting or shutting
+			// down must not be refused: Main's windows and shutdown
+			// functions are closed, and then the process ends.
 			Cmd: darwin.Sel("applicationShouldTerminate:"),
 			Fn: func(self darwin.ID, _ darwin.SEL, sender darwin.ID) uint64 {
+				if systemQuit() {
+					finishMain()
+					return 1 // NSTerminateNow
+				}
 				Quit()
 				return 0 // NSTerminateCancel
 			},
@@ -156,26 +175,7 @@ func Main(start func() error) error {
 	if queued {
 		wakeAppLoop(false)
 	}
-	defer func() {
-		app.mu.Lock()
-		app.closing = true
-		close(app.done)
-		calls, quiet := app.calls, app.quiet
-		app.calls, app.quiet = nil, nil
-		app.mu.Unlock()
-		cancelAppCalls(calls)
-		cancelAppCalls(quiet)
-		for _, w := range openWindows {
-			w.closeNow()
-		}
-		apphost.Shutdown()
-		app.mu.Lock()
-		app.running = false
-		app.done = nil
-		app.thread.Store(0)
-		app.closing = false
-		app.mu.Unlock()
-	}()
+	defer finishMain()
 	if err := start(); err != nil {
 		return err
 	}
@@ -185,6 +185,44 @@ func Main(start func() error) error {
 	darwin.Send(nsApp, "activateIgnoringOtherApps:", true)
 	darwin.Send(nsApp, "run")
 	return nil
+}
+
+// finishMain cancels the queued calls, closes the windows and runs the
+// shutdown functions as Main ends. It does nothing outside Main.
+func finishMain() {
+	app.mu.Lock()
+	if app.done == nil || app.closing {
+		app.mu.Unlock()
+		return
+	}
+	app.closing = true
+	close(app.done)
+	calls, quiet := app.calls, app.quiet
+	app.calls, app.quiet = nil, nil
+	app.mu.Unlock()
+	cancelAppCalls(calls)
+	cancelAppCalls(quiet)
+	for _, w := range openWindows {
+		w.closeNow()
+	}
+	apphost.Shutdown()
+	app.mu.Lock()
+	app.running = false
+	app.done = nil
+	app.thread.Store(0)
+	app.closing = false
+	app.mu.Unlock()
+}
+
+// keyAEQuitReason ('why?') is the attribute of the quit Apple event that
+// the system sends when it logs out, restarts or shuts down.
+const keyAEQuitReason = 'w'<<24 | 'h'<<16 | 'y'<<8 | '?'
+
+// systemQuit reports whether the termination being asked for comes from
+// the system logging out, restarting or shutting down.
+func systemQuit() bool {
+	ev := darwin.Send(darwin.SendClass("NSAppleEventManager", "sharedAppleEventManager"), "currentAppleEvent")
+	return ev != 0 && darwin.Send(ev, "attributeDescriptorForKeyword:", uint32(keyAEQuitReason)) != 0
 }
 
 // stopApp makes [NSApp run] return. stop: takes effect after the next

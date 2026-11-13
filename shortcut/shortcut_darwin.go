@@ -25,6 +25,7 @@ const (
 	kEventHotKeyExclusive = 1
 
 	eventHotKeyExistsErr = -9878
+	eventNotHandledErr   = -9874
 
 	cmdKey     = 1 << 8
 	shiftKey   = 1 << 9
@@ -79,10 +80,13 @@ func load() error {
 	cb := purego.NewCallback(func(_, event, _ uintptr) uintptr {
 		var hk eventHotKeyID
 		if carbon.getEventParameter(event, kEventParamDirectObj, typeEventHotKeyID, nil,
-			uint64(unsafe.Sizeof(hk)), nil, unsafe.Pointer(&hk)) == 0 && hk.signature == hotKeySignature {
-			onHotKey(hk.id)
+			uint64(unsafe.Sizeof(hk)), nil, unsafe.Pointer(&hk)) == 0 && hk.signature == hotKeySignature &&
+			onHotKey(hk.id) {
+			return 0 // noErr
 		}
-		return 0 // noErr
+		// Another handler's hot key: let it through.
+		status := int32(eventNotHandledErr)
+		return uintptr(uint32(status))
 	})
 	spec := eventTypeSpec{kEventClassKeyboard, kEventHotKeyPressed}
 	if st := carbon.installEventHandler(carbon.getApplicationEventTarget(), cb, 1, &spec, 0, &shortcuts.handler); st != 0 {
@@ -190,10 +194,13 @@ func Unregister(id ID) {
 	delete(shortcuts.extra, uint32(id))
 }
 
-func onHotKey(id uint32) {
-	if f := shortcuts.handlers[id]; f != nil {
+// onHotKey runs the handler of hot key id and reports whether there was one.
+func onHotKey(id uint32) bool {
+	f := shortcuts.handlers[id]
+	if f != nil {
 		apphost.Go(f)
 	}
+	return f != nil
 }
 
 func release() {

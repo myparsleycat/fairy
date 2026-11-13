@@ -1194,7 +1194,7 @@ func addAccessibility(c objc.Class) {
 	type id = darwin.ID
 	type sel = darwin.SEL
 	win := func(self id) *Window {
-		if w := byView[self]; w != nil && w.a11yStart() {
+		if w := viewWindow(self); w != nil && w.a11yStart() {
 			return w
 		}
 		return nil
