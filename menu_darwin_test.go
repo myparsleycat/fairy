@@ -8,10 +8,10 @@ import (
 
 func TestMenuLabel(t *testing.T) {
 	const (
-		shift = nsShiftKeyMask
-		ctrl  = nsControlKeyMask
-		opt   = nsOptionKeyMask
-		cmd   = nsCommandKeyMask
+		shift = nsShift
+		ctrl  = nsControl
+		opt   = nsOption
+		cmd   = nsCommand
 	)
 	for _, tc := range []struct {
 		label, title, key string

@@ -34,14 +34,6 @@ var menuTargetClass = sync.OnceValue(func() darwin.Class {
 	return c
 })
 
-// NSEventModifierFlags of key equivalents.
-const (
-	nsShiftKeyMask   = 1 << 17
-	nsControlKeyMask = 1 << 18
-	nsOptionKeyMask  = 1 << 19
-	nsCommandKeyMask = 1 << 20
-)
-
 // buildNSMenu makes an NSMenu of items whose item tags index actions, from
 // 1. The caller releases the menu.
 func buildNSMenu(items []MenuItem, actions *[]func(), target darwin.ID) darwin.ID {
@@ -124,7 +116,7 @@ func (w *Window) PopupMenu(x, y float32, items []MenuItem) error {
 }
 
 // ShowMenu shows a native menu at screen point (x, y), in points with y
-// measured down from the top of the main screen as in Window.Bounds, runs the
+// measured down from the top of the primary screen as in Window.Bounds, runs the
 // chosen item and then updates every window. It returns after the menu
 // closes. Use it for menus not tied to a window, such as a tray icon's; a
 // window's own menus use Window.PopupMenu. Call it on the UI thread.
@@ -278,16 +270,16 @@ func keyEquivalent(c keyboard.Chord) (string, uint64, bool) {
 	}
 	var mask uint64
 	if c.Mods&keyboard.ModShift != 0 {
-		mask |= nsShiftKeyMask
+		mask |= nsShift
 	}
 	if c.Mods&keyboard.ModCtrl != 0 {
-		mask |= nsControlKeyMask
+		mask |= nsControl
 	}
 	if c.Mods&keyboard.ModAlt != 0 {
-		mask |= nsOptionKeyMask
+		mask |= nsOption
 	}
 	if c.Mods&keyboard.ModSuper != 0 {
-		mask |= nsCommandKeyMask
+		mask |= nsCommand
 	}
 	return key, mask, true
 }

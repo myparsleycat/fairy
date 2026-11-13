@@ -53,3 +53,23 @@ func TestDarwinMainMenu(t *testing.T) {
 		t.Errorf("Quit key %q, Window menu set %v", quitKey, windowsMenu)
 	}
 }
+
+// Calls from other goroutines run while a call on the UI thread runs a
+// modal loop, as a dialog or a menu does.
+func TestDarwinCallsRunInsideModalLoops(t *testing.T) {
+	ran := false
+	Do(func() {
+		go Do(func() { ran = true })
+		mode := darwin.SymbolID(darwin.AppKit, "NSModalPanelRunLoopMode")
+		loop := darwin.SendClass("NSRunLoop", "currentRunLoop")
+		for i := 0; i < 100 && !ran; i++ {
+			darwin.WithPool(func() {
+				until := darwin.SendClass("NSDate", "dateWithTimeIntervalSinceNow:", 0.02)
+				darwin.Send(loop, "runMode:beforeDate:", mode, until)
+			})
+		}
+	})
+	if !ran {
+		t.Fatal("a Do call did not run inside the modal loop")
+	}
+}

@@ -119,8 +119,10 @@ func init() { appDelegateClass() }
 func appLoopReady() bool { return app.running }
 
 // wakeAppLoop asks the UI loop to run the queued calls, or the quiet ones.
+// They run from a run loop timer, not the main dispatch queue, so that they
+// also run while a call shows a modal dialog or a menu, as on Windows.
 func wakeAppLoop(quiet bool) bool {
-	darwin.Async(func() {
+	darwin.Perform(func() {
 		if quiet {
 			runQuietCalls()
 		} else {

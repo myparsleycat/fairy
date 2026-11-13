@@ -139,10 +139,11 @@ func (t *Tray) clicked() {
 // fairy.ShowMenu takes.
 func (t *Tray) menuPoint() (x, y int, ok bool) {
 	win := darwin.Send(t.button, "window")
-	screen := darwin.SendClass("NSScreen", "mainScreen")
-	if win == 0 || screen == 0 {
+	screens := darwin.SendClass("NSScreen", "screens")
+	if win == 0 || screens == 0 || darwin.Get[uint64](screens, "count") == 0 {
 		return 0, 0, false
 	}
+	screen := darwin.Send(screens, "objectAtIndex:", uint64(0)) // the primary screen, the origin of screen points
 	b := darwin.Get[darwin.CGRect](t.button, "bounds")
 	r := darwin.Get[darwin.CGRect](t.button, "convertRect:toView:", b, darwin.ID(0))
 	r = darwin.Get[darwin.CGRect](win, "convertRectToScreen:", r)

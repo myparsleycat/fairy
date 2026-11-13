@@ -253,7 +253,7 @@ func (w *Window) IsVisible() bool {
 }
 
 // Bounds returns the window's frame in screen points, with y measured down
-// from the top of the main screen.
+// from the top of the primary screen.
 func (w *Window) Bounds() Bounds {
 	if w.closed {
 		return Bounds{}
@@ -272,12 +272,15 @@ func (w *Window) SetBounds(b Bounds) {
 	darwin.Send(w.nsWindow, "setFrame:display:", darwin.Rect(float64(b.X), y, float64(b.W), float64(b.H)), true)
 }
 
+// mainScreenHeight is the height of the primary screen, the one with the
+// menu bar, whose bottom left corner is the origin of screen coordinates.
+// ([NSScreen mainScreen] is the screen with the key window.)
 func mainScreenHeight() float64 {
-	s := darwin.SendClass("NSScreen", "mainScreen")
-	if s == 0 {
+	screens := darwin.SendClass("NSScreen", "screens")
+	if screens == 0 || darwin.Get[uint64](screens, "count") == 0 {
 		return 0
 	}
-	return darwin.Get[darwin.CGRect](s, "frame").Size.H
+	return darwin.Get[darwin.CGRect](darwin.Send(screens, "objectAtIndex:", uint64(0)), "frame").Size.H
 }
 
 // Close asks the window to close, running Options.OnClose.
@@ -327,7 +330,7 @@ func (w *Window) wake() bool {
 	if w.nsWindow == 0 || w.closed {
 		return false
 	}
-	darwin.Async(func() {
+	darwin.Perform(func() {
 		if !w.closed {
 			w.runPosted()
 		}
@@ -360,7 +363,7 @@ func (w *Window) onDisplayLink() {
 // redrawAsync repaints the window without rebuilding it. It is safe from
 // any goroutine.
 func (w *Window) redrawAsync() {
-	darwin.Async(func() {
+	darwin.Perform(func() {
 		if !w.closed {
 			w.invalidate()
 		}
