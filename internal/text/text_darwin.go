@@ -28,6 +28,7 @@ type formatKey struct {
 	noWrap        bool
 	ellipsis      bool
 	letterSpacing float32
+	scale         float32
 }
 
 type layoutKey struct {
@@ -58,7 +59,11 @@ func keyOf(s Style) formatKey {
 	if w == 0 {
 		w = 400
 	}
-	return formatKey{s.Family, s.Size, w, s.Italic, s.LineHeight, s.Align, s.NoWrap, s.Ellipsis, s.LetterSpacing}
+	scale := s.Scale
+	if scale <= 0 {
+		scale = 1
+	}
+	return formatKey{s.Family, s.Size, w, s.Italic, s.LineHeight, s.Align, s.NoWrap, s.Ellipsis, s.LetterSpacing, scale}
 }
 
 // glyphAtlas is the part of render.Atlas the system uses, so tests can
@@ -437,7 +442,7 @@ func (l *Layout) segments(k formatKey, runs []Run) ([]uint32, []runStyle) {
 func (l *Layout) build(k formatKey, runs []Run) {
 	s := l.sys
 	n := len(l.u16)
-	baseFont := cfRetain(s.font(k.family, k.weight, k.italic, k.size))
+	baseFont := cfRetain(s.font(k.family, k.weight, k.italic, k.size, k.scale))
 	defer cfRelease(baseFont)
 	if baseFont == 0 {
 		return
@@ -452,7 +457,7 @@ func (l *Layout) build(k formatKey, runs []Run) {
 	edges, styles := l.segments(k, runs)
 	for i, st := range styles {
 		a, b := int(edges[i]), int(edges[i+1])
-		if f := s.font(st.family, st.weight, st.italic, st.size); f != 0 {
+		if f := s.font(st.family, st.weight, st.italic, st.size, k.scale); f != 0 {
 			cfAttributedStringSetAttribute(as, cfRange{a, b - a}, kCTFontAttributeName, f)
 		}
 		if st.color > 0 || st.underline || st.strike {

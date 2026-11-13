@@ -266,6 +266,7 @@ func (w *Window) textStyle(tp textProps) text.Style {
 		NoWrap:        tp.noWrap,
 		Ellipsis:      tp.ellipsis,
 		LetterSpacing: tp.letterSpacing * w.scale,
+		Scale:         w.scale,
 	}
 }
 

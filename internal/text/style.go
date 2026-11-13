@@ -29,6 +29,10 @@ type Style struct {
 	Ellipsis   bool
 	// LetterSpacing is added after each character, in device pixels, as CSS letter-spacing.
 	LetterSpacing float32
+	// Scale is the device pixels per point that the sizes were scaled by; 0
+	// means 1. On macOS fonts keep the optical size and tracking of their
+	// point size, as AppKit draws them on a Retina screen; Windows ignores it.
+	Scale float32
 	// Runs override the style for byte ranges of the text.
 	Runs []Run
 }

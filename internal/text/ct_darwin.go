@@ -5,6 +5,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/ebitengine/purego"
 	"github.com/myparsleycat/fairy/internal/darwin"
 )
 
@@ -137,6 +138,7 @@ var (
 	kCTFontVariationAxisIDKey      uintptr
 	kCTFontVariationAxisMinKey     uintptr
 	kCTFontVariationAxisMaxKey     uintptr
+	kCTFontOpticalSizeAttribute    uintptr // 0 where CoreText lacks it
 	kCGColorSpaceSRGB              uintptr
 )
 
@@ -259,6 +261,9 @@ func init() {
 		{&kCGColorSpaceSRGB, cg, "kCGColorSpaceSRGB"},
 	} {
 		*c.dst = uintptr(darwin.SymbolID(c.lib, c.name))
+	}
+	if p, err := purego.Dlsym(ct, "kCTFontOpticalSizeAttribute"); err == nil {
+		kCTFontOpticalSizeAttribute = *(*uintptr)(unsafe.Add(nil, p))
 	}
 }
 

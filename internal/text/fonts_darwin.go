@@ -265,26 +265,43 @@ type fontKey struct {
 	weight int
 	italic bool
 	size   float32
+	scale  float32
 }
 
 const fontCacheLimit = 128
 
-// font returns a cached CTFont for a run of text. It stays valid until the
-// next font cache eviction, which happens only between layouts.
-func (s *System) font(family string, weight int, italic bool, size float32) uintptr {
+// font returns a cached CTFont for a run of text of size device pixels, at
+// scale device pixels per point. It stays valid until the next font cache
+// eviction, which happens only between layouts.
+func (s *System) font(family string, weight int, italic bool, size, scale float32) uintptr {
 	if size <= 0 {
 		size = 14
 	}
 	if weight <= 0 {
 		weight = 400
 	}
-	k := fontKey{family, weight, italic, size}
+	if scale <= 0 {
+		scale = 1
+	}
+	k := fontKey{family, weight, italic, size, scale}
 	if f, ok := s.fonts[k]; ok {
 		return f
 	}
 	f := s.createFont(family, weight, italic, float64(size))
-	if s.cascade != 0 && f != 0 {
-		attrs := cfDict(kCTFontCascadeListAttribute, s.cascade)
+	// Fonts are made at their device size, which CoreText would otherwise
+	// also take as the optical size: SF would set text on a 2x screen with
+	// the narrower shapes and tighter tracking of twice the point size.
+	var kv []uintptr
+	if s.cascade != 0 {
+		kv = append(kv, kCTFontCascadeListAttribute, s.cascade)
+	}
+	if scale != 1 && kCTFontOpticalSizeAttribute != 0 {
+		opsz := cfFloat(float64(size / scale))
+		defer cfRelease(opsz)
+		kv = append(kv, kCTFontOpticalSizeAttribute, opsz)
+	}
+	if len(kv) > 0 && f != 0 {
+		attrs := cfDict(kv...)
 		d := ctFontDescriptorCreateWithAttributes(attrs)
 		cfRelease(attrs)
 		if c := ctFontCreateCopyWithAttributes(f, 0, nil, d); c != 0 {
