@@ -533,3 +533,66 @@ func TestDarwinWebViewDialogs(t *testing.T) {
 		t.Errorf("prompt Cancel: %q", got)
 	}
 }
+
+// window.open opens a window with a web view sharing the opener's
+// configuration, as WebView2 does; the page can close it, closing it frees
+// it, and closing the opener closes what it opened.
+func TestDarwinWebViewPopups(t *testing.T) {
+	srv := testServer(t)
+	ready := false
+	v := NewWebView(WebViewOptions{URL: srv.URL + "/", OnReady: func() { ready = true }, OnError: func(err error) { t.Error(err) }})
+	v.ephemeral = true
+	newTestWindow(t, func() *El { return WebViewHost(v).Size(200, 120) })
+	waitFor(t, "loaded", func() bool { return ready && v.Title() == "First" })
+
+	if _, err := runScript(t, v, `window.p = window.open('/second', '_blank', 'width=320,height=240'); 1`); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a popup", func() bool { return len(v.popups) == 1 })
+	var popup webPopup
+	Do(func() { popup = v.popups[0] })
+	waitFor(t, "the popup's page", func() bool { return darwin.GoString(darwin.Send(popup.win, "title")) == "Second" })
+	Do(func() {
+		r := darwin.Get[darwin.CGRect](popup.wk, "frame")
+		if r.Size.W != 320 || r.Size.H != 240 {
+			t.Errorf("popup web view %v, want 320x240", r.Size)
+		}
+		if !darwin.Get[bool](popup.win, "isVisible") {
+			t.Error("popup window not shown")
+		}
+	})
+	// The opener reaches the popup's page, which shares its cookies.
+	if got, err := runScript(t, v, `window.p.document.title`); err != nil || got != `"Second"` {
+		t.Errorf("opener sees popup title %s, %v", got, err)
+	}
+	// The page closes it.
+	if _, err := runScript(t, v, `window.p.close(); 1`); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the page to close the popup", func() bool { return len(v.popups) == 0 })
+
+	// The user closes one.
+	runScript(t, v, `window.open('/second'); 1`)
+	waitFor(t, "a second popup", func() bool { return len(v.popups) == 1 })
+	Do(func() { darwin.Send(v.popups[0].win, "performClose:", darwin.ID(0)) })
+	waitFor(t, "the user to close the popup", func() bool { return len(v.popups) == 0 })
+
+	// Closing the opener closes the rest.
+	runScript(t, v, `window.open('/second'); window.open('/second'); 1`)
+	waitFor(t, "two popups", func() bool { return len(v.popups) == 2 })
+	var wins []darwin.ID
+	Do(func() {
+		for _, p := range v.popups {
+			wins = append(wins, p.win)
+		}
+		v.Close()
+		if len(v.popups) != 0 {
+			t.Errorf("%d popups after Close", len(v.popups))
+		}
+		for _, w := range wins {
+			if darwin.Get[bool](w, "isVisible") {
+				t.Error("a popup is still shown after Close")
+			}
+		}
+	})
+}

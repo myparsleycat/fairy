@@ -16,6 +16,7 @@ import (
 	"math"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +31,10 @@ import (
 // WebView is a WebKit browser shown as part of the window, by WebViewHost.
 // It is created when WebViewHost first places it in a window. It is a
 // native view above the window's drawing, so popovers and overlays never
-// cover it, and it is not clipped by scroll containers. Use it from the UI
-// thread.
+// cover it, and it is not clipped by scroll containers. Pages that open
+// windows, with window.open or a link with a target, get a plain window of
+// their own, as with WebView2; closing the WebView closes them. Use it from
+// the UI thread.
 type WebView struct {
 	opts     WebViewOptions
 	host     *Window
@@ -45,6 +48,7 @@ type WebView struct {
 	pending  string // URL to navigate to once ready
 	title    string
 	closed   bool
+	popups   []webPopup // windows the page opened
 	// ephemeral keeps the web view's data in memory, for tests.
 	ephemeral bool
 }
@@ -151,8 +155,11 @@ func (v *WebView) build() {
 	defer darwin.Release(cfg)
 	v.store = darwin.Retain(v.dataStore())
 	darwin.Send(cfg, "setWebsiteDataStore:", v.store)
+	prefs := darwin.Send(cfg, "preferences")
+	// WebView2 opens a window for every window.open; WebKit by default only
+	// for those a click starts.
+	darwin.Send(prefs, "setJavaScriptCanOpenWindowsAutomatically:", true)
 	if v.opts.DevTools {
-		prefs := darwin.Send(cfg, "preferences")
 		if darwin.Get[bool](prefs, "respondsToSelector:", darwin.Sel("_setDeveloperExtrasEnabled:")) {
 			darwin.Send(prefs, "_setDeveloperExtrasEnabled:", true)
 		}
@@ -690,6 +697,9 @@ func (v *WebView) Close() {
 	if v.host != nil {
 		delete(v.host.webviews, v)
 	}
+	for len(v.popups) > 0 {
+		darwin.Send(v.popups[0].win, "close")
+	}
 	if v.wk != 0 {
 		v.giveFocusBack()
 		wk := v.wk
@@ -711,6 +721,78 @@ func (v *WebView) Close() {
 	}
 	darwin.Release(v.store)
 	v.store = 0
+}
+
+// webPopup is a window a page opened with window.open or a link with a
+// target, holding a web view that shares the opener's configuration.
+type webPopup struct{ win, wk darwin.ID }
+
+// openPopup opens a window for a page's window.open, as WebView2 does, sized
+// as the page asks or 800x600 points, and returns its web view for WebKit
+// to load the page into.
+func (v *WebView) openPopup(cfg, features darwin.ID) darwin.ID {
+	size := func(n darwin.ID, def float64) float64 {
+		if n == 0 {
+			return def
+		}
+		return min(max(darwin.Get[float64](n, "doubleValue"), 100), 10000)
+	}
+	w, h := size(darwin.Send(features, "width"), 800), size(darwin.Send(features, "height"), 600)
+	rect := darwin.CGRect{Size: darwin.CGSize{W: w, H: h}}
+	const style = 1 | 2 | 4 | 8 // titled, closable, miniaturizable, resizable
+	win := darwin.Send(darwin.SendClass("NSWindow", "alloc"), "initWithContentRect:styleMask:backing:defer:",
+		rect, uint64(style), uint64(2), false)
+	if win == 0 {
+		return 0
+	}
+	wk := darwin.Send(darwin.SendClass("WKWebView", "alloc"), "initWithFrame:configuration:", rect, cfg)
+	if wk == 0 {
+		darwin.Release(win)
+		return 0
+	}
+	darwin.Send(win, "setReleasedWhenClosed:", false)
+	darwin.Send(win, "setContentView:", wk)
+	darwin.Send(win, "setDelegate:", v.delegate)
+	darwin.Send(wk, "setUIDelegate:", v.delegate)
+	darwin.Send(wk, "addObserver:forKeyPath:options:context:", v.delegate, darwin.String("title"), uint64(1), uintptr(0))
+	if v.opts.DevTools && darwin.Get[bool](wk, "respondsToSelector:", darwin.Sel("setInspectable:")) {
+		darwin.Send(wk, "setInspectable:", true)
+	}
+	v.popups = append(v.popups, webPopup{win: win, wk: wk})
+	if v.host != nil && v.host.nsWindow != 0 {
+		// Offset from the host window's top left, as cascading windows are.
+		f := darwin.Get[darwin.CGRect](v.host.nsWindow, "frame")
+		darwin.Send(win, "setFrameTopLeftPoint:", darwin.CGPoint{X: f.Origin.X + 24, Y: f.Origin.Y + f.Size.H - 24})
+	} else {
+		darwin.Send(win, "center")
+	}
+	darwin.Send(win, "makeKeyAndOrderFront:", darwin.ID(0))
+	return wk
+}
+
+// popupOf returns the index of the popup with web view wk or window win, or
+// -1.
+func (v *WebView) popupOf(wk, win darwin.ID) int {
+	for i, p := range v.popups {
+		if wk != 0 && p.wk == wk || win != 0 && p.win == win {
+			return i
+		}
+	}
+	return -1
+}
+
+// closePopup frees popup i once its window closes.
+func (v *WebView) closePopup(i int) {
+	p := v.popups[i]
+	v.popups = slices.Delete(v.popups, i, i+1)
+	darwin.Send(p.wk, "removeObserver:forKeyPath:", v.delegate, darwin.String("title"))
+	darwin.Send(p.wk, "setUIDelegate:", darwin.ID(0))
+	darwin.Send(p.wk, "stopLoading")
+	darwin.Send(p.win, "setDelegate:", darwin.ID(0))
+	darwin.Release(p.wk)
+	// The window is released after AppKit is done closing it.
+	win := p.win
+	darwin.Perform(func() { darwin.Release(win) })
 }
 
 // WebKit callbacks.
@@ -828,9 +910,34 @@ var webViewDelegateClass = sync.OnceValue(func() darwin.Class {
 				v.message(msg)
 			}
 		}},
-		{Cmd: darwin.Sel("observeValueForKeyPath:ofObject:change:context:"), Fn: func(self id, _ sel, _, _, _ id, _ uintptr) {
+		{Cmd: darwin.Sel("observeValueForKeyPath:ofObject:change:context:"), Fn: func(self id, _ sel, _, obj, _ id, _ uintptr) {
 			if v := web(self); v != nil {
-				v.titleChanged()
+				if obj == v.wk {
+					v.titleChanged()
+				} else if i := v.popupOf(obj, 0); i >= 0 {
+					darwin.Send(v.popups[i].win, "setTitle:", darwin.Send(obj, "title"))
+				}
+			}
+		}},
+		{Cmd: darwin.Sel("webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:"),
+			Fn: func(self id, _ sel, _, cfg, _, features id) id {
+				if v := web(self); v != nil {
+					return v.openPopup(cfg, features)
+				}
+				return 0
+			}},
+		{Cmd: darwin.Sel("webViewDidClose:"), Fn: func(self id, _ sel, wk id) {
+			if v := web(self); v != nil {
+				if i := v.popupOf(wk, 0); i >= 0 {
+					darwin.Send(v.popups[i].win, "close")
+				}
+			}
+		}},
+		{Cmd: darwin.Sel("windowWillClose:"), Fn: func(self id, _ sel, note id) {
+			if v := byWebDelegate[self]; v != nil {
+				if i := v.popupOf(0, darwin.Send(note, "object")); i >= 0 {
+					v.closePopup(i)
+				}
 			}
 		}},
 		{Cmd: darwin.Sel("webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:"),
