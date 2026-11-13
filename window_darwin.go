@@ -169,6 +169,7 @@ func (w *Window) windowClosed() {
 	w.securePassword(nil)
 	w.releaseBackdrop()
 	w.closeWebViews()
+	w.a11yShutdown()
 	w.closed = true
 	for id, t := range w.timers {
 		t.Stop()
@@ -686,6 +687,7 @@ var viewClass = sync.OnceValue(func() darwin.Class {
 	addTextInputClient(c)
 	addFocusTracking(c)
 	addDropTarget(c)
+	addAccessibility(c)
 	return c
 })
 
