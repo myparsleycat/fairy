@@ -236,3 +236,77 @@ func TestDarwinIMEReplacesInPlace(t *testing.T) {
 		t.Error("text past the end")
 	}
 }
+
+// setMarkedText: replaces its replacement range, which arrives as a struct:
+// on amd64 on the stack. Finished text is typed at once, keeping its line
+// breaks, and ranges near NSUIntegerMax are clamped rather than overflow.
+func TestDarwinIMERangesAndMultilineText(t *testing.T) {
+	value, changes := "abc", 0
+	w := newTestWindow(t, func() *El {
+		return Input(value, func(s string) { value = s; changes++ }).Multiline().Key("in").Size(200, 60)
+	})
+	view := darwin.ID(0)
+	Do(func() {
+		w.Focus("in")
+		w.renderFrame()
+		view = w.view
+	})
+	Do(func() {
+		darwin.Send(view, "setMarkedText:selectedRange:replacementRange:", darwin.String("X"),
+			darwin.NSRange{Location: 1}, darwin.NSRange{Location: 1, Length: 1})
+	})
+	if value != "ac" || w.composition() != "X" {
+		t.Fatalf("replacing composition: value %q, composition %q", value, w.composition())
+	}
+	Do(func() {
+		darwin.Send(view, "insertText:replacementRange:", darwin.String("X"), darwin.NSRange{Location: darwin.NSNotFound})
+	})
+	changes = 0
+	Do(func() {
+		darwin.Send(view, "insertText:replacementRange:", darwin.String("one\ntwo"), darwin.NSRange{Location: darwin.NSNotFound})
+	})
+	if value != "aXone\ntwoc" || changes != 1 {
+		t.Fatalf("multi-line insertText: value %q after %d changes", value, changes)
+	}
+	var s string
+	actual := new(darwin.NSRange)
+	Do(func() {
+		str := darwin.Send(view, "attributedSubstringForProposedRange:actualRange:",
+			darwin.NSRange{Location: 2, Length: 1<<64 - 1}, unsafe.Pointer(actual))
+		if str != 0 {
+			s = darwin.GoString(darwin.Send(str, "string"))
+		}
+		darwin.Send(view, "insertText:replacementRange:", darwin.String("!"), darwin.NSRange{Location: 1<<64 - 2, Length: 1<<64 - 1})
+	})
+	if s != "one\ntwoc" || *actual != (darwin.NSRange{Location: 2, Length: 8}) {
+		t.Errorf("substring to NSUIntegerMax = %q %v", s, *actual)
+	}
+	if value != "aXone\ntwoc!" {
+		t.Errorf("replacing past the end: value %q", value)
+	}
+}
+
+// Text an input method or assistive app hands over is read from strings
+// and numbers; other objects are ignored instead of raising an exception.
+func TestDarwinIMETextOfObjects(t *testing.T) {
+	Do(func() {
+		darwin.WithPool(func() {
+			attr := darwin.Send(darwin.Send(darwin.SendClass("NSAttributedString", "alloc"), "initWithString:", darwin.String("b")), "autorelease")
+			for _, c := range []struct {
+				obj  darwin.ID
+				want string
+				ok   bool
+			}{
+				{darwin.String("a"), "a", true},
+				{attr, "b", true},
+				{darwin.Number(42), "42", true},
+				{darwin.SendClass("NSArray", "array"), "", false},
+				{0, "", true},
+			} {
+				if got, ok := nsText(c.obj); got != c.want || ok != c.ok {
+					t.Errorf("nsText = %q, %v, want %q, %v", got, ok, c.want, c.ok)
+				}
+			}
+		})
+	})
+}

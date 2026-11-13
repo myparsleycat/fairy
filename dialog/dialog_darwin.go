@@ -176,6 +176,9 @@ func showFileDialog(d FileOptions, save, folders bool) []string {
 
 // contentTypes returns an NSArray of the UTTypes the filters name, with
 // DefaultExt's first in a save dialog, or 0 when every file is allowed.
+// UTType has no type for an extension with dots, such as "tar.gz", so its
+// last part stands in for it; should one still have none, every file is
+// allowed rather than leave that extension's files greyed out.
 func contentTypes(d FileOptions, save bool) darwin.ID {
 	exts, all := filterExtensions(d.Filters)
 	if def := strings.ToLower(strings.TrimPrefix(d.DefaultExt, ".")); save && def != "" {
@@ -193,12 +196,14 @@ func contentTypes(d FileOptions, save bool) darwin.ID {
 			continue
 		}
 		seen[ext] = true
-		if t := darwin.SendClass("UTType", "typeWithFilenameExtension:", darwin.String(ext)); t != 0 {
-			darwin.Send(arr, "addObject:", t)
+		t := darwin.SendClass("UTType", "typeWithFilenameExtension:", darwin.String(ext))
+		if i := strings.LastIndexByte(ext, '.'); t == 0 && i >= 0 {
+			t = darwin.SendClass("UTType", "typeWithFilenameExtension:", darwin.String(ext[i+1:]))
 		}
-	}
-	if darwin.Get[uint64](arr, "count") == 0 {
-		return 0
+		if t == 0 {
+			return 0
+		}
+		darwin.Send(arr, "addObject:", t)
 	}
 	return arr
 }

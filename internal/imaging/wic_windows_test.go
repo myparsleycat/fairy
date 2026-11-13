@@ -169,10 +169,12 @@ func TestWICLeavesIncompleteAndOtherImagesToGo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	camera, cut := cameraJPEG(t)
 	for name, data := range map[string][]byte{
-		"truncated jpeg": jb.Bytes()[:jb.Len()-4],
-		"truncated png":  pb.Bytes()[:pb.Len()-20],
-		"webp":           webp,
+		"truncated jpeg":        jb.Bytes()[:jb.Len()-4],
+		"truncated camera jpeg": cut,
+		"truncated png":         pb.Bytes()[:pb.Len()-20],
+		"webp":                  webp,
 	} {
 		in, err := Inspect(data)
 		if err != nil {
@@ -181,6 +183,9 @@ func TestWICLeavesIncompleteAndOtherImagesToGo(t *testing.T) {
 		if wicDecoderClass(in) != nil {
 			t.Errorf("%s: WIC would decode it", name)
 		}
+	}
+	if in, err := Inspect(camera); err != nil || wicDecoderClass(in) == nil {
+		t.Errorf("WIC does not take a complete camera jpeg: %v", err)
 	}
 }
 

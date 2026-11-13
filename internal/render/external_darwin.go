@@ -35,7 +35,7 @@ func textureInfo(d *Device, tex id) (w, h, format int, err error) {
 	if tex == 0 {
 		return 0, 0, 0, errors.New("render: no texture")
 	}
-	withPool(func() {
+	darwin.WithPool(func() {
 		switch {
 		case darwin.Send(tex, "device") != d.dev:
 			err = errors.New("render: texture belongs to another Metal device")
@@ -121,7 +121,7 @@ func CopyToTexture(d *Device, src uintptr, dst *Texture) (*Fence, error) {
 		return nil, errors.New("render: copy without a texture")
 	}
 	var w, h, format uint64
-	withPool(func() {
+	darwin.WithPool(func() {
 		w = darwin.Get[uint64](id(src), "width")
 		h = darwin.Get[uint64](id(src), "height")
 		format = darwin.Get[uint64](id(src), "pixelFormat")
@@ -135,7 +135,7 @@ func CopyToTexture(d *Device, src uintptr, dst *Texture) (*Fence, error) {
 func copyTexture(d *Device, src, dst id, w, h int) (*Fence, error) {
 	var f *Fence
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		cb := darwin.Send(d.queue, "commandBuffer")
 		if cb == 0 {
 			err = errors.New("render: could not create a command buffer")
@@ -157,7 +157,7 @@ func copyTexture(d *Device, src, dst id, w, h int) (*Fence, error) {
 // Hold the device lock around it.
 func ClearTexture(d *Device, tex uintptr, c [4]float32) error {
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		cb := darwin.Send(d.queue, "commandBuffer")
 		if cb == 0 {
 			err = errors.New("render: could not create a command buffer")

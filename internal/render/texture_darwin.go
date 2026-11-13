@@ -114,7 +114,7 @@ func (t *Texture) PromoteMips(d *Device) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	withPool(func() {
+	darwin.WithPool(func() {
 		cb := darwin.Send(d.queue, "commandBuffer")
 		if cb == 0 {
 			err = errors.New("render: could not create a command buffer")

@@ -62,6 +62,23 @@ func pressHotKey(t *testing.T, id ID) {
 	}
 }
 
+// Option types characters on macOS, so a chord with only Option and Shift is
+// refused before any hot key is registered.
+func TestShortcutOptionTypesDarwin(t *testing.T) {
+	for _, s := range []string{"alt+e", "alt+shift+k"} {
+		var err error
+		fairy.Do(func() {
+			var id ID
+			if id, err = Register(keyboard.MustChord(s), func() {}); err == nil {
+				Unregister(id)
+			}
+		})
+		if err == nil {
+			t.Errorf("Register(%q) took a key Option types with", s)
+		}
+	}
+}
+
 func TestShortcutDarwin(t *testing.T) {
 	if _, err := Register(keyboard.MustChord("ctrl+alt+shift+f19"), func() {}); err == nil {
 		t.Fatal("Register off the UI thread succeeded")

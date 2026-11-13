@@ -8,6 +8,11 @@ const ModPrimary = ModSuper
 // Backspace: Option on macOS, Ctrl elsewhere.
 const ModWord = ModAlt
 
+// modGlobal are the modifiers that keep a global shortcut off keys other
+// programs type with: Control and Command. Option types characters on
+// macOS, as ⌥E starts an accent.
+const modGlobal = ModCtrl | ModSuper
+
 var superNames = []string{"cmd", "command", "super", "win", "meta", "logo"}
 
 // modLabels are the labels of chordMods.

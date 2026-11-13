@@ -529,7 +529,7 @@ func TestManyFramesAndPrims(t *testing.T) {
 // does, reading each frame back with a snapshot.
 func TestLayerRenderer(t *testing.T) {
 	var layer id
-	withPool(func() { layer = darwin.New("CAMetalLayer") })
+	darwin.WithPool(func() { layer = darwin.New("CAMetalLayer") })
 	defer darwin.Release(layer)
 	obj := darwin.New("NSObject")
 	defer darwin.Release(obj)
@@ -575,6 +575,33 @@ func TestLayerRenderer(t *testing.T) {
 		wantPixel(t, got, 5, 5, solidRed, 0)
 		wantPixel(t, got, 30, 15, solidBlue, 0)
 		wantPixel(t, got, 28, 8, solidBlue, 0)
+	}
+
+	// The layer ignores a drawable size above the largest texture, so Resize
+	// clamps it rather than draw a frame larger than the drawable.
+	if err := r.Resize(maxTextureSize+100, 20); err != nil {
+		t.Fatal(err)
+	}
+	if sz := darwin.Get[darwin.CGSize](layer, "drawableSize"); sz.W != maxTextureSize || sz.H != 20 {
+		t.Errorf("drawableSize = %v after an oversized Resize", sz)
+	}
+	if w, h := r.Size(); w != maxTextureSize || h != 20 {
+		t.Errorf("Size() = %d x %d after an oversized Resize", w, h)
+	}
+	// A frame takes the drawable's real size whatever the renderer asked for.
+	layer.Send(darwin.Sel("setDrawableSize:"), darwin.CGSize{W: 48, H: 12})
+	var got *image.NRGBA
+	r.RequestSnapshot(func(img *image.NRGBA) { got = img })
+	var s Scene
+	s.AddBackdrop(Prim{Bounds: [4]float32{0, 0, 48, 12}, Clip: NoClip, Color: white}, 2)
+	if err := r.Draw(&s, [4]float32{0, 0, 1, 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Bounds().Dx() != 48 || got.Bounds().Dy() != 12 {
+		t.Fatalf("snapshot of a 48 x 12 drawable is %v", got)
+	}
+	if w, h := r.Size(); w != 48 || h != 12 {
+		t.Errorf("Size() = %d x %d, want the drawable's 48 x 12", w, h)
 	}
 }
 

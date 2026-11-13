@@ -2,6 +2,7 @@ package imaging
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image/color"
 	"math"
 	"runtime"
@@ -132,9 +133,9 @@ func init() {
 }
 
 // nativeAccepts reports whether ImageIO decodes in's format. It takes the
-// images WIC does on Windows: still JPEGs in YCbCr or gray with their start
-// and end markers, complete PNGs, and plain AVIF images. Truncated files,
-// which ImageIO decodes partially, and CMYK JPEGs are left to Go.
+// images WIC does on Windows: complete still JPEGs in YCbCr or gray,
+// complete PNGs, and plain AVIF images. Truncated files, which ImageIO
+// decodes partially, CMYK JPEGs and APNGs are left to Go.
 func nativeAccepts(in Input) bool {
 	if in.Animation.Count != 0 || in.AnimErr != nil || in.Config.Width <= 0 || in.Config.Height <= 0 ||
 		uint64(len(in.data)) > math.MaxInt32 {
@@ -142,13 +143,34 @@ func nativeAccepts(in Input) bool {
 	}
 	switch {
 	case in.Format == "jpeg":
-		return bytes.HasPrefix(in.data, []byte{0xff, 0xd8}) &&
-			(in.Config.ColorModel == color.YCbCrModel || in.Config.ColorModel == color.GrayModel) &&
-			bytes.LastIndex(in.data, []byte{0xff, 0xd9}) >= 2
+		return (in.Config.ColorModel == color.YCbCrModel || in.Config.ColorModel == color.GrayModel) &&
+			jpegComplete(in.data)
 	case in.Format == "png":
-		return bytes.HasPrefix(in.data, []byte("\x89PNG\r\n\x1a\n")) && bytes.Contains(in.data, pngEnd)
+		return bytes.HasPrefix(in.data, []byte("\x89PNG\r\n\x1a\n")) && bytes.Contains(in.data, pngEnd) &&
+			!pngAnimated(in.data)
 	case in.Format == "avif":
 		return in.avif.plain
+	}
+	return false
+}
+
+// pngAnimated reports whether a PNG has an acTL chunk before its image data,
+// making it an APNG. ImageIO's first image of an APNG is its first frame,
+// which is not the default image Go and WIC decode when that image is left
+// out of the animation.
+func pngAnimated(data []byte) bool {
+	for rest := data[min(8, len(data)):]; len(rest) >= 12; {
+		n := binary.BigEndian.Uint32(rest)
+		if uint64(n)+12 > uint64(len(rest)) {
+			return false
+		}
+		switch string(rest[4:8]) {
+		case "acTL":
+			return true
+		case "IDAT":
+			return false
+		}
+		rest = rest[12+n:]
 	}
 	return false
 }

@@ -81,29 +81,30 @@ func addTextInputClient(c objc.Class) {
 		return arr
 	})
 	add("attributedSubstringForProposedRange:actualRange:", "@@:"+encRange+"^"+encRange,
-		func(self id, _ sel, loc, n uint64, actual *darwin.NSRange) id {
+		func(self id, _ sel, rng darwin.NSRange, actual *darwin.NSRange) id {
 			if w := viewWindow(self); w != nil {
-				return w.imeSubstring(loc, n, actual)
+				return w.imeSubstring(rng.Location, rng.Length, actual)
 			}
 			return 0
 		})
 	add("characterIndexForPoint:", "Q@:{CGPoint=dd}", func(id, sel) uint64 { return darwin.NSNotFound })
 	// Input methods such as Korean read the text before the caret and
 	// replace it with insertText:'s replacement range.
-	add("insertText:replacementRange:", "v@:@"+encRange, func(self id, _ sel, str id, loc, n uint64) {
+	add("insertText:replacementRange:", "v@:@"+encRange, func(self id, _ sel, str id, rep darwin.NSRange) {
 		if w := viewWindow(self); w != nil && !w.ime.discarding {
-			w.imeInsert(nsText(str), loc, n)
+			if s, ok := nsText(str); ok {
+				w.imeInsert(s, rep.Location, rep.Length)
+			}
 		}
 	})
-	// On amd64 the second range of setMarkedText: arrives on the stack, not
-	// in the registers the callback reads, so it is only read on arm64.
+	// The ranges are structs, not pairs of integers: on amd64 the second
+	// one does not fit in the remaining registers and goes on the stack.
 	add("setMarkedText:selectedRange:replacementRange:", "v@:@"+encRange+encRange,
-		func(self id, _ sel, str id, selLoc, selLen, repLoc, repLen uint64) {
-			if runtime.GOARCH != "arm64" {
-				repLoc = darwin.NSNotFound
-			}
+		func(self id, _ sel, str id, selected, rep darwin.NSRange) {
 			if w := viewWindow(self); w != nil && !w.ime.discarding {
-				w.imeMark(nsText(str), selLoc, repLoc, repLen)
+				if s, ok := nsText(str); ok {
+					w.imeMark(s, selected.Location, rep.Location, rep.Length)
+				}
 			}
 		})
 	add("doCommandBySelector:", "v@::", func(self id, _ sel, cmd sel) {
@@ -113,7 +114,7 @@ func addTextInputClient(c objc.Class) {
 	})
 	add("forwardInvocation:", "v@:@", func(self id, cmd sel, inv id) {
 		if !imeInvocation(viewWindow(self), inv) {
-			self.SendSuper(cmd, inv)
+			darwin.SendSuper(self, c, cmd, inv)
 		}
 	})
 	fwd := darwin.Symbol(darwin.Objc, "_objc_msgForward")
@@ -168,15 +169,27 @@ func imeInvocation(w *Window, inv darwin.ID) bool {
 	return true
 }
 
-// nsText returns the text of an NSString or NSAttributedString.
-func nsText(obj darwin.ID) string {
+// nsText returns the text of an NSString or NSAttributedString, or of an
+// NSNumber, which assistive apps may set as a value; nil is no text. Other
+// objects report false: reading one as a string raises an exception that
+// aborts the process.
+func nsText(obj darwin.ID) (string, bool) {
 	if obj == 0 {
-		return ""
+		return "", true
 	}
-	if darwin.Get[bool](obj, "isKindOfClass:", darwin.ID(darwin.Cls("NSAttributedString"))) {
+	kind := func(name string) bool {
+		return darwin.Get[bool](obj, "isKindOfClass:", darwin.ID(darwin.Cls(name)))
+	}
+	switch {
+	case kind("NSString"):
+	case kind("NSAttributedString"):
 		obj = darwin.Send(obj, "string")
+	case kind("NSNumber"):
+		obj = darwin.Send(obj, "stringValue")
+	default:
+		return "", false
 	}
-	return darwin.GoString(obj)
+	return darwin.GoString(obj), true
 }
 
 var nsArrayOf = sync.OnceValue(func() darwin.ID { return darwin.ID(darwin.Cls("NSArray")) })
@@ -228,32 +241,34 @@ func (w *Window) imeMark(s string, cursor, repLoc, repLen uint64) {
 }
 
 // imeInsert types finished text from the input method, which ends the
-// composition. With a replacement range, the text replaces that range.
+// composition. With a replacement range, the text replaces that range. The
+// text is typed at once, as on Windows, so dictated line breaks stay and
+// the Input changes once.
 func (w *Window) imeInsert(s string, repLoc, repLen uint64) {
 	e, st := w.imeInput()
-	if st != nil {
+	if st == nil {
+		for _, r := range s {
+			w.onTypedRune(r)
+		}
+	} else {
 		replace := repLoc != darwin.NSNotFound && st.comp == ""
 		st.comp = ""
 		if replace {
 			w.selectUTF16(st, repLoc, repLen)
-			w.typeText(e, s)
-			w.resetBlink()
-			w.invalidate()
-			return
 		}
-	}
-	for _, r := range s {
-		w.onTypedRune(r)
+		w.typeText(e, s)
 	}
 	w.resetBlink()
 	w.invalidate()
 }
 
 // selectUTF16 selects the range of the Input's text at loc of n UTF-16
-// units.
+// units, clamped to the text.
 func (w *Window) selectUTF16(st *editState, loc, n uint64) {
+	total := uint64(utf16Len(st.Value))
+	loc = min(loc, total)
 	st.Anchor = utf16ToByteOffset(st.Value, int(loc))
-	st.Caret = utf16ToByteOffset(st.Value, int(loc+n))
+	st.Caret = utf16ToByteOffset(st.Value, int(loc+min(n, total-loc)))
 	st.HasPreferredX = false
 }
 
@@ -268,7 +283,7 @@ func (w *Window) imeSubstring(loc, n uint64, actual *darwin.NSRange) darwin.ID {
 	if loc > total {
 		return 0
 	}
-	end := min(loc+n, total)
+	end := loc + min(n, total-loc) // n may be near NSUIntegerMax
 	if actual != nil {
 		*actual = darwin.NSRange{Location: loc, Length: end - loc}
 	}

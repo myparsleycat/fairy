@@ -58,7 +58,7 @@ func AcquireDevice() (*Device, error) {
 	}
 	var d *Device
 	var err error
-	withPool(func() {
+	darwin.WithPool(func() {
 		dev := mtlCreateSystemDefaultDevice()
 		if dev == 0 {
 			// Processes without a window server connection may get no default device.

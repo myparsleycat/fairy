@@ -49,6 +49,12 @@ type a11yNode struct {
 	obj  darwin.ID // FairyAccessibilityElement
 	seen int       // treeVer when last in the tree
 	last a11ySnap
+
+	// The value last set on a range, which the tree built at rngVer does
+	// not show yet.
+	rngTo  float64
+	rngVer int
+	rngSet bool
 }
 
 // a11ySnap holds the properties whose changes are posted as notifications.
@@ -171,7 +177,10 @@ func (w *Window) a11yAfterFrame() {
 				if !changed && !slices.Equal(prev.kids[id], kids) {
 					changed = true
 				}
-				if _, was := prev.el[id]; id != 0 && !was && t.role[id] == RoleMenu {
+			}
+			// A new menu may have no exposed children, so has no entry in kids.
+			for id, r := range t.role {
+				if _, was := prev.el[id]; id != 0 && !was && r == RoleMenu {
 					axPost(w.a11yElement(id), names.menuOpened)
 				}
 			}
@@ -557,6 +566,18 @@ func (w *Window) a11yEditText(e *El, r Role) (text string, a, b int) {
 	return v, len(v), len(v)
 }
 
+// a11yCaret returns an edit field's text and the caret's byte offset in it,
+// which is the selection's start after a selection made backward.
+func (w *Window) a11yCaret(e *El, r Role) (string, int) {
+	s, _, b := w.a11yEditText(e, r)
+	if e.input != nil && !e.input.password {
+		if st := w.states[e.id]; st != nil && st.edit != nil && st.edit.Value == s {
+			return s, min(max(st.edit.Caret, 0), len(s))
+		}
+	}
+	return s, b
+}
+
 // a11ySelectedRange is the selection of an edit field in UTF-16 units.
 func (w *Window) a11ySelectedRange(e *El, r Role) darwin.NSRange {
 	s, a, b := w.a11yEditText(e, r)
@@ -673,7 +694,10 @@ func (n *a11yNode) click() {
 	})
 }
 
+// setRange sets a range's value, and remembers it as the value steps start
+// from until the tree is rebuilt with it.
 func (n *a11yNode) setRange(v float64) {
+	n.rngTo, n.rngVer, n.rngSet = v, n.w.treeVer, true
 	n.post(func(e *El) {
 		if g := e.a11y; g != nil && g.rng != nil && g.rng.set != nil {
 			g.rng.set(min(max(v, g.rng.min), g.rng.max))
@@ -681,10 +705,16 @@ func (n *a11yNode) setRange(v float64) {
 	})
 }
 
+// step moves a range by its small step. Two steps before a rebuild move it
+// two steps, not one from the value the tree was built with.
 func (n *a11yNode) step(e *El, dir float64) bool {
 	g := e.a11y.rng
 	small, _ := g.steps()
-	n.setRange(g.value + dir*small)
+	from := g.value
+	if n.rngSet && n.rngVer == n.w.treeVer {
+		from = min(max(n.rngTo, g.min), g.max)
+	}
+	n.setRange(from + dir*small)
 	return true
 }
 
@@ -877,7 +907,7 @@ func registerElementClass() darwin.Class {
 					return darwin.String(d)
 				}
 			}
-			return self.SendSuper(cmd)
+			return darwin.SendSuper(self, axElementClass, cmd)
 		}},
 		{Cmd: darwin.Sel("accessibilityLabel"), Fn: obj(func(n *a11yNode, e *El, r Role) id {
 			if axValueKindOf(e, r) == axNameValue {
@@ -1064,7 +1094,9 @@ func registerElementClass() darwin.Class {
 			switch {
 			case v == 0:
 			case r == RoleEdit:
-				n.setText(nsText(v), false)
+				if s, ok := nsText(v); ok {
+					n.setText(s, false)
+				}
 			case e.a11y != nil && e.a11y.rng != nil && e.a11y.rng.set != nil:
 				if darwin.Get[bool](v, "respondsToSelector:", darwin.Sel("doubleValue")) {
 					n.setRange(darwin.Get[float64](v, "doubleValue"))
@@ -1079,13 +1111,13 @@ func registerElementClass() darwin.Class {
 			return darwin.String(s[a:b])
 		})},
 		{Cmd: darwin.Sel("setAccessibilitySelectedText:"), Fn: setObj(func(n *a11yNode, e *El, r Role, v id) {
-			if r == RoleEdit {
-				n.setText(nsText(v), true)
+			if s, ok := nsText(v); ok && r == RoleEdit {
+				n.setText(s, true)
 			}
 		})},
 		{Cmd: darwin.Sel("accessibilityInsertionPointLineNumber"), Fn: integer(func(n *a11yNode, e *El, r Role) int64 {
-			s, _, b := n.w.a11yEditText(e, r)
-			return int64(strings.Count(s[:b], "\n"))
+			s, caret := n.w.a11yCaret(e, r)
+			return int64(strings.Count(s[:caret], "\n"))
 		})},
 		{Cmd: darwin.Sel("accessibilityLineForIndex:"), Fn: func(self id, _ sel, i int64) int64 {
 			if n, e, r := axNode(self); n != nil && i >= 0 {
@@ -1098,11 +1130,11 @@ func registerElementClass() darwin.Class {
 				n, e, r := axNode(self)
 				return n != nil && gate(e, r)
 			}
-			return objc.SendSuper[bool](self, cmd, s)
+			return darwin.GetSuper[bool](self, axElementClass, cmd, s)
 		}},
 		{Cmd: darwin.Sel("forwardInvocation:"), Fn: func(self id, cmd sel, inv id) {
 			if !axInvocation(self, inv) {
-				self.SendSuper(cmd, inv)
+				darwin.SendSuper(self, axElementClass, cmd, inv)
 			}
 		}},
 	}
@@ -1209,11 +1241,11 @@ func addAccessibility(c objc.Class) {
 	add("accessibilityChildren", "@@:", func(self id, cmd sel) id {
 		w := win(self)
 		if w == nil {
-			return self.SendSuper(cmd)
+			return darwin.SendSuper(self, c, cmd)
 		}
 		arr := w.a11yArray(w.a11yTree().kids[0])
 		// Native views placed in the window, such as a web view.
-		if sub := self.SendSuper(cmd); sub != 0 {
+		if sub := darwin.SendSuper(self, c, cmd); sub != 0 {
 			darwin.Send(arr, "addObjectsFromArray:", sub)
 		}
 		return arr
@@ -1224,7 +1256,7 @@ func addAccessibility(c objc.Class) {
 				return w.a11yElement(f)
 			}
 		}
-		return self.SendSuper(cmd)
+		return darwin.SendSuper(self, c, cmd)
 	})
 	add("accessibilityHitTest:", "@@:"+encAXPoint, func(self id, cmd sel, x, y float64) id {
 		if w := win(self); w != nil {
@@ -1232,6 +1264,6 @@ func addAccessibility(c objc.Class) {
 				return w.a11yElement(hit)
 			}
 		}
-		return self.SendSuper(cmd, darwin.CGPoint{X: x, Y: y})
+		return darwin.SendSuper(self, c, cmd, darwin.CGPoint{X: x, Y: y})
 	})
 }

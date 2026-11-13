@@ -100,17 +100,16 @@ func load() error {
 }
 
 // Register runs f on the UI thread whenever chord is pressed, even while
-// another program has the keyboard. The chord needs Control, Option or
-// Command, unless its key is F1–F20, so that it cannot take a key other
-// programs type with. Call it on the UI thread, inside fairy.Main. Shortcuts
-// are released when Main returns.
+// another program has the keyboard. The chord needs Control or Command,
+// unless its key is F1–F24, so that it cannot take a key other programs type
+// with; Option alone types characters, as ⌥E starts an accent. Call it on
+// the UI thread, inside fairy.Main. Shortcuts are released when Main returns.
 func Register(chord keyboard.Chord, f func()) (ID, error) {
 	if !apphost.OnUIThread() {
 		return 0, errors.New("shortcut: Register must run on the UI thread inside fairy.Main")
 	}
-	fkey := chord.Key >= keyboard.KeyF1 && chord.Key < keyboard.KeyF1+24
-	if chord.Mods&(keyboard.ModCtrl|keyboard.ModAlt|keyboard.ModSuper) == 0 && !fkey {
-		return 0, fmt.Errorf("shortcut: global shortcut %q needs Control, Option or Command", chord)
+	if !chord.CanBeGlobal() {
+		return 0, fmt.Errorf("shortcut: global shortcut %q needs Control or Command", chord)
 	}
 	code, ok := mackey.Code(chord.Key)
 	if !ok {
