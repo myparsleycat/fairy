@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !darwin
 
 package text
 
@@ -29,6 +29,8 @@ func (s *System) EndPass()                                                      
 func (s *System) EndFrame()                                                     {}
 func (s *System) ResetAtlas(a *render.Atlas)                                    {}
 func (s *System) Release()                                                      {}
+func (s *System) SetColorGlyphTextures(newTexture func(w, h int, rgba []byte) (*render.Texture, error)) {
+}
 
 // Layout is laid-out text.
 type Layout struct{ text string }
