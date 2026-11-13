@@ -69,16 +69,10 @@ type Target struct{ Texture }
 func NewTarget(d *Device, width, height int) (*Target, error) { return nil, errUnsupported }
 func (t *Target) Release()                                    {}
 
-// Atlas is a single-channel glyph texture.
-type Atlas struct {
-	// Generation changes whenever the atlas is cleared or replaced; cached
-	// tiles from another generation must be re-rasterized.
-	Generation int
-}
+// Atlas is a single-channel glyph texture filled with a shelf packer.
+type Atlas struct{ atlasPack }
 
-func (a *Atlas) Size() int                                 { return 0 }
-func (a *Atlas) Insert(w, h int, data []byte) (Tile, bool) { return Tile{}, false }
-func (a *Atlas) Grow() error                               { return errUnsupported }
+func (a *Atlas) allocTexture(size int) error { return errUnsupported }
 
 // Renderer draws scenes into a window or an offscreen target.
 type Renderer struct {
