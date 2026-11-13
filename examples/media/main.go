@@ -1,7 +1,6 @@
-//go:build windows
-
-// Command media shows the native surfaces: a Direct3D surface, video
-// playback and an embedded WebView2 browser.
+// Command media shows the native surfaces: a GPU surface (Direct3D on
+// Windows, Metal on macOS), video playback and an embedded browser (WebView2
+// on Windows, WKWebView on macOS).
 //
 //	go run ./examples/media [video file or URL]
 package main
@@ -20,16 +19,9 @@ import (
 	"github.com/myparsleycat/fairy/kit"
 )
 
-// clearView fills the surface target, standing in for an app's own Direct3D
-// renderer.
-func clearView(f fairy.SurfaceFrame, rgba [4]float32) {
-	_, rtv := f.RenderTarget()
-	f.GPU().Context.ClearRenderTargetView(rtv, rgba)
-}
-
 const page = `<!doctype html><html><head><title>Embedded page</title></head>
 <body style="font-family:sans-serif;background:#f4f4f5">
-<h2>WebView2</h2><p id="t">Loaded.</p>
+<h2>WebView</h2><p id="t">Loaded.</p>
 <button onclick="chrome.webview.postMessage('clicked at ' + new Date().toLocaleTimeString())">Send message</button>
 <script>
 chrome.webview.addEventListener('message', e => document.getElementById('t').textContent = 'From Go: ' + e.data);
@@ -107,7 +99,7 @@ func main() {
 					fairy.Col(fairy.Text("Video").SemiBold(), player).Gap(8).Grow(1).Basis(0),
 				).Gap(16).H(300),
 				fairy.Row(
-					fairy.Text("WebView2").SemiBold(), fairy.Spacer(),
+					fairy.Text("WebView").SemiBold(), fairy.Spacer(),
 					fairy.Text(lastMsg).Color(t.MutedForeground),
 					kit.Button("Post message", func() { web.PostMessage("ping " + time.Now().Format("15:04:05")) }, kit.Outline, kit.Small),
 					kit.Button("Reload", web.Reload, kit.Outline, kit.Small),
