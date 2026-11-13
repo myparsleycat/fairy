@@ -111,3 +111,9 @@ func familyOf(font uintptr) string {
 	defer cfRelease(s)
 	return goString(s)
 }
+
+// forRuns walks the glyph runs of a CTLine as runGlyphs.forRuns does.
+func forRuns(ct uintptr, f func(run, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int)) {
+	var b runGlyphs
+	b.forRuns(ct, f)
+}

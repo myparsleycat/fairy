@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"runtime"
+	"sort"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/darwin"
@@ -383,7 +384,7 @@ func (l *Layout) record() bool {
 			continue
 		}
 		by := float32(math.Round(float64(ln.top + ln.baseline)))
-		forRuns(ln.draw, func(_, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
+		s.runs.forRuns(ln.draw, func(_, font uintptr, glyphs []uint16, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
 			if font == 0 {
 				return
 			}
@@ -430,30 +431,59 @@ func (l *Layout) record() bool {
 	return ok
 }
 
+// decoAt returns the index in spans, which are sorted and disjoint, of the
+// span that holds UTF-16 index i, or -1.
+func decoAt(spans []decoSpan, i int) int {
+	u := uint32(i)
+	j := sort.Search(len(spans), func(j int) bool { return spans[j].end > u })
+	if j < len(spans) && spans[j].start <= u {
+		return j
+	}
+	return -1
+}
+
 // colorAt returns the Run.Color of UTF-16 index i.
 func (l *Layout) colorAt(i int) int {
-	for _, d := range l.deco {
-		if uint32(i) >= d.start && uint32(i) < d.end {
-			return d.color
-		}
+	if j := decoAt(l.deco, i); j >= 0 {
+		return l.deco[j].color
 	}
 	return 0
 }
 
-// decorate appends the underlines and strikethroughs of a glyph run.
+// decorate appends the underlines and strikethroughs of a glyph run, in a
+// single pass over its glyphs.
 func (l *Layout) decorate(ln *line, font uintptr, by float32, pos []darwin.CGPoint, adv []darwin.CGSize, idx []int) {
+	if len(idx) == 0 || len(l.deco) == 0 {
+		return
+	}
+	lo, hi := idx[0], idx[0]
+	for _, i := range idx {
+		lo, hi = min(lo, i), max(hi, i)
+	}
+	first := sort.Search(len(l.deco), func(j int) bool { return l.deco[j].end > uint32(lo) })
+	last, lined := first, false
+	for last < len(l.deco) && l.deco[last].start <= uint32(hi) {
+		lined = lined || l.deco[last].underline || l.deco[last].strike
+		last++
+	}
+	if !lined {
+		return
+	}
+	spans := l.deco[first:last]
+	type extent struct{ x0, x1 float64 }
+	ext := make([]extent, len(spans))
+	for j := range ext {
+		ext[j] = extent{math.Inf(1), math.Inf(-1)}
+	}
+	for g := range pos {
+		if j := decoAt(spans, idx[g]); j >= 0 {
+			ext[j].x0, ext[j].x1 = min(ext[j].x0, pos[g].X), max(ext[j].x1, pos[g].X+adv[g].W)
+		}
+	}
 	var m *decoMetrics
-	for _, d := range l.deco {
-		if !d.underline && !d.strike {
-			continue
-		}
-		x0, x1 := math.Inf(1), math.Inf(-1)
-		for g := range pos {
-			if i := uint32(idx[g]); i >= d.start && i < d.end {
-				x0, x1 = min(x0, pos[g].X), max(x1, pos[g].X+adv[g].W)
-			}
-		}
-		if x0 >= x1 {
+	for j, d := range spans {
+		x0, x1 := ext[j].x0, ext[j].x1
+		if !d.underline && !d.strike || x0 >= x1 {
 			continue
 		}
 		if m == nil {
