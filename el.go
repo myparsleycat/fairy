@@ -160,12 +160,14 @@ type El struct {
 	opacity      float32
 	clip         bool
 	edgeFade     float32
+	clipInset    [4]float32 // top, right, bottom, left
 	scrollBars   *ScrollBarStyle
 	// heightMotion and grow are AnimateHeight and what this frame's
 	// growPass changed in the laid-out node.
 	heightMotion *motion.Spec
 	grow         growDelta
 	kidClip      rectF // the clip place gave the children, for leaving ones
+	pinClip      rectF // kidClip without ClipInset, for PinToView children
 	memo         *memoEntry
 	live         *liveProps
 	isolate      bool
@@ -409,6 +411,15 @@ func (e *El) BackdropBlur(px float32) *El { e.backdropBlur = max(px, 0); return 
 // ScrollEdgeFade fades the children out over px toward each edge that has
 // content scrolled past it. It implies Clip.
 func (e *El) ScrollEdgeFade(px float32) *El { e.clip, e.edgeFade = true, px; return e }
+
+// ClipInset keeps the children of a clipping element out of strips this wide
+// along its top, right, bottom and left edges, except PinToView children, as
+// for a list that scrolls under controls laid over its edges. It implies Clip.
+func (e *El) ClipInset(top, right, bottom, left float32) *El {
+	e.clip = true
+	e.clipInset = [4]float32{max(top, 0), max(right, 0), max(bottom, 0), max(left, 0)}
+	return e
+}
 
 // Pad sets equal padding on all sides.
 func (e *El) Pad(px float32) *El {

@@ -701,11 +701,11 @@ func (w *Window) ScrollIntoView(key string) {
 // ScrollStep scrolls the innermost vertical scroll container around the
 // element with key by one of its children, at once, when the view is next
 // placed: up shows the child before the first one shown whole, down the one
-// after the last one shown whole. inset is how much of the view's edge that
-// way is covered, as by a scroll arrow laid over it with PinToView; the child
-// shown lines up with it.
-func (w *Window) ScrollStep(key string, up bool, inset float32) {
-	w.scrollStepReq = &scrollStepRequest{key, up, inset}
+// after the last one shown whole. The child shown lines up with the
+// container's ClipInset on that edge, as under a scroll arrow laid over it
+// with PinToView.
+func (w *Window) ScrollStep(key string, up bool) {
+	w.scrollStepReq = &scrollStepRequest{key, up}
 	w.invalidate()
 }
 

@@ -607,7 +607,16 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 			}
 		}
 	}
-	keys := listKeys(st, len(enabled), open, pick)
+	window := fairy.CurrentWindow()
+	listKey := listKeys(st, len(enabled), open, pick)
+	keys := func(k keyboard.KeyEvent) bool {
+		before := st.highlight
+		handled := listKey(k)
+		if st.open && st.highlight != before && st.highlight >= 0 && window != nil {
+			window.ScrollIntoView(selectRowKey(id, enabled[st.highlight].Value))
+		}
+		return handled
+	}
 	trigger.OnClick(func() {
 		if st.open {
 			st.open = false
@@ -646,21 +655,26 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 			} else if !it.Disabled {
 				listPointer(st, row, i, nil)
 			}
-			rows = append(rows, row.Key(it.Value))
+			rows = append(rows, row.Key(selectRowKey(id, it.Value)))
 		}
+		// The arrows replace the scroll bar. Rows are clipped out of the
+		// arrows' strips so that the strips show the panel's own surface.
+		var insetTop, insetBottom float32
 		if st.hiddenAbove {
 			rows = append(rows, selectScrollArrow(st, id, true))
+			insetTop = selectArrowH
 		}
 		if st.hiddenBelow {
 			rows = append(rows, selectScrollArrow(st, id, false))
+			insetBottom = selectArrowH
 		}
 		panel := popupPanel(false, rows...).MinW(max(144, st.anchorW)).Role(fairy.RoleList).
+			ScrollBarStyle(fairy.ScrollBarStyle{Hidden: true}).ClipInset(insetTop, 0, insetBottom, 0).
 			OnScrollEdges(func(top, bottom bool) { st.hiddenAbove, st.hiddenBelow = !top, !bottom })
 		if o.maxHeight > 0 {
 			panel.MaxH(o.maxHeight)
 		}
 		if hasTrailing {
-			window := fairy.CurrentWindow()
 			panel.OnKey(func(k keyboard.KeyEvent) bool {
 				if !k.Is(keyboard.KeyUp, 0) && !k.Is(keyboard.KeyDown, 0) && !k.Is(keyboard.KeyLeft, 0) {
 					return false
@@ -703,6 +717,8 @@ const (
 	selectArrowStale = 500 * time.Millisecond
 )
 
+func selectRowKey(id, value string) string { return "kit.select-row:" + id + ":" + value }
+
 func selectArrowKey(id string, up bool) string {
 	if up {
 		return "kit.select-up:" + id
@@ -715,12 +731,11 @@ func selectArrowKey(id string, up bool) string {
 // pointer is on it, the list scrolls an entry at a time and no row is
 // highlighted, as Base UI's Select.ScrollUpArrow and ScrollDownArrow.
 func selectScrollArrow(st *popupState, id string, up bool) *fairy.El {
-	t := &current
 	icon, dir := lucide.ChevronDown, 1
 	if up {
 		icon, dir = lucide.ChevronUp, -1
 	}
-	e := fairy.Box(fairy.Icon(icon).Size(16, 16)).Center().H(selectArrowH).Fill(t.Popover).
+	e := fairy.Box(fairy.Icon(icon).Size(16, 16)).Center().H(selectArrowH).
 		Absolute().Left(0).Right(0).PinToView().Role(fairy.RoleHidden).Key(selectArrowKey(id, up))
 	if up {
 		e.Top(0)
@@ -759,7 +774,7 @@ func (st *popupState) scrollByArrow(window *fairy.Window, id string, gen int) {
 				st.arrow = 0
 				return
 			}
-			window.ScrollStep(selectArrowKey(id, up), up, selectArrowH)
+			window.ScrollStep(selectArrowKey(id, up), up)
 			st.scrollByArrow(window, id, gen)
 		})
 	})

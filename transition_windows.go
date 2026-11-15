@@ -329,7 +329,11 @@ func (w *Window) paintGhostsOf(parent, before *El, opacity float32, color Color)
 		if parent == nil {
 			continue
 		}
-		pc := w.snap(parent.kidClip)
+		kc := parent.kidClip
+		if g.el.pinToView {
+			kc = parent.pinClip
+		}
+		pc := w.snap(kc)
 		c := rectF{pc[0], pc[1], pc[2], pc[3]}
 		for i := range w.scene.Prims[start:] {
 			p := &w.scene.Prims[start+i]

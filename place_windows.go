@@ -427,12 +427,20 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 		w.focusables = append(w.focusables, e)
 	}
 	childClip := clip
+	pinClip := clip
 	if e.clip || e.grow.clip {
 		in := w.innerBox(e, w.snap(r))
 		s := w.scale
-		childClip = vis.intersect(rectF{in[0] / s, in[1] / s, in[2] / s, in[3] / s})
+		box := rectF{in[0] / s, in[1] / s, in[2] / s, in[3] / s}
+		childClip = vis.intersect(box)
+		pinClip = childClip
+		if ci := e.clipInset; ci != [4]float32{} {
+			childClip = childClip.intersect(rectF{
+				box.x + ci[3], box.y + ci[0], max(box.w-ci[1]-ci[3], 0), max(box.h-ci[0]-ci[2], 0),
+			})
+		}
 	}
-	e.kidClip = childClip
+	e.kidClip, e.pinClip = childClip, pinClip
 	if e.virtual != nil {
 		w.virtualContent(e)
 		if e.virtual.motion != nil {
@@ -493,16 +501,20 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	}
 	for _, c := range e.children {
 		if c.pinToView {
-			w.place(c, e.absX, e.absY, childClip)
+			w.place(c, e.absX, e.absY, pinClip)
 			continue
 		}
 		w.place(c, cx, cy, childClip)
 	}
-	if e.style.ScrollY && n.ContentH > n.H+0.5 {
-		w.placeScrollBar(e, vis, true)
-	}
-	if e.style.ScrollX && n.ContentW > n.W+0.5 {
-		w.placeScrollBar(e, vis, false)
+	overY := e.style.ScrollY && n.ContentH > n.H+0.5
+	overX := e.style.ScrollX && n.ContentW > n.W+0.5
+	if (overY || overX) && !e.effectiveScrollBarStyle().Hidden {
+		if overY {
+			w.placeScrollBar(e, vis, true)
+		}
+		if overX {
+			w.placeScrollBar(e, vis, false)
+		}
 	}
 }
 

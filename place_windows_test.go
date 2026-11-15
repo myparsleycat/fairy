@@ -1,6 +1,9 @@
 package fairy
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 // A view that sizes one element by another's OnLayout report shows the
 // measured size in the same frame, without waiting for an unrelated rebuild.
@@ -40,7 +43,7 @@ func TestOnLayoutChangeRebuildsInSameFrame(t *testing.T) {
 func TestScrollStepAndPinToView(t *testing.T) {
 	var edges [][2]bool
 	w := newPointerWindow(t, func() *El {
-		list := Col().Size(200, 100).ScrollY().OnScrollEdges(func(top, bottom bool) {
+		list := Col().Size(200, 100).ScrollY().ClipInset(0, 0, 20, 0).OnScrollEdges(func(top, bottom bool) {
 			edges = append(edges, [2]bool{top, bottom})
 		})
 		for range 10 {
@@ -51,7 +54,7 @@ func TestScrollStepAndPinToView(t *testing.T) {
 			Box().Key("loose").H(20).Left(0).Right(0).Top(0).Absolute(),
 		)
 	})
-	w.ScrollStep("pinned", false, 20)
+	w.ScrollStep("pinned", false)
 	w.placeAll()
 	if w.dirty {
 		w.build()
@@ -72,6 +75,39 @@ func TestScrollStepAndPinToView(t *testing.T) {
 	}
 	if hit := w.hitTest(10, 90); hit != pinned {
 		t.Fatalf("hit %v at the pinned child", hit)
+	}
+}
+
+// ClipInset keeps scrolled children out of a strip along the edge, for
+// painting, the pointer and scrolling into view, but not a PinToView child in
+// it. A Hidden scroll bar is not placed, so it takes no presses.
+func TestClipInsetAndHiddenScrollBar(t *testing.T) {
+	w := newPointerWindow(t, func() *El {
+		list := Col().Size(200, 100).ScrollY().ClipInset(0, 0, 20, 0).ScrollBarStyle(ScrollBarStyle{Hidden: true})
+		for i := range 10 {
+			list.Child(Box().Key("row"+strconv.Itoa(i)).Size(100, 28))
+		}
+		return list.Child(Box().Key("pinned").Size(20, 20).Right(0).Bottom(0).Absolute().PinToView())
+	})
+	row, pinned := w.findKey("row2"), w.findKey("pinned")
+	if got := row.clipR.y + row.clipR.h; got != 80 {
+		t.Fatalf("row clip ends at y %v, want 80", got)
+	}
+	if got := pinned.clipR.y + pinned.clipR.h; got != 100 {
+		t.Fatalf("pinned clip ends at y %v, want 100", got)
+	}
+	if hit := w.hitTest(10, 82); hit != w.root {
+		t.Fatalf("hit %v in the strip, want the list", hit)
+	}
+	if hit := w.hitTest(190, 90); hit != pinned {
+		t.Fatalf("hit %v at the pinned child", hit)
+	}
+	if len(w.bars) != 0 {
+		t.Fatalf("%d scroll bars placed, want none", len(w.bars))
+	}
+	w.scrollIntoView(w.findKey("row3"))
+	if y := w.root.state.scrollY; y != 32 {
+		t.Fatalf("scrollY = %v after scrolling row 3 into view, want 32: its bottom above the strip", y)
 	}
 }
 

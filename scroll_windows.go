@@ -62,6 +62,9 @@ func (w *Window) paintScrollBars(e *El, color Color, opacity float32) {
 		return
 	}
 	st := e.effectiveScrollBarStyle()
+	if st.Hidden {
+		return
+	}
 	fade := float32(1)
 	if !st.AlwaysVisible {
 		show := w.hovered(e) || dragging
@@ -156,9 +159,8 @@ func (w *Window) setScroll(e *El, sx, sy float32) bool {
 }
 
 type scrollStepRequest struct {
-	key   string
-	up    bool
-	inset float32
+	key string
+	up  bool
 }
 
 // applyScrollStep carries out a ScrollStep request.
@@ -177,7 +179,11 @@ func (w *Window) applyScrollStep(r *scrollStepRequest) {
 		}
 	}
 	n := &e.node
-	y := scrollStepTarget(spans, e.state.scrollY, n.H, max(n.ContentH-n.H, 0), r.inset, r.up)
+	inset := e.clipInset[2]
+	if r.up {
+		inset = e.clipInset[0]
+	}
+	y := scrollStepTarget(spans, e.state.scrollY, n.H, max(n.ContentH-n.H, 0), inset, r.up)
 	w.setScroll(e, e.state.scrollX, y)
 }
 

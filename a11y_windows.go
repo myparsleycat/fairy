@@ -272,18 +272,19 @@ func (w *Window) scrollIntoView(e *El) {
 		}
 		s, n := a.state, &a.node
 		sx, sy := s.scrollX, s.scrollY
+		ci := a.clipInset
 		if a.style.ScrollY {
-			if y < sy {
-				sy = y
-			} else if y+e.node.H > sy+n.H {
-				sy = y + e.node.H - n.H
+			if y < sy+ci[0] {
+				sy = y - ci[0]
+			} else if y+e.node.H > sy+n.H-ci[2] {
+				sy = y + e.node.H - n.H + ci[2]
 			}
 		}
 		if a.style.ScrollX {
-			if x < sx {
-				sx = x
-			} else if x+e.node.W > sx+n.W {
-				sx = x + e.node.W - n.W
+			if x < sx+ci[3] {
+				sx = x - ci[3]
+			} else if x+e.node.W > sx+n.W-ci[1] {
+				sx = x + e.node.W - n.W + ci[1]
 			}
 		}
 		w.setScroll(a, sx, sy)

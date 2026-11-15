@@ -50,6 +50,9 @@ type ScrollBarStyle struct {
 	Color Color
 	// DragColor is the thumb's color while it is dragged; zero uses Color.
 	DragColor Color
+	// Hidden draws no thumb and takes no presses on the track; the container
+	// still scrolls by wheel, touch and keys.
+	Hidden bool
 }
 
 var scrollBarStyle atomic.Pointer[ScrollBarStyle]
