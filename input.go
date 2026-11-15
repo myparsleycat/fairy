@@ -149,6 +149,8 @@ type elState struct {
 	scrolledAt         time.Time
 	layoutW, layoutH   float32 // the size OnLayout last reported
 	laidOut            bool
+	atTop, atBottom    bool // the edges OnScrollEdges last reported
+	edgesSeen          bool
 	edit               *editState
 	rows               *rowHeights // VirtualListMeasured row heights
 	anims              [animCount]*motion.Track

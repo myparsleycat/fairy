@@ -219,6 +219,7 @@ type El struct {
 	onKey         func(keyboard.KeyEvent) bool
 	onBlur        func()
 	onScroll      func(x, y float32)
+	onScrollEdges func(top, bottom bool)
 	onLayout      func(w, h float32)
 	focusable     bool
 	focus         focusProps
@@ -244,6 +245,7 @@ type El struct {
 	popover      *popover
 	virtual      *virtualList
 	stickBottom  bool
+	pinToView    bool
 	a11y         *a11yProps
 	rowIndex     int32 // index+1 of a virtual list row; 0 for other elements
 	xfp          *transformProps
@@ -517,6 +519,11 @@ func (e *El) ScrollX() *El { e.style.ScrollX = true; e.clip = true; return e }
 // scrolling back to the bottom resumes it. Use it for logs and chat.
 func (e *El) StickToBottom() *El { e.stickBottom = true; return e }
 
+// PinToView keeps an Absolute child of a scroll container where its insets put
+// it in the container's box while the content scrolls under it, as for
+// controls laid over a list.
+func (e *El) PinToView() *El { e.pinToView = true; return e }
+
 // Fill paints the element's box with c.
 func (e *El) Fill(c Color) *El { e.fill = c; return e }
 
@@ -735,6 +742,12 @@ func (e *El) OnBlur(f func()) *El { e.onBlur = f; return e }
 
 // OnScroll reports the scroll offset of a scroll container when it changes.
 func (e *El) OnScroll(f func(x, y float32)) *El { e.onScroll = f; return e }
+
+// OnScrollEdges reports whether a vertical scroll container shows the top and
+// the bottom of its content, when it is first placed and whenever either
+// changes. Unlike OnScroll, scrolling between the edges does not rebuild the
+// view.
+func (e *El) OnScrollEdges(f func(top, bottom bool)) *El { e.onScrollEdges = f; return e }
 
 // OnLayout reports the element's laid-out size when it is first placed and
 // whenever it changes, as for a table that records its column widths.

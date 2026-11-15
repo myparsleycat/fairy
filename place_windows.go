@@ -134,6 +134,10 @@ func (w *Window) placeAll() {
 		l.focusEnd = len(w.focusables)
 	}
 	w.layerChromeTop = w.topChromeBottom(w.chromeHits[rootChrome:], wr)
+	if r := w.scrollStepReq; r != nil {
+		w.scrollStepReq = nil
+		w.applyScrollStep(r)
+	}
 	if k := w.intoViewKey; k != "" {
 		w.intoViewKey = ""
 		if e := w.findKey(k); e != nil {
@@ -474,12 +478,24 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if e.stickBottom && s != nil {
 		s.endY = max(n.ContentH-n.H, 0)
 	}
+	if e.onScrollEdges != nil && s != nil {
+		top, bottom := s.scrollY <= 0.5, s.scrollY >= n.ContentH-n.H-0.5
+		if !s.edgesSeen || top != s.atTop || bottom != s.atBottom {
+			s.edgesSeen, s.atTop, s.atBottom = true, top, bottom
+			e.onScrollEdges(top, bottom)
+			w.markDirty(dirtyScroll)
+		}
+	}
 	cx, cy := e.absX, e.absY
 	if s != nil && e.kind != kindInput {
 		cx -= s.scrollX
 		cy -= s.scrollY
 	}
 	for _, c := range e.children {
+		if c.pinToView {
+			w.place(c, e.absX, e.absY, childClip)
+			continue
+		}
 		w.place(c, cx, cy, childClip)
 	}
 	if e.style.ScrollY && n.ContentH > n.H+0.5 {
@@ -509,6 +525,9 @@ func (w *Window) placeCulled(e *El) {
 		}
 		n := &c.node
 		c.absX, c.absY, c.w, c.h = cx+n.X, cy+n.Y, n.W, n.H
+		if c.pinToView {
+			c.absX, c.absY = e.absX+n.X, e.absY+n.Y
+		}
 		w.placeCulled(c)
 	}
 }

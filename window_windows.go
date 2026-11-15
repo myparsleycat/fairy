@@ -206,6 +206,7 @@ type Window struct {
 	revealTop      bool   // a ScrollToRowTop request
 	bottomKey      string // a ScrollToBottom request
 	intoViewKey    string // a ScrollIntoView request
+	scrollStepReq  *scrollStepRequest
 	memos          map[string]*memoEntry
 	layerRanges    [][2]int // scratch for transformPrims
 	matched        map[string]matchRec
@@ -694,6 +695,17 @@ func (w *Window) ScrollToBottom(key string) {
 // for rows a virtual list has not built, use ScrollToRow.
 func (w *Window) ScrollIntoView(key string) {
 	w.intoViewKey = key
+	w.invalidate()
+}
+
+// ScrollStep scrolls the innermost vertical scroll container around the
+// element with key by one of its children, at once, when the view is next
+// placed: up shows the child before the first one shown whole, down the one
+// after the last one shown whole. inset is how much of the view's edge that
+// way is covered, as by a scroll arrow laid over it with PinToView; the child
+// shown lines up with it.
+func (w *Window) ScrollStep(key string, up bool, inset float32) {
+	w.scrollStepReq = &scrollStepRequest{key, up, inset}
 	w.invalidate()
 }
 

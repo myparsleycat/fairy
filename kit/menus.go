@@ -3,6 +3,7 @@ package kit
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
@@ -63,6 +64,14 @@ type popupState struct {
 	hovered   string // the Select row whose RowAction shows
 	byPointer bool   // the pointer, not keys or typing, last moved highlight
 	chip      string // the MultiCombobox chip under the pointer
+	// hiddenAbove and hiddenBelow report a Select list scrolled away from
+	// its top and its bottom, for its scroll arrows. arrow is the arrow under
+	// the pointer, -1 up or +1 down, and arrowGen tells its scrolling timer
+	// when it has been replaced. builtAt is when the open list was last
+	// built, so the timer stops once it is not.
+	hiddenAbove, hiddenBelow bool
+	arrow, arrowGen          int
+	builtAt                  time.Time
 	// openSent and highlightSent are what OnOpenChange and OnHighlight
 	// last received.
 	openSent      bool
@@ -591,6 +600,7 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 	}
 	open := func() {
 		st.open, st.highlight, st.byPointer = true, 0, false
+		st.hiddenAbove, st.hiddenBelow, st.arrow = false, false, 0
 		for i, it := range enabled {
 			if it.Value == value {
 				st.highlight = i
@@ -610,6 +620,7 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 		var rows []*fairy.El
 		ei := 0
 		t := &current
+		st.builtAt = time.Now()
 		for _, it := range items {
 			if it.Heading {
 				rows = append(rows, fairy.Text(it.Label).FontSize(t.SmallSize).Color(t.MutedForeground).Medium().PadXY(6, 4))
@@ -637,7 +648,14 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 			}
 			rows = append(rows, row.Key(it.Value))
 		}
-		panel := popupPanel(false, rows...).MinW(max(144, st.anchorW)).Role(fairy.RoleList)
+		if st.hiddenAbove {
+			rows = append(rows, selectScrollArrow(st, id, true))
+		}
+		if st.hiddenBelow {
+			rows = append(rows, selectScrollArrow(st, id, false))
+		}
+		panel := popupPanel(false, rows...).MinW(max(144, st.anchorW)).Role(fairy.RoleList).
+			OnScrollEdges(func(top, bottom bool) { st.hiddenAbove, st.hiddenBelow = !top, !bottom })
 		if o.maxHeight > 0 {
 			panel.MaxH(o.maxHeight)
 		}
@@ -671,6 +689,80 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 	}
 	st.report(o, highlighted)
 	return trigger
+}
+
+const (
+	// selectArrowH is the height of a Select list's scroll arrows: a 16 pixel
+	// chevron with 4 pixels above and below.
+	selectArrowH = 24
+	// selectArrowTick is how often a scroll arrow under the pointer scrolls
+	// its list by an entry, as Base UI's.
+	selectArrowTick = 40 * time.Millisecond
+	// selectArrowStale is how long the timer of a scroll arrow keeps going
+	// without the list being built, as after its window closes.
+	selectArrowStale = 500 * time.Millisecond
+)
+
+func selectArrowKey(id string, up bool) string {
+	if up {
+		return "kit.select-up:" + id
+	}
+	return "kit.select-down:" + id
+}
+
+// selectScrollArrow is the arrow laid over the top (up) or bottom edge of a
+// Select's list, shown while there is more of the list that way. While the
+// pointer is on it, the list scrolls an entry at a time and no row is
+// highlighted, as Base UI's Select.ScrollUpArrow and ScrollDownArrow.
+func selectScrollArrow(st *popupState, id string, up bool) *fairy.El {
+	t := &current
+	icon, dir := lucide.ChevronDown, 1
+	if up {
+		icon, dir = lucide.ChevronUp, -1
+	}
+	e := fairy.Box(fairy.Icon(icon).Size(16, 16)).Center().H(selectArrowH).Fill(t.Popover).
+		Absolute().Left(0).Right(0).PinToView().Role(fairy.RoleHidden).Key(selectArrowKey(id, up))
+	if up {
+		e.Top(0)
+	} else {
+		e.Bottom(0)
+	}
+	window := fairy.CurrentWindow()
+	return e.OnPointerMove(func(fairy.PointerEvent) bool {
+		changed := st.highlight != -1 || !st.byPointer
+		st.highlight, st.byPointer = -1, true
+		if st.arrow != dir && window != nil {
+			st.arrow = dir
+			st.arrowGen++
+			st.scrollByArrow(window, id, st.arrowGen)
+		}
+		return changed
+	}).OnHover(func(in bool) {
+		if !in && st.arrow == dir {
+			st.arrow = 0
+			st.arrowGen++
+		}
+	})
+}
+
+// scrollByArrow scrolls the list an entry toward st.arrow after
+// selectArrowTick, and again after each tick until the arrow with gen is
+// left, the list closes, stops being built or shows its end that way.
+func (st *popupState) scrollByArrow(window *fairy.Window, id string, gen int) {
+	time.AfterFunc(selectArrowTick, func() {
+		fairy.Go(func() {
+			if !st.open || st.arrow == 0 || st.arrowGen != gen {
+				return
+			}
+			up := st.arrow < 0
+			if up && !st.hiddenAbove || !up && !st.hiddenBelow || time.Since(st.builtAt) > selectArrowStale {
+				st.arrow = 0
+				return
+			}
+			window.ScrollStep(selectArrowKey(id, up), up, selectArrowH)
+			st.scrollByArrow(window, id, gen)
+		})
+	})
 }
 
 func selectRichRow(st *popupState, row *fairy.El, i int, id string, item Item) *fairy.El {

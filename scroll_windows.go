@@ -155,6 +155,70 @@ func (w *Window) setScroll(e *El, sx, sy float32) bool {
 	return true
 }
 
+type scrollStepRequest struct {
+	key   string
+	up    bool
+	inset float32
+}
+
+// applyScrollStep carries out a ScrollStep request.
+func (w *Window) applyScrollStep(r *scrollStepRequest) {
+	e := w.findKey(r.key)
+	for e != nil && (e.state == nil || !e.style.ScrollY) {
+		e = e.parent
+	}
+	if e == nil {
+		return
+	}
+	var spans [][2]float32
+	for _, c := range e.children {
+		if !c.style.Absolute && !c.style.Hidden {
+			spans = append(spans, [2]float32{c.node.Y, c.node.Y + c.node.H})
+		}
+	}
+	n := &e.node
+	y := scrollStepTarget(spans, e.state.scrollY, n.H, max(n.ContentH-n.H, 0), r.inset, r.up)
+	w.setScroll(e, e.state.scrollX, y)
+}
+
+// scrollStepTarget returns the offset that shows one more of spans, the tops
+// and bottoms of a container's children in order, toward the top (up) or
+// bottom of a view viewH tall at offset y whose edge that way is covered by
+// inset: the child before the first one shown whole lines up below the inset,
+// or the child after the last one shown whole above it. Next to the first or
+// last child it goes to that end.
+func scrollStepTarget(spans [][2]float32, y, viewH, maxY, inset float32, up bool) float32 {
+	const tolerance = 1
+	n := len(spans)
+	if n == 0 {
+		return y
+	}
+	if up {
+		first := n
+		for i, s := range spans {
+			if s[0] >= y+inset-tolerance {
+				first = i
+				break
+			}
+		}
+		if first <= 1 {
+			return 0
+		}
+		return min(max(spans[first-1][0]-inset, 0), maxY)
+	}
+	last := -1
+	for i := n - 1; i >= 0; i-- {
+		if spans[i][1] <= y+viewH-inset+tolerance {
+			last = i
+			break
+		}
+	}
+	if last >= n-2 {
+		return maxY
+	}
+	return min(max(spans[last+1][1]-(viewH-inset), 0), maxY)
+}
+
 // wheelScroll moves a scroll container's target offset; the offset follows it smoothly.
 func (w *Window) wheelScroll(e *El, dx, dy float32) bool {
 	s, n := e.state, &e.node
