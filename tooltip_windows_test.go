@@ -71,6 +71,8 @@ func TestTipPlaceBesideAnchor(t *testing.T) {
 		{name: "right clamped to top", anchor: rectF{0, 0, 20, 10}, side: SideRight, x: 26, y: 4, used: SideRight},
 		{name: "right clamped to bottom", anchor: rectF{0, 90, 20, 10}, side: SideRight, x: 26, y: 76, used: SideRight},
 		{name: "top flips below", anchor: rectF{80, 10, 40, 10}, side: SideTop, x: 80, y: 26, used: SideBottom},
+		{name: "right without room stays inside", anchor: rectF{0, 40, 200, 20}, side: SideRight, x: 156, y: 40,
+			used: SideRight},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			x, y, used := tipPlace(tc.anchor, tc.side, bw, bh, gap, lw, lh, top)

@@ -179,17 +179,20 @@ func tipPlace(a rectF, side Side, bw, bh, gap, lw, lh, top float32) (x, y float3
 		}
 	}
 
-	cx := min(max(a.x+a.w/2-bw/2, 4), max(lw-bw-4, 4))
-	cy := min(max(a.y+a.h/2-bh/2, minY), max(maxY-bh, minY))
+	// When neither side has room, the tooltip covers part of the anchor rather
+	// than leaving the window.
+	clampX := func(x float32) float32 { return min(max(x, 4), max(lw-bw-4, 4)) }
+	clampY := func(y float32) float32 { return min(max(y, minY), max(maxY-bh, minY)) }
+	cx, cy := clampX(a.x+a.w/2-bw/2), clampY(a.y+a.h/2-bh/2)
 	switch side {
 	case SideTop:
-		return cx, a.y - gap - bh, side
+		return cx, clampY(a.y - gap - bh), side
 	case SideBottom:
-		return cx, a.y + a.h + gap, side
+		return cx, clampY(a.y + a.h + gap), side
 	case SideRight:
-		return a.x + a.w + gap, cy, side
+		return clampX(a.x + a.w + gap), cy, side
 	default:
-		return a.x - gap - bw, cy, side
+		return clampX(a.x - gap - bw), cy, side
 	}
 }
 
