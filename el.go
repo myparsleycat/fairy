@@ -230,6 +230,8 @@ type El struct {
 	maxButton     bool
 	tooltip       string
 	tipTruncated  bool
+	tipSide       Side
+	tipSideSet    bool
 
 	motion       *motion.Spec
 	layoutMotion *motion.Spec
@@ -625,6 +627,11 @@ func (e *El) Tooltip(s string) *El { e.tooltip = s; return e }
 // TooltipWhenTruncated shows the tooltip only while the text is cut short by
 // Ellipsis. Without a Tooltip it shows the element's whole text.
 func (e *El) TooltipWhenTruncated() *El { e.tipTruncated = true; return e }
+
+// TooltipSide shows the tooltip beside side of the element, centered on it,
+// and on the opposite side when there is no room. Without it, tooltips follow
+// SetTooltipStyle, or the pointer when no style is set.
+func (e *El) TooltipSide(s Side) *El { e.tipSide, e.tipSideSet = s, true; return e }
 
 // Text properties. Set on a container, they are inherited by descendant text.
 

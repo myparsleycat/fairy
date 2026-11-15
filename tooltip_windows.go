@@ -81,13 +81,12 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	bw, bh := tw/s+2*ts.PadX, th/s+2*ts.PadY
 	lw, lh := float32(w.width)/s, float32(w.height)/s
 	a := w.tipAnchor
-	top := true
-	y := a.y - ts.Gap - bh
-	if y < w.chromeTop+4 && a.y+a.h+ts.Gap+bh <= lh-4 {
-		y, top = a.y+a.h+ts.Gap, false
+	side := SideTop
+	if w.tipSideSet {
+		side = w.tipSide
 	}
-	cx := a.x + a.w/2
-	x := min(max(cx-bw/2, 4), max(lw-bw-4, 4))
+	x, y, side := tipPlace(a, side, bw, bh, ts.Gap, lw, lh, w.chromeTop)
+	cx, cy := a.x+a.w/2, a.y+a.h/2
 	r := rectF{x, y, bw, bh}
 	full := w.devRect(rectF{0, 0, lw, lh})
 	rad := ts.Radius * s
@@ -102,10 +101,20 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	}
 	if ts.Arrow {
 		const halfSide = 5
-		ax := min(max(cx, x+ts.Radius+halfSide), x+bw-ts.Radius-halfSide)
-		ay := y + bh - 2
-		if !top {
-			ay = y + 2
+		var ax, ay float32
+		switch side {
+		case SideTop, SideBottom:
+			ax = min(max(cx, x+ts.Radius+halfSide), x+bw-ts.Radius-halfSide)
+			ay = y + bh - 2
+			if side == SideBottom {
+				ay = y + 2
+			}
+		default:
+			ay = min(max(cy, y+ts.Radius+halfSide), y+bh-ts.Radius-halfSide)
+			ax = x + 2
+			if side == SideLeft {
+				ax = x + bw - 2
+			}
 		}
 		bg.Kind = render.KindCallout
 		bg.Params = [4]float32{ax * s, ay * s, halfSide * s, 2 * s}
@@ -115,14 +124,21 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 
 	// Grow from 0.95 about the edge that faces the element, slide in from
 	// it, and fade.
-	oy, dy := y+bh, 8*(1-p)
-	if !top {
+	ox, oy := min(max(cx, x), x+bw), y+bh
+	dx, dy := float32(0), 8*(1-p)
+	switch side {
+	case SideBottom:
 		oy, dy = y, -dy
+	case SideRight:
+		ox, oy, dx, dy = x, min(max(cy, y), y+bh), -dy, 0
+	case SideLeft:
+		ox, oy, dx, dy = x+bw, min(max(cy, y), y+bh), dy, 0
 	}
 	if !w.tipShown {
-		dy = 0
+		dx, dy = 0, 0
 	}
-	m := turnAbout(min(max(cx, x), x+bw)*s, oy*s, 0.95+0.05*p, 0)
+	m := turnAbout(ox*s, oy*s, 0.95+0.05*p, 0)
+	m.tx += dx * s
 	m.ty += dy * s
 	prims := w.scene.Prims[start:]
 	for i := range prims {
@@ -137,6 +153,44 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 		pr.Xform, pr.Xlate = [4]float32{n.a, n.b, n.c, n.d}, [2]float32{n.tx, n.ty}
 	}
 	return ok
+}
+
+// tipPlace puts a bw by bh tooltip gap away from side of anchor a, or on the
+// opposite side when it does not fit there and the opposite side does. It is
+// centered on a and kept inside the window, below top. It returns the side used.
+func tipPlace(a rectF, side Side, bw, bh, gap, lw, lh, top float32) (x, y float32, used Side) {
+	minY, maxY := top+4, lh-4
+	switch side {
+	case SideTop:
+		if a.y-gap-bh < minY && a.y+a.h+gap+bh <= maxY {
+			side = SideBottom
+		}
+	case SideBottom:
+		if a.y+a.h+gap+bh > maxY && a.y-gap-bh >= minY {
+			side = SideTop
+		}
+	case SideRight:
+		if a.x+a.w+gap+bw > lw-4 && a.x-gap-bw >= 4 {
+			side = SideLeft
+		}
+	case SideLeft:
+		if a.x-gap-bw < 4 && a.x+a.w+gap+bw <= lw-4 {
+			side = SideRight
+		}
+	}
+
+	cx := min(max(a.x+a.w/2-bw/2, 4), max(lw-bw-4, 4))
+	cy := min(max(a.y+a.h/2-bh/2, minY), max(maxY-bh, minY))
+	switch side {
+	case SideTop:
+		return cx, a.y - gap - bh, side
+	case SideBottom:
+		return cx, a.y + a.h + gap, side
+	case SideRight:
+		return a.x + a.w + gap, cy, side
+	default:
+		return a.x - gap - bw, cy, side
+	}
 }
 
 func (w *Window) paintTooltip() bool {
@@ -154,7 +208,9 @@ func (w *Window) paintTooltip() bool {
 	lw, lh := float32(w.width)/s, float32(w.height)/s
 	x := min(w.mouseX+12, lw-bw-4)
 	y := w.mouseY + 22
-	if y+bh > lh-4 && w.mouseY-bh-8 >= w.chromeTop+4 {
+	if w.tipSideSet {
+		x, y, _ = tipPlace(w.tipAnchor, w.tipSide, bw, bh, 6, lw, lh, w.chromeTop)
+	} else if y+bh > lh-4 && w.mouseY-bh-8 >= w.chromeTop+4 {
 		y = w.mouseY - bh - 8
 	}
 	full := w.devRect(rectF{0, 0, lw, lh})
@@ -185,6 +241,7 @@ func (w *Window) showTooltip() {
 			w.tipShown = true
 			w.tipLeft = time.Time{}
 			w.tipAnchor = rectF{e.absX, e.absY, e.w, e.h}
+			w.tipSide, w.tipSideSet = e.tipSide, e.tipSideSet
 			w.invalidate()
 			return
 		}

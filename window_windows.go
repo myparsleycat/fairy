@@ -232,6 +232,8 @@ type Window struct {
 	tipShown   bool
 	tipText    string
 	tipAnchor  rectF     // the element a styled tooltip points at
+	tipSide    Side      // where TooltipSide placed the tooltip
+	tipSideSet bool      // the element set TooltipSide
 	tipAt      time.Time // when the styled tooltip showed
 	tipLeft    time.Time // when it began to leave; zero while shown or gone
 	tipFrom    float32   // its progress when it began to leave

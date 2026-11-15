@@ -1,6 +1,6 @@
 package fairy
 
-// Side is where a popover opens relative to its anchor.
+// Side is where a popover or tooltip opens relative to its anchor.
 type Side uint8
 
 const (
