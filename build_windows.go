@@ -26,6 +26,7 @@ func (w *Window) build() {
 	w.treeVer++
 	w.prevByID, w.byID = w.byID, w.prevByID
 	clear(w.byID)
+	clear(w.layers)
 	w.layers = w.layers[:0]
 	w.growing = false
 	clear(w.matchClaims)

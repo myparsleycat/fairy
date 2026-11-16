@@ -288,6 +288,7 @@ func (a *Atlas) allocTexture(size int) error {
 	a.tex, a.srv, a.size = tex, srv, size
 	a.shelves = a.shelves[:0]
 	a.nextY = 0
+	clear(a.pending)
 	a.pending = a.pending[:0]
 	a.Generation = int(atlasGenerations.Add(1))
 	return nil
@@ -372,6 +373,8 @@ func (a *Atlas) flush() {
 		box := d3d.Box{Left: uint32(u.x), Top: uint32(u.y), Front: 0, Right: uint32(u.x + u.w), Bottom: uint32(u.y + u.h), Back: 1}
 		a.r.ctx.UpdateSubresource(a.tex, &box, unsafe.Pointer(&u.data[0]), uint32(u.w), 0)
 	}
+	// The masks are uploaded; let them go.
+	clear(a.pending)
 	a.pending = a.pending[:0]
 	a.clearedAtCap = false
 }

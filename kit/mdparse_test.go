@@ -302,6 +302,29 @@ func pick(ds []*mdDoc, back int) *mdDoc {
 	return ds[len(ds)-back]
 }
 
+// Streaming a document parses each view as parsing it whole would, and the
+// cache keeps one parse for the stream rather than one per view.
+func TestStreamViewDocs(t *testing.T) {
+	saved := mdDocs
+	t.Cleanup(func() { mdDocs = saved })
+	mdDocs = genCache[*mdDoc]{size: 64}
+	doc := strings.Repeat("Some *emphasis* and `code` here,\nthen **more**.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n", 20)
+	for n := 1; n <= len(doc); n += 3 {
+		d := parseDoc(doc[:n])
+		v := streamView(d)
+		if v == d.src {
+			continue
+		}
+		want, _ := parseBlocksAt(strings.Split(v, "\n"))
+		if got := dumpBlocks(viewDoc(d, v).blocks, ""); got != dumpBlocks(want, "") {
+			t.Fatalf("view %q:\n got %s\nwant %s", v, got, dumpBlocks(want, ""))
+		}
+	}
+	if n := len(mdDocs.cur) + len(mdDocs.old); n != 1 {
+		t.Errorf("%d parses cached after streaming one document, want 1", n)
+	}
+}
+
 func TestStreamView(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"Hello **wor", "Hello **wor**"},

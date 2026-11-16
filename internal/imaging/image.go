@@ -33,7 +33,8 @@ func premulPixels(src image.Image) (int, int, []byte) {
 	w, h := b.Dx(), b.Dy()
 	switch s := src.(type) {
 	case *image.RGBA:
-		if s.Stride == w*4 && b.Min == (image.Point{}) {
+		// A SubImage of the top rows passes the rest of its parent's pixels.
+		if s.Stride == w*4 && b.Min == (image.Point{}) && len(s.Pix) == w*h*4 {
 			return w, h, s.Pix
 		}
 	case *image.NRGBA:

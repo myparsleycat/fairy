@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"maps"
 	"math"
 
 	"github.com/myparsleycat/fairy/layout"
@@ -70,10 +71,26 @@ func (w *Window) windowRect() rectF {
 // scroll bar geometry for the laid-out tree and its layers.
 func (w *Window) placeAll() {
 	w.placePass++
+	// Clear what this pass leaves of the last one's elements, which would
+	// keep the tree they were built in alive.
+	oldHits, oldFocus := len(w.hits), len(w.focusables)
+	defer func() {
+		if n := len(w.hits); n < oldHits {
+			clear(w.hits[n:oldHits])
+		}
+		if n := len(w.focusables); n < oldFocus {
+			clear(w.focusables[n:oldFocus])
+		}
+	}()
 	w.hits = w.hits[:0]
 	w.chromeHits = w.chromeHits[:0]
 	w.bars = w.bars[:0]
 	w.focusables = w.focusables[:0]
+	if len(w.matched) > w.matchedPrune {
+		// placeFlight takes no record from before the last frame.
+		maps.DeleteFunc(w.matched, func(_ string, r matchRec) bool { return r.frame < w.frame-1 })
+		w.matchedPrune = max(64, 2*len(w.matched))
+	}
 	if w.root == nil {
 		return
 	}

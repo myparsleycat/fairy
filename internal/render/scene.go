@@ -93,6 +93,7 @@ func (s *Scene) Reset() {
 	s.Prims = s.Prims[:0]
 	s.Clips = s.Clips[:0]
 	s.Layers = s.Layers[:0]
+	clear(s.images)
 	s.images = s.images[:0]
 	s.Clip = 0
 }

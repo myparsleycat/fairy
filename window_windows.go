@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf16"
@@ -227,6 +228,7 @@ type Window struct {
 	memos          map[string]*memoEntry
 	layerRanges    [][2]int // scratch for transformPrims
 	matched        map[string]matchRec
+	matchedPrune   int               // len(matched) over which placeAll drops stale records
 	matchClaims    map[string]uint64 // match ids of the elements in the view being built
 	placePass      int
 	flights        []flight
@@ -286,6 +288,7 @@ type Window struct {
 	posted      []func()
 	injectQueue []injected
 	quit        bool
+	closed      atomic.Bool // destroyed; read by Live.Set on any goroutine
 }
 
 type texEntry struct {
@@ -1241,6 +1244,24 @@ func (w *Window) destroy() {
 		w.r = nil
 	}
 	delete(windows, w.hwnd)
+	w.closed.Store(true)
+	// The app or a Live may still hold w; let the trees and element state go.
+	// Maps are emptied rather than dropped, as methods called on the closed
+	// window may still write to them.
+	w.root, w.sel, w.press = nil, nil, nil
+	w.layers, w.hits, w.focusables, w.hoverPath = nil, nil, nil, nil
+	w.ghosts, w.flights = nil, nil
+	w.scene = render.Scene{}
+	clear(w.states)
+	clear(w.byID)
+	clear(w.prevByID)
+	clear(w.memos)
+	clear(w.locals)
+	clear(w.matched)
+	clear(w.hoverIDs)
+	clear(w.ghostIn)
+	clear(w.matchClaims)
+	clear(w.iconTiles)
 }
 
 func (w *Window) ncHitTest(lp uintptr) uintptr {

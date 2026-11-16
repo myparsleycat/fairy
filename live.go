@@ -48,6 +48,10 @@ func (l *Live[T]) Set(v T) {
 	l.shownIn = nil
 	l.mu.Unlock()
 	for w := range ws {
+		if w.closed.Load() {
+			// Its handle may belong to another window now.
+			continue
+		}
 		switch h := w.hwnd; {
 		case h != 0 && w.opts.Headless:
 			// A message-only window gets no WM_PAINT; the window paces

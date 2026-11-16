@@ -11,6 +11,9 @@ type mdDoc struct {
 	src    string // with CRLF and tabs normalized
 	blocks []mdBlock
 	starts []int
+	// view is the parse of the latest stream view of src, or of an earlier
+	// version's. It stays here, not in mdDocs, so views do not pile up there.
+	view *mdDoc
 }
 
 func normalizeMarkdown(src string) string {
@@ -29,10 +32,9 @@ func completeLen(src string) int { return strings.LastIndexByte(src, '\n') + 1 }
 // the blocks before the one that holds prev's last complete line, or before
 // the last line block that starts by then, end where they did; the parse
 // starts again at that block.
-// Reuse avoids parsing stable blocks, but counting and splitting source lines
-// and copying the block index still cost O(N) per update for N source bytes.
+// Reuse avoids parsing stable blocks, but counting source lines and copying
+// the block index still cost O(N) per update for N source bytes.
 func parseFrom(prev *mdDoc, src string) *mdDoc {
-	lines := strings.Split(src, "\n")
 	keep, from := 0, 0
 	if prev != nil {
 		last := strings.Count(prev.src, "\n") - 1
@@ -49,7 +51,15 @@ func parseFrom(prev *mdDoc, src string) *mdDoc {
 			from = prev.starts[keep]
 		}
 	}
-	bs, st := parseBlocksAt(lines[from:])
+	tail := src[lineStart(src, from):]
+	if keep > 0 {
+		// Block text points into the source it was parsed from, and kept
+		// blocks pass on to every later parse, so parsing src itself would
+		// keep each streamed version of the whole source alive. With nothing
+		// kept, the tail is all of src and only its blocks keep it.
+		tail = strings.Clone(tail)
+	}
+	bs, st := parseBlocksAt(strings.Split(tail, "\n"))
 	d := &mdDoc{
 		src:    src,
 		blocks: make([]mdBlock, 0, keep+len(bs)),
@@ -64,6 +74,19 @@ func parseFrom(prev *mdDoc, src string) *mdDoc {
 		d.starts = append(d.starts, s+from)
 	}
 	return d
+}
+
+// lineStart returns where line n of src starts. src has more than n lines.
+func lineStart(src string, n int) int {
+	off := 0
+	for range n {
+		i := strings.IndexByte(src[off:], '\n')
+		if i < 0 {
+			panic("kit: markdown parse base is not a prefix of the source")
+		}
+		off += i + 1
+	}
+	return off
 }
 
 // genCache keeps recent entries in two generations: when the current one
@@ -119,26 +142,52 @@ var (
 // parseDoc returns the parse of src, from the cache or by extending the
 // cached parse that shares the most complete lines with it. A source that
 // grew (streamed text) replaces its earlier version in the cache.
-func parseDoc(src string) *mdDoc { return parseDocCached(src, true) }
-
-func parseDocCached(src string, replace bool) *mdDoc {
+func parseDoc(src string) *mdDoc {
 	src = normalizeMarkdown(src)
 	if d, ok := mdDocs.get(src); ok {
 		return d
 	}
+	best := bestBase(src, nil)
+	d := parseFrom(best, src)
+	if best != nil {
+		// The earlier version's view is where the next view extends from.
+		d.view = best.view
+	}
+	// Drop the earlier versions src grew from: the base, and those with no
+	// complete line, which are never a base.
+	mdDocs.each(func(c *mdDoc) {
+		if (c == best || completeLen(c.src) == 0) && strings.HasPrefix(src, c.src) {
+			mdDocs.drop(c.src)
+		}
+	})
+	mdDocs.put(src, d)
+	return d
+}
+
+// viewDoc returns the parse of v, the stream view of d.
+func viewDoc(d *mdDoc, v string) *mdDoc {
+	if d.view != nil && d.view.src == v {
+		return d.view
+	}
+	d.view = parseFrom(bestBase(v, d.view), v)
+	return d.view
+}
+
+// bestBase returns the parse, among the cached ones and also if not nil,
+// whose complete lines begin src and are the most of them, or nil.
+func bestBase(src string, also *mdDoc) *mdDoc {
 	var best *mdDoc
 	bestLen := 0
-	mdDocs.each(func(d *mdDoc) {
+	try := func(d *mdDoc) {
 		if n := completeLen(d.src); n > bestLen && strings.HasPrefix(src, d.src[:n]) {
 			best, bestLen = d, n
 		}
-	})
-	d := parseFrom(best, src)
-	if replace && best != nil && strings.HasPrefix(src, best.src) {
-		mdDocs.drop(best.src)
 	}
-	mdDocs.put(src, d)
-	return d
+	mdDocs.each(try)
+	if also != nil {
+		try(also)
+	}
+	return best
 }
 
 func inlineSpans(src string) []mdSpan {

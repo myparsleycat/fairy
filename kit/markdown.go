@@ -100,7 +100,7 @@ func Markdown(src string, opts MarkdownOptions) *fairy.El {
 	d := parseDoc(src)
 	if opts.Streaming {
 		if v := streamView(d); v != d.src {
-			d = parseDocCached(v, false)
+			d = viewDoc(d, v)
 		}
 	}
 	el := r.blocks(d.blocks, 0).LineHeight(r.t.FontSize * 1.6)

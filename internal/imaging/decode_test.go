@@ -13,6 +13,18 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
+// The top rows of an RGBA share its stride and origin but not its length.
+func TestNewTopRowsOfRGBA(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 4, 6))
+	for i := range src.Pix {
+		src.Pix[i] = byte(i)
+	}
+	b := New(src.SubImage(image.Rect(0, 0, 4, 2)))
+	if b.W != 4 || b.H != 2 || !bytes.Equal(b.Pixels, src.Pix[:4*2*4]) {
+		t.Fatalf("New of the top rows = %dx%d, %d bytes, want 4x2, the first %d bytes of the source", b.W, b.H, len(b.Pixels), 4*2*4)
+	}
+}
+
 func TestImageDecodeKeepsStillPixels(t *testing.T) {
 	nrgba := image.NewNRGBA(image.Rect(0, 0, 97, 65))
 	nrgba64 := image.NewNRGBA64(nrgba.Bounds())
