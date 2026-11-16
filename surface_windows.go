@@ -85,6 +85,7 @@ func (w *Window) drawSurface(e *El, se *surfaceEntry, dev *render.Device, width,
 		Generation: dev.Gen,
 	})
 	dev.Ctx.ClearState()
+	se.target.Touch()
 	se.drawn = true
 	se.scale = w.scale
 	if e.retain != nil {

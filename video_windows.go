@@ -254,6 +254,7 @@ func (v *Video) currentFrame() *render.Target {
 	}
 	if ok || fresh {
 		v.eng.Transfer(v.frame.Resource().P, w, h)
+		v.frame.Touch()
 	}
 	return v.frame
 }

@@ -3,6 +3,7 @@
 package render
 
 import (
+	"runtime"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/d3d"
@@ -10,12 +11,12 @@ import (
 )
 
 const (
-	dxgiUsageRenderTargetOutput = 0x20
-	dxgiScalingStretch          = 0
-	dxgiSwapEffectFlipDiscard   = 4
-	dxgiAlphaModePremultiplied  = 1
-	dxgiAlphaModeIgnore         = 3
-	dxgiMWANoAltEnter           = 0x2
+	dxgiUsageRenderTargetOutput  = 0x20
+	dxgiScalingStretch           = 0
+	dxgiSwapEffectFlipSequential = 3
+	dxgiAlphaModePremultiplied   = 1
+	dxgiAlphaModeIgnore          = 3
+	dxgiMWANoAltEnter            = 0x2
 
 	dxgiStatusOccluded = 0x087A0001
 )
@@ -78,8 +79,26 @@ func createSwapChainForComposition(factory unsafe.Pointer, d d3d.Device, desc *s
 
 func (s swapChain) release() { com.Release(s.p) }
 
-func (s swapChain) present(sync, flags uint32) com.HRESULT {
-	return com.HR(s.p, 8, uintptr(sync), uintptr(flags))
+// presentParameters is DXGI_PRESENT_PARAMETERS.
+type presentParameters struct {
+	DirtyRectsCount uint32
+	DirtyRects      *d3d.Rect
+	ScrollRect      *d3d.Rect
+	ScrollOffset    unsafe.Pointer
+}
+
+// present1 presents with IDXGISwapChain1::Present1. With dirty rects, every
+// pixel inside them must have been drawn this frame and none outside them;
+// the runtime copies the rest from the previous buffer. No rects presents the
+// whole buffer.
+func (s swapChain) present1(sync, flags uint32, dirty []d3d.Rect) com.HRESULT {
+	var p presentParameters
+	if len(dirty) > 0 {
+		p.DirtyRectsCount, p.DirtyRects = uint32(len(dirty)), &dirty[0]
+	}
+	hr := com.HR(s.p, 22, uintptr(sync), uintptr(flags), uintptr(unsafe.Pointer(&p)))
+	runtime.KeepAlive(dirty)
+	return hr
 }
 
 func (s swapChain) buffer() (d3d.Texture2D, error) {

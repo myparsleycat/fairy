@@ -191,7 +191,7 @@ func NewTextureImage(tex d3d.Texture2D, opts TextureImageOptions) (*Image, error
 		if opts.Copy {
 			t, err = render.CopyTexture(dev, tex)
 		} else {
-			t, err = render.WrapTexture(dev, tex)
+			t, err = render.WrapTexture(dev, tex, true)
 		}
 		return err
 	})
@@ -264,7 +264,8 @@ func SurfaceImage(width, height int, scale float32, draw func(SurfaceFrame)) (*I
 			Generation: dev.Gen,
 		})
 		dev.Ctx.ClearState()
-		wrapped, err := render.WrapTexture(dev, t.Resource())
+		// Nothing draws into the target once draw returns.
+		wrapped, err := render.WrapTexture(dev, t.Resource(), false)
 		if err != nil {
 			return err
 		}

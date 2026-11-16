@@ -60,6 +60,7 @@ type Renderer struct {
 	blendErase d3d.BlendState // scales the target by one less the prim's alpha
 	blendAdd   d3d.BlendState
 	raster     d3d.RasterizerState
+	rasterCut  d3d.RasterizerState // raster with the scissor test, for drawing part of the target
 	sampler    d3d.SamplerState
 	globalsBuf d3d.Buffer
 	batchBuf   d3d.Buffer
@@ -79,6 +80,20 @@ type Renderer struct {
 	gamma         [4]float32
 	contrast      float32
 	occluded      bool
+	presented     bool
+
+	// With damage tracking, a frame redraws only the part of the target that
+	// differs from the frame before; region is that part for the frame being
+	// drawn.
+	damageOn    bool
+	ctx1        d3d.Context1
+	dmg         damageTracker
+	region      damageResult
+	debugDamage DamageDebug
+	shownTint   rectSet    // the rects tinted last frame by DamageDebugShow
+	pass        rectI      // the rect the current pass draws in, when not full
+	dirty       []d3d.Rect // region.rects of a frame drawn in part, cleared and presented
+	check       damageCheck
 }
 
 // New creates a renderer for hwnd with an initial back buffer size in device
@@ -155,7 +170,7 @@ func (r *Renderer) createSwapChain(transparent bool) error {
 		BufferUsage: dxgiUsageRenderTargetOutput,
 		BufferCount: bufferCount,
 		Scaling:     dxgiScalingStretch,
-		SwapEffect:  dxgiSwapEffectFlipDiscard,
+		SwapEffect:  dxgiSwapEffectFlipSequential,
 		AlphaMode:   dxgiAlphaModeIgnore,
 	}
 	var err error
@@ -179,6 +194,8 @@ func (r *Renderer) createSwapChain(transparent bool) error {
 		r.swap = swapChain{}
 		return err
 	}
+	r.dmg.invalidate(DamageFirst)
+	r.check.good = 0
 	return nil
 }
 
@@ -261,6 +278,10 @@ func (r *Renderer) createPipeline() error {
 	}
 	rd := d3d.RasterizerDesc{FillMode: d3d.FILL_SOLID, CullMode: d3d.CULL_NONE, DepthClipEnable: 1}
 	if r.raster, err = r.dev.CreateRasterizerState(&rd); err != nil {
+		return err
+	}
+	rd.ScissorEnable = 1
+	if r.rasterCut, err = r.dev.CreateRasterizerState(&rd); err != nil {
 		return err
 	}
 	sd := d3d.SamplerDesc{
@@ -369,6 +390,8 @@ func (r *Renderer) Resize(width, height int) error {
 	defer runtime.UnlockOSThread()
 	r.ds.Lock()
 	defer r.ds.Unlock()
+	// New buffers hold nothing of the last frame, even at the size it had.
+	r.dmg.invalidate(DamageResize)
 	if r.target != nil {
 		return r.resizeTarget(width, height)
 	}
@@ -390,6 +413,7 @@ func (r *Renderer) Resize(width, height int) error {
 		return err
 	}
 	r.width, r.height = width, height
+	r.check.good = 0
 	return nil
 }
 
@@ -426,8 +450,13 @@ func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 		return errNoTarget
 	}
 	r.submission++
+	verify := r.debugDamage == DamageDebugVerify && r.damageOn && r.target == nil
+	if verify {
+		r.withDevice(r.checkBuffer)
+	}
 	t0 := win.Ticks()
 	if err := r.draw(s, clear); err != nil {
+		r.dmg.invalidate(DamageInvalidate)
 		r.stats.GPUValid = false
 		if d3d.DeviceLost(err) {
 			r.ds.MarkLost()
@@ -440,15 +469,45 @@ func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 	t1 := win.Ticks()
 	r.stats.Record = t1 - t0
 	r.stats.Present = 0
+	r.presented = false
 	if r.target != nil {
 		if r.ds.Lost() {
 			return ErrDeviceLost
 		}
+		r.dmg.commit()
 		return nil
 	}
-	hr := r.swap.present(1, 0)
+	if r.damageOn && !r.region.full && len(r.region.rects) == 0 {
+		// The buffers already hold this frame.
+		r.dmg.commit()
+		return nil
+	}
+	r.presented = true
+	var dirty []d3d.Rect
+	if r.damageOn && !r.region.full {
+		dirty = r.dirty
+	}
+	if verify {
+		r.drawReference(s, clear)
+	}
+	hr := r.swap.present1(1, 0, dirty)
 	r.stats.Present = win.Ticks() - t1
+	if verify {
+		r.check.frames++
+		r.check.good++
+		if hr != 0 {
+			r.check.good = 0
+		}
+	}
 	r.occluded = uint32(hr) == dxgiStatusOccluded
+	// Dirty rects leave the rest of the buffer to the runtime's copy from the
+	// last presented one, so a frame that was not presented in full as asked
+	// leaves nothing to compare the next one with.
+	if hr == 0 {
+		r.dmg.commit()
+	} else {
+		r.dmg.invalidate(DamageInvalidate)
+	}
 	if hr.Failed() {
 		if uint32(hr) == d3d.DXGI_ERROR_DEVICE_REMOVED || uint32(hr) == d3d.DXGI_ERROR_DEVICE_RESET {
 			r.ds.MarkLost()
@@ -494,21 +553,49 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 		}
 	}()
 	r.Atlas.flush()
-	ctx.ClearRenderTargetView(r.rtv, [4]float32{clear[0] * clear[3], clear[1] * clear[3], clear[2] * clear[3], clear[3]})
 	ctx.RSSetViewports(d3d.Viewport{Width: float32(r.width), Height: float32(r.height), MaxDepth: 1})
 
+	// Only layers and the damage tint add or patch prims, so without them the
+	// scene's own prims are uploaded as they are.
+	layered := len(s.Layers) > 0 || r.debugDamage == DamageDebugShow
+	var top []int
 	if len(s.Prims) > 0 {
-		// Only layers add or patch prims, so without any the scene's own
-		// prims are uploaded as they are.
-		layered := len(s.Layers) > 0
 		if layered {
 			r.frame = append(r.frame[:0], s.Prims...)
 		}
 		defer r.pool.endFrame()
-		top, err := r.planLayers(s)
-		if err != nil {
+		var err error
+		if top, err = r.planLayers(s); err != nil {
 			return err
 		}
+	}
+	r.planRegion(s, top, clear)
+	tint, tints := len(r.frame), 0
+	if r.debugDamage == DamageDebugShow && r.damageOn && len(s.Prims) > 0 {
+		for _, g := range r.showRegion(top) {
+			r.frame = append(r.frame, tintPrim(g))
+			tints++
+		}
+	}
+	premul := [4]float32{clear[0] * clear[3], clear[1] * clear[3], clear[2] * clear[3], clear[3]}
+	switch {
+	case !r.damageOn:
+		ctx.ClearRenderTargetView(r.rtv, premul)
+	case r.region.full:
+		r.ctx1.ClearView(r.rtv, premul)
+	case len(r.region.rects) > 0:
+		r.dirty = r.dirty[:0]
+		for _, g := range r.region.rects {
+			r.dirty = append(r.dirty, g.d3d())
+		}
+		r.ctx1.ClearView(r.rtv, premul, r.dirty...)
+	}
+
+	passes := r.region.rects
+	if !r.damageOn || r.region.full {
+		passes = rectSet{{}}
+	}
+	if len(s.Prims) > 0 && len(passes) > 0 {
 		prims := s.Prims
 		if layered {
 			prims = r.frame
@@ -537,11 +624,18 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 		ctx.PSSetShaderResources(3, r.clips.srv)
 		ctx.PSSetSamplers(0, r.sampler)
 		ctx.OMSetBlendState(r.blend, [4]float32{}, 0xFFFFFFFF)
-		ctx.RSSetState(r.raster)
 
 		r.stats.Batches = 0
-		r.setTarget(renderTarget{rtv: r.rtv, tex: r.backBuffer, w: r.width, h: r.height})
-		r.drawRange(s, 0, len(s.Prims), top)
+		// Each rect is a pass over the whole scene clipped to it; layers are
+		// drawn offscreen in the first pass that shows them.
+		for _, g := range passes {
+			r.pass = g
+			r.setTarget(renderTarget{rtv: r.rtv, tex: r.backBuffer, w: r.width, h: r.height})
+			r.drawRange(s, 0, len(s.Prims), top, true)
+			if tints > 0 {
+				r.drawBatch(tint, tint+tints)
+			}
+		}
 	}
 
 	if slot >= 0 {
@@ -556,6 +650,62 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 	}
 	ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
 	return nil
+}
+
+// planRegion works out which part of the target this frame draws.
+func (r *Renderer) planRegion(s *Scene, top []int, clear [4]float32) {
+	r.region = damageResult{full: true, reason: DamageOff}
+	if r.damageOn {
+		r.region = r.dmg.compute(s, r.plan[:len(s.Layers)], top, r.width, r.height, clear, r.Atlas.Generation)
+		switch {
+		case r.region.full:
+		case r.snapshot != nil && r.target == nil:
+			// A swap chain buffer holds an older frame outside the region.
+			r.region = damageResult{full: true, reason: DamageSnapshot}
+		}
+	}
+	r.stats.DamageReason = ""
+	r.stats.Damage = image.Rect(0, 0, r.width, r.height)
+	r.stats.DamageArea, r.stats.DamageRects = r.width*r.height, 1
+	if !r.region.full {
+		g := r.region.rects.bounds()
+		r.stats.Damage = image.Rect(g.x0, g.y0, g.x1, g.y1)
+		r.stats.DamageArea, r.stats.DamageRects = r.region.rects.area(), len(r.region.rects)
+	} else if r.damageOn {
+		r.stats.DamageReason = r.region.reason
+	}
+}
+
+// SetDamageTracking turns damage tracking on or off and reports whether it is
+// on: frames then redraw and present only the part of the target that
+// changed. It needs the Direct3D 11.1 runtime and a driver that supports
+// ClearView. Call it between draws.
+func (r *Renderer) SetDamageTracking(on bool) bool {
+	if on && r.ctx1.P == nil {
+		if !r.dev.ClearViewSupported() {
+			return false
+		}
+		c1, err := r.ctx.Context1()
+		if err != nil {
+			return false
+		}
+		r.ctx1 = c1
+	}
+	r.damageOn = on
+	r.dmg.invalidate(DamageFirst)
+	return on
+}
+
+// Invalidate makes the next frame redraw the whole target, for changes to
+// what the target shows that its scenes do not carry.
+func (r *Renderer) Invalidate() { r.dmg.invalidate(DamageInvalidate) }
+
+func (r *Renderer) withDevice(f func()) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r.ds.Lock()
+	defer r.ds.Unlock()
+	f()
 }
 
 // backBuffer returns the texture the window draws into, and a function
@@ -579,6 +729,14 @@ type Stats struct {
 	GPU      time.Duration
 	GPUFrame uint64 // renderer submission number of the earlier sample
 	GPUValid bool
+	// Damage bounds the part of the target the frame drew, empty when nothing
+	// changed; the frame drew DamageArea pixels in DamageRects rects.
+	// DamageReason says why a frame with damage tracking was drawn whole, and
+	// is empty otherwise.
+	Damage       image.Rectangle
+	DamageArea   int
+	DamageRects  int
+	DamageReason string
 }
 
 // SetGPUTiming enables asynchronous timing of renderer commands, excluding
@@ -610,6 +768,11 @@ func (r *Renderer) Stats() Stats { return r.stats }
 // which case it returned without waiting for vblank.
 func (r *Renderer) Occluded() bool { return r.occluded }
 
+// Presented reports whether the last Draw presented to a swap chain, and so
+// waited for the display. With damage tracking, a frame that changes nothing
+// is neither drawn nor presented.
+func (r *Renderer) Presented() bool { return r.presented }
+
 func (r *Renderer) drawBatch(start, end int) {
 	if end <= start {
 		return
@@ -636,6 +799,9 @@ func (r *Renderer) Release() {
 	r.globalsBuf.Release()
 	r.sampler.Release()
 	r.raster.Release()
+	r.rasterCut.Release()
+	r.ctx1.Release()
+	r.check.release()
 	r.blend.Release()
 	r.blendErase.Release()
 	r.blendAdd.Release()

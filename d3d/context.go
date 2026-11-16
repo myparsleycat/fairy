@@ -201,3 +201,26 @@ func (c Context) GenerateMips(v ShaderResourceView) { com.Call(c.P, 54, uintptr(
 
 func (c Context) ClearState() { com.Call(c.P, 110) }
 func (c Context) Flush()      { com.Call(c.P, 111) }
+
+// Context1 wraps ID3D11DeviceContext1, from the Direct3D 11.1 runtime.
+type Context1 struct{ P unsafe.Pointer }
+
+// Context1 returns the context's ID3D11DeviceContext1 interface, with a
+// reference the caller releases.
+func (c Context) Context1() (Context1, error) {
+	p, err := com.QueryInterface(c.P, &iidID3D11Context1)
+	return Context1{p}, err
+}
+
+func (c Context1) Release() {
+	if c.P != nil {
+		com.Release(c.P)
+	}
+}
+
+// ClearView sets the pixels of rtv inside rects to color, or all of them when
+// rects is empty. Unlike ClearRenderTargetView it can clear part of a view.
+func (c Context1) ClearView(rtv RenderTargetView, color [4]float32, rects ...Rect) {
+	com.Call(c.P, 132, uintptr(rtv.P), uintptr(unsafe.Pointer(&color[0])),
+		uintptr(unsafe.Pointer(unsafe.SliceData(rects))), uintptr(len(rects)))
+}

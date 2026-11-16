@@ -40,6 +40,7 @@ var (
 	iidIDXGIDevice       = com.MustGUID("54ec77fa-1377-44e6-8c32-88fd5f44c84c")
 	iidIDXGIAdapter1     = com.MustGUID("29038f61-3839-4626-91fd-086879011a05")
 	iidID3D10Multithread = com.MustGUID("9b7e4e00-342c-4106-a19f-4f2704f689f0")
+	iidID3D11Context1    = com.MustGUID("bb2c6faa-b5fb-4082-8e6b-388b8cfa90e1")
 )
 
 // sdkVersion is D3D11_SDK_VERSION.
@@ -588,6 +589,18 @@ func (d Device) MultisampleQualityLevels(format, count uint32) uint32 {
 		return 0
 	}
 	return n
+}
+
+// ClearViewSupported reports whether the driver supports
+// ID3D11DeviceContext1::ClearView. The runtime does not pass the call to a
+// driver that does not.
+func (d Device) ClearViewSupported() bool {
+	var opts [14]int32 // D3D11_FEATURE_DATA_D3D11_OPTIONS; ClearView is the fifth
+	const featureD3D11Options = 5
+	if com.HR(d.P, 33, featureD3D11Options, uintptr(unsafe.Pointer(&opts)), unsafe.Sizeof(opts)).Failed() {
+		return false
+	}
+	return opts[4] != 0
 }
 
 // DeviceLost reports whether err comes from a removed, reset or hung device.

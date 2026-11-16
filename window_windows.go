@@ -870,6 +870,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		if wp == win.SIZE_MINIMIZED {
 			// Pixels stay in memory, so the textures upload again on restore.
 			w.releaseTextures()
+			w.redrawWhole()
 			return 0
 		}
 		nw, nh := int(win.LOWORD(lp)), int(win.HIWORD(lp))
@@ -897,8 +898,12 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			win.SWP_NOZORDER|win.SWP_NOACTIVATE,
 		)
 		w.markDirty(dirtyResize)
+		w.redrawWhole()
 		w.invalidate()
 		return 0
+	case win.WM_DISPLAYCHANGE:
+		w.redrawWhole()
+		w.invalidate()
 	case win.WM_GETMINMAXINFO:
 		mmi := (*win.MINMAXINFO)(unsafe.Pointer(lp))
 		if w.opts.MinWidth > 0 || w.opts.MinHeight > 0 {

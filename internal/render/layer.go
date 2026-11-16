@@ -162,6 +162,7 @@ type layerPlan struct {
 	erase        int // a backdrop's prim in r.frame that clears its box before the composite
 	kids         []int
 	skip         bool // a backdrop left out: nothing is copied and its composite draws nothing
+	drawn        bool // a layer already drawn offscreen this frame
 }
 
 // renderTarget is where draws go.
@@ -320,32 +321,42 @@ func blurPrim(w, h int, uw, uh float32, src *Texture, sigma float32, horizontal 
 }
 
 // drawRange draws prims begin to end into the current target, drawing the
-// layers among them, listed in kids, offscreen first.
-func (r *Renderer) drawRange(s *Scene, begin, end int, kids []int) {
+// layers among them, listed in kids, offscreen first. In the renderer's own
+// target, a frame drawing only part of it skips the offscreen work of layers
+// whose composite lies outside that part, as the scissor drops it anyway.
+func (r *Renderer) drawRange(s *Scene, begin, end int, kids []int, own bool) {
+	partial := own && r.damageOn && !r.region.full
 	i := begin
 	for _, k := range kids {
 		l := &s.Layers[k]
+		shown := !partial || r.dmg.compExt[k].overlaps(r.pass)
 		if l.Backdrop {
 			r.drawSeg(s, i, l.Begin)
 			i = l.Begin
 			if pl := &r.plan[k]; !pl.skip {
-				r.backdrop(s, k)
+				if shown {
+					r.backdrop(s, k)
+				}
 				r.drawSeg(s, l.Begin, l.End)
-				r.composite(pl, l.End)
+				if shown {
+					r.composite(pl, l.End)
+				}
 				i = l.End + 1
 			}
 			continue
 		}
 		r.drawSeg(s, i, l.Begin)
-		saved := r.cur
-		pl := &r.plan[k]
-		r.setTarget(r.targetOf(pl.src, [2]float32{l.Bounds[0], l.Bounds[1]}))
-		r.ctx.ClearRenderTargetView(pl.src.rtv, [4]float32{})
-		r.drawRange(s, l.Begin, l.End, pl.kids)
-		if l.Sigma > 0 {
-			r.blur(pl)
+		if pl := &r.plan[k]; shown && !pl.drawn {
+			pl.drawn = true
+			saved := r.cur
+			r.setTarget(r.targetOf(pl.src, [2]float32{l.Bounds[0], l.Bounds[1]}))
+			r.ctx.ClearRenderTargetView(pl.src.rtv, [4]float32{})
+			r.drawRange(s, l.Begin, l.End, pl.kids, false)
+			if l.Sigma > 0 {
+				r.blur(pl)
+			}
+			r.setTarget(saved)
 		}
-		r.setTarget(saved)
 		i = l.End
 	}
 	r.drawSeg(s, i, end)
@@ -415,6 +426,12 @@ func (r *Renderer) setTarget(t renderTarget) {
 	r.ctx.PSSetShaderResources(2, r.emptyImage.srv)
 	r.ctx.OMSetRenderTargets([]d3d.RenderTargetView{t.rtv}, d3d.DepthStencilView{})
 	r.ctx.RSSetViewports(d3d.Viewport{Width: float32(t.w), Height: float32(t.h), MaxDepth: 1})
+	if t.rtv == r.rtv && r.damageOn && !r.region.full {
+		r.ctx.RSSetState(r.rasterCut)
+		r.ctx.RSSetScissorRects(r.pass.d3d())
+	} else {
+		r.ctx.RSSetState(r.raster)
+	}
 	r.glob.Viewport = [2]float32{float32(t.w), float32(t.h)}
 	r.ctx.UpdateSubresource(r.globalsBuf, nil, unsafe.Pointer(&r.glob), 0, 0)
 }

@@ -52,7 +52,24 @@ var (
 		ms, _ := strconv.Atoi(os.Getenv("FAIRY_DEBUG_SLOW"))
 		return time.Duration(ms) * time.Millisecond
 	}()
+	// FAIRY_DEBUG_DAMAGE=full turns damage tracking off, so every frame is
+	// drawn whole; show tints the part of each frame that was redrawn; verify
+	// logs when a window's buffer does not hold the frame presented from it.
+	debugDamage = os.Getenv("FAIRY_DEBUG_DAMAGE")
 )
+
+// setDamageTracking applies FAIRY_DEBUG_DAMAGE to a new renderer.
+func setDamageTracking(r *render.Renderer) {
+	if debugDamage == "full" || !r.SetDamageTracking(true) {
+		return
+	}
+	switch debugDamage {
+	case "show":
+		r.SetDamageDebug(render.DamageDebugShow)
+	case "verify":
+		r.SetDamageDebug(render.DamageDebugVerify)
+	}
+}
 
 func init() { render.Verbose = debugFrames }
 
@@ -103,9 +120,21 @@ func (w *Window) logFrame(total time.Duration, batches int) {
 			gpu = fmt.Sprintf(" gpu_render=%sms gpu_submit=%d backend=%s", ms(st.GPU), st.GPUFrame, backend)
 		}
 	}
-	log.Printf("fairy: frame %d: %sms [view %s prepare %s layout %s rows %s place %s paint %s record %s present %s] %d prims %d batches %d hits, %s, animating=%v%s",
+	log.Printf("fairy: frame %d: %sms [view %s prepare %s layout %s rows %s place %s paint %s record %s present %s] %d prims %d batches %d hits, %s, animating=%v, damage=%s%s",
 		w.frame, ms(total), ms(t.view), ms(t.prepare), ms(t.layout), ms(t.rows), ms(t.place), ms(t.paint), ms(t.record), ms(t.present),
-		len(w.scene.Prims), batches, len(w.hits), kind, w.animating, gpu)
+		len(w.scene.Prims), batches, len(w.hits), kind, w.animating, damageString(w.r.Stats(), w.width, w.height), gpu)
+}
+
+func damageString(st render.Stats, width, height int) string {
+	if st.DamageReason != "" {
+		return "full(" + st.DamageReason + ")"
+	}
+	d := st.Damage
+	if d.Empty() {
+		return "none"
+	}
+	pct := 100 * float64(st.DamageArea) / float64(max(width*height, 1))
+	return fmt.Sprintf("%d,%d,%dx%d/%d(%.1f%%)", d.Min.X, d.Min.Y, d.Dx(), d.Dy(), st.DamageRects, pct)
 }
 
 // slow logs what that took longer than FAIRY_DEBUG_SLOW.

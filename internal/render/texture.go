@@ -24,6 +24,32 @@ type Texture struct {
 	Premultiplied bool
 	owned         bool // made here, so EnsureMips may replace it
 	mips          bool
+	// stamp changes whenever the pixels a prim samples from the texture may
+	// change. It comes from textureStamps, so a texture made at the address of a
+	// released one never repeats its stamp.
+	stamp atomic.Uint64
+	// volatile marks a texture that its owner writes without telling the
+	// renderer, so every frame that draws it is taken as changed.
+	volatile bool
+}
+
+var textureStamps atomic.Uint64
+
+// Touch records that the texture's pixels changed, for a texture written
+// outside this package such as a render target or a video frame.
+func (t *Texture) Touch() { t.stamp.Store(textureStamps.Add(1)) }
+
+// Stamp identifies the texture's current pixels; it changes with Touch,
+// Update, mipmap promotion and Release.
+func (t *Texture) Stamp() uint64 { return t.stamp.Load() }
+
+// Volatile reports whether the texture's owner may write it at any time
+// without Touch.
+func (t *Texture) Volatile() bool { return t.volatile }
+
+func newTextureValue(t *Texture) *Texture {
+	t.Touch()
+	return t
 }
 
 // NewTexture is NewTexture on the renderer's device.
@@ -58,20 +84,21 @@ func NewTexture(d *Device, width, height int, rgba []byte, mutable bool) (*Textu
 		tex.Release()
 		return nil, err
 	}
-	return &Texture{tex: tex, srv: srv, Width: width, Height: height, Format: desc.Format, Premultiplied: true, owned: true}, nil
+	return newTextureValue(&Texture{tex: tex, srv: srv, Width: width, Height: height, Format: desc.Format, Premultiplied: true, owned: true}), nil
 }
 
 // WrapTexture shares an app's texture: it takes a reference to tex and
 // makes a shader resource view of it. The texture must have been made on d
-// with BIND_SHADER_RESOURCE.
-func WrapTexture(d *Device, tex d3d.Texture2D) (*Texture, error) {
+// with BIND_SHADER_RESOURCE. With volatile the result is Volatile, for a tex
+// the app may draw into at any time.
+func WrapTexture(d *Device, tex d3d.Texture2D, volatile bool) (*Texture, error) {
 	desc := tex.Desc()
 	srv, err := d.Dev.CreateShaderResourceView(tex, nil)
 	if err != nil {
 		return nil, err
 	}
 	tex.AddRef()
-	return &Texture{tex: tex, srv: srv, Width: int(desc.Width), Height: int(desc.Height), Format: desc.Format}, nil
+	return newTextureValue(&Texture{tex: tex, srv: srv, Width: int(desc.Width), Height: int(desc.Height), Format: desc.Format, volatile: volatile}), nil
 }
 
 // CopyTexture copies tex into a new texture of the same size and format
@@ -100,7 +127,7 @@ func CopyTexture(d *Device, tex d3d.Texture2D) (*Texture, error) {
 		out.Release()
 		return nil, err
 	}
-	return &Texture{tex: out, srv: srv, Width: int(desc.Width), Height: int(desc.Height), Format: desc.Format, owned: true}, nil
+	return newTextureValue(&Texture{tex: out, srv: srv, Width: int(desc.Width), Height: int(desc.Height), Format: desc.Format, owned: true}), nil
 }
 
 // Update replaces the pixels of a mutable texture with premultiplied RGBA.
@@ -113,6 +140,7 @@ func (t *Texture) Update(ctx d3d.Context, rgba []byte) {
 	if t.mips {
 		ctx.GenerateMips(t.srv)
 	}
+	t.Touch()
 }
 
 // CanMip reports whether EnsureMips can give the texture mipmaps: it was
@@ -203,6 +231,7 @@ func (t *Texture) PromoteMips(d *Device) (int64, error) {
 	t.srv.Release()
 	t.tex.Release()
 	t.tex, t.srv, t.mips = tex, srv, true
+	t.Touch()
 	return textureBytes(t.Width, t.Height, true), nil
 }
 
@@ -228,6 +257,7 @@ func (t *Texture) Release() {
 	t.srv.Release()
 	t.tex.Release()
 	t.srv, t.tex = d3d.ShaderResourceView{}, d3d.Texture2D{}
+	t.Touch()
 }
 
 // Atlas is a single-channel glyph texture filled with a shelf packer.

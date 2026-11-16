@@ -404,7 +404,11 @@ func DwmSetWindowAttribute(h HWND, attr uint32, value unsafe.Pointer, size uint3
 	pDwmSetWindowAttribute.Call(uintptr(h), uintptr(attr), uintptr(value), uintptr(size))
 }
 
-func DwmFlush() { pDwmFlush.Call() }
+// DwmFlush waits for the next desktop composition and reports whether it did.
+func DwmFlush() bool {
+	r, _, _ := pDwmFlush.Call()
+	return int32(r) >= 0
+}
 
 func ImmGetContext(h HWND) HANDLE {
 	r, _, _ := pImmGetContext.Call(uintptr(h))

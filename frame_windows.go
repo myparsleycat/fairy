@@ -88,6 +88,10 @@ func (w *Window) renderFrame() {
 		win.SetTimer(w.hwnd, timerAnim, hiddenFrameMs)
 	case w.animating && w.sizeMove:
 		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
+	case w.animating && w.hl == nil && w.r != nil && !w.r.Presented() && !win.DwmFlush():
+		// A frame that changed nothing did not wait for the display in
+		// Present, so it waits for the next composition instead.
+		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
 	case w.animating:
 		w.invalidate()
 	case !w.wakeAt.IsZero():
@@ -164,9 +168,13 @@ func (w *Window) frameAt(t time.Time) {
 
 func (w *Window) newRenderer() (r *render.Renderer, err error) {
 	defer func() {
-		if err == nil && debugGPU {
+		if err != nil {
+			return
+		}
+		if debugGPU {
 			r.SetGPUTiming(true)
 		}
+		setDamageTracking(r)
 	}()
 	if w.hl != nil {
 		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
@@ -213,6 +221,14 @@ func (w *Window) recreateRenderer() {
 	clear(w.iconTiles)
 	w.markDirty(dirtyDevice)
 	w.invalidate()
+}
+
+// redrawWhole makes the next frame draw the whole window, for changes that
+// can leave its buffers stale without changing the scene.
+func (w *Window) redrawWhole() {
+	if w.r != nil {
+		w.r.Invalidate()
+	}
 }
 
 func (w *Window) markDirty(c dirtyCause) {

@@ -34,6 +34,7 @@ func NewTargetFormat(d *Device, width, height int, format uint32) (*Target, erro
 		return nil, err
 	}
 	t := &Target{Texture: Texture{tex: tex, Width: width, Height: height, Format: format}}
+	t.Touch()
 	if t.srv, err = d.Dev.CreateShaderResourceView(tex, nil); err != nil {
 		t.Release()
 		return nil, err

@@ -69,6 +69,7 @@ func (w *Window) SetBackdrop(b Backdrop) error {
 	}
 	w.applyBackdrop(b)
 	w.backdrop = b
+	w.redrawWhole()
 	w.Update()
 	return nil
 }

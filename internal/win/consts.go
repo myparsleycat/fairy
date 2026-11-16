@@ -90,6 +90,7 @@ const (
 	WM_EXITSIZEMOVE         = 0x0232
 	WM_MOUSELEAVE           = 0x02A3
 	WM_DPICHANGED           = 0x02E0
+	WM_DISPLAYCHANGE        = 0x007E
 	WM_USER                 = 0x0400
 	WM_APP                  = 0x8000
 
