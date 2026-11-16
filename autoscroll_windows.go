@@ -51,7 +51,7 @@ func (w *Window) startAutoScroll(top *El, x, y float32) bool {
 		s.scrollTX, s.scrollTY, s.smooth = s.scrollX, s.scrollY, false
 		stopGlide(s)
 		w.autoScroll = &autoScroll{el: e.id, x: x, y: y, canX: canX, canY: canY, held: true}
-		win.SetCapture(w.hwnd)
+		w.setCapture()
 		w.applyCursor()
 		w.invalidate()
 		return true
@@ -66,7 +66,7 @@ func (w *Window) stopAutoScroll() {
 	}
 	w.autoScroll = nil
 	if a.held {
-		win.ReleaseCapture()
+		w.releaseCapture()
 	}
 	if w.mouseIn {
 		w.applyCursor()
@@ -94,10 +94,11 @@ func (w *Window) autoScrollRelease() bool {
 		return false
 	}
 	a.held = false
-	win.ReleaseCapture()
+	w.releaseCapture()
 	// Capture may have suppressed the leave notification; the next move
-	// re-arms it so that leaving the window is noticed.
-	w.tracking = false
+	// re-arms it so that leaving the window is noticed. A headless window is
+	// never under the cursor and must not track it.
+	w.tracking = w.hl != nil
 	if a.moved {
 		w.stopAutoScroll()
 	}
@@ -117,7 +118,7 @@ func (w *Window) stepAutoScroll(dt float32) {
 		return
 	}
 	x, y := w.mouseX, w.mouseY
-	outside := !w.mouseIn && !w.scripted
+	outside := !w.mouseIn && !w.scripted && w.hl == nil
 	if outside {
 		// No moves arrive outside the window without capture; the pointer is
 		// read here and polled while the view stands still.

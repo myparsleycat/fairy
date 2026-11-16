@@ -95,6 +95,9 @@ func (w *Window) applyBackdrop(b Backdrop) {
 
 // clearColor is the color each frame starts from.
 func (w *Window) clearColor() [4]float32 {
+	if w.hl != nil {
+		return [4]float32{}
+	}
 	if w.backdrop != BackdropNone && w.r != nil && w.r.Transparent() {
 		return [4]float32{}
 	}

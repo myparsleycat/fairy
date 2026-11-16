@@ -142,7 +142,7 @@ func (w *Window) inputMenu(e *El, x, y float32) []MenuItem {
 
 // showInputMenu opens an Input's built-in context menu at window point (x, y).
 func (w *Window) showInputMenu(e *El, x, y float32) {
-	if w.hwnd == 0 {
+	if w.hwnd == 0 || w.hl != nil {
 		return
 	}
 	items := w.inputMenu(e, x, y)

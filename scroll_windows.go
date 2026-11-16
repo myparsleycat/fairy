@@ -311,6 +311,22 @@ func (l wheelLatch) holding(target *El, x, y float32, now time.Time, horizontal 
 	return nil
 }
 
+// wheel handles a wheel step of delta notches at (x, y), signed as
+// WM_MOUSEWHEEL and WM_MOUSEHWHEEL. fractional marks a step that is not a
+// whole notch: precision touchpads and high-resolution wheels send them, and
+// a whole notch in the middle of such a stream is treated alike.
+func (w *Window) wheel(x, y, delta float32, fractional, hwheel bool) {
+	if hwheel {
+		delta = -delta
+	}
+	now := time.Now()
+	if fractional {
+		w.preciseWheelAt = now
+	}
+	precise := now.Sub(w.preciseWheelAt) < 100*time.Millisecond
+	w.onWheel(x, y, delta, hwheel, precise)
+}
+
 // onWheel offers a wheel step to the elements under the pointer, innermost
 // first: an OnWheel handler that returns true takes it, otherwise the first
 // scroll container that can move scrolls. While a gesture continues over the

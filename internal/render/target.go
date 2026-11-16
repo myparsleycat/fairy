@@ -6,20 +6,26 @@ import (
 	"github.com/myparsleycat/fairy/d3d"
 )
 
-// Target is a BGRA texture that can be rendered into and drawn as an image.
+// Target is a texture that can be rendered into and drawn as an image.
 type Target struct {
 	Texture
 	rtv d3d.RenderTargetView
 }
 
-// NewTarget creates a width x height render target on d.
+// NewTarget creates a width x height FORMAT_B8G8R8A8_UNORM render target on d.
 func NewTarget(d *Device, width, height int) (*Target, error) {
+	return NewTargetFormat(d, width, height, d3d.FORMAT_B8G8R8A8_UNORM)
+}
+
+// NewTargetFormat creates a width x height render target on d in format,
+// FORMAT_B8G8R8A8_UNORM or FORMAT_R8G8B8A8_UNORM.
+func NewTargetFormat(d *Device, width, height int, format uint32) (*Target, error) {
 	tex, err := d.Dev.CreateTexture2D(&d3d.Texture2DDesc{
 		Width:      uint32(width),
 		Height:     uint32(height),
 		MipLevels:  1,
 		ArraySize:  1,
-		Format:     d3d.FORMAT_B8G8R8A8_UNORM,
+		Format:     format,
 		SampleDesc: d3d.SampleDesc{Count: 1},
 		Usage:      d3d.USAGE_DEFAULT,
 		BindFlags:  d3d.BIND_SHADER_RESOURCE | d3d.BIND_RENDER_TARGET,
@@ -27,7 +33,7 @@ func NewTarget(d *Device, width, height int) (*Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &Target{Texture: Texture{tex: tex, Width: width, Height: height}}
+	t := &Target{Texture: Texture{tex: tex, Width: width, Height: height, Format: format}}
 	if t.srv, err = d.Dev.CreateShaderResourceView(tex, nil); err != nil {
 		t.Release()
 		return nil, err

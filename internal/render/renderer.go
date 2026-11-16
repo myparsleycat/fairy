@@ -49,8 +49,9 @@ type Renderer struct {
 	factory    unsafe.Pointer
 	hwnd       uintptr
 	swap       swapChain
-	comp       *composition // DirectComposition tree when the swap chain has alpha
-	target     *Target      // offscreen renderers draw here instead of a swap chain
+	comp       *composition  // DirectComposition tree when the swap chain has alpha
+	target     *Target       // offscreen renderers draw here instead of a swap chain
+	staging    d3d.Texture2D // ReadPixels copies the target through it
 	rtv        d3d.RenderTargetView
 
 	vs         d3d.VertexShader
@@ -102,16 +103,22 @@ func New(hwnd uintptr, width, height int, transparent bool) (*Renderer, error) {
 	return r, nil
 }
 
-// NewOffscreen creates a renderer that draws into a width x height texture,
-// read back with ReadTarget.
+// NewOffscreen creates a renderer that draws into a width x height
+// FORMAT_B8G8R8A8_UNORM texture, read back with ReadTarget.
 func NewOffscreen(width, height int) (*Renderer, error) {
+	return NewOffscreenFormat(width, height, d3d.FORMAT_B8G8R8A8_UNORM)
+}
+
+// NewOffscreenFormat is NewOffscreen with a texture in format,
+// FORMAT_B8G8R8A8_UNORM or FORMAT_R8G8B8A8_UNORM. Resize replaces the texture.
+func NewOffscreenFormat(width, height int, format uint32) (*Renderer, error) {
 	r := &Renderer{width: max(width, 1), height: max(height, 1)}
 	var err error
 	if r.ds, err = AcquireDevice(); err != nil {
 		return nil, err
 	}
 	r.dev, r.ctx, r.factory = r.ds.Dev, r.ds.Ctx, r.ds.factory
-	if r.target, err = NewTarget(r.ds, r.width, r.height); err != nil {
+	if r.target, err = NewTargetFormat(r.ds, r.width, r.height, format); err != nil {
 		r.Release()
 		return nil, err
 	}
@@ -344,16 +351,27 @@ func (r *Renderer) Device() *Device { return r.ds }
 // Size returns the back buffer size in device pixels.
 func (r *Renderer) Size() (int, int) { return r.width, r.height }
 
-// Resize resizes the swap chain buffers.
+// colorFormat is the format of the texture frames are drawn into.
+func (r *Renderer) colorFormat() uint32 {
+	if r.target != nil && r.target.Format != 0 {
+		return r.target.Format
+	}
+	return backBufferFormat
+}
+
+// Resize resizes the swap chain buffers, or replaces an offscreen target.
 func (r *Renderer) Resize(width, height int) error {
 	width, height = max(width, 1), max(height, 1)
-	if width == r.width && height == r.height || r.target != nil {
+	if width == r.width && height == r.height {
 		return nil
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	r.ds.Lock()
 	defer r.ds.Unlock()
+	if r.target != nil {
+		return r.resizeTarget(width, height)
+	}
 	r.ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
 	r.rtv.Release()
 	r.rtv = d3d.RenderTargetView{}
@@ -371,6 +389,23 @@ func (r *Renderer) Resize(width, height int) error {
 		}
 		return err
 	}
+	r.width, r.height = width, height
+	return nil
+}
+
+func (r *Renderer) resizeTarget(width, height int) error {
+	r.ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
+	t, err := NewTargetFormat(r.ds, width, height, r.target.Format)
+	if err != nil {
+		if r.ds.Lost() {
+			return ErrDeviceLost
+		}
+		return err
+	}
+	r.target.Release()
+	r.staging.Release()
+	r.staging = d3d.Texture2D{}
+	r.target, r.rtv = t, t.rtv
 	r.width, r.height = width, height
 	return nil
 }
@@ -597,6 +632,7 @@ func (r *Renderer) Release() {
 	r.blendAdd.Release()
 	r.ps.Release()
 	r.vs.Release()
+	r.staging.Release()
 	if r.target != nil {
 		r.target.Release()
 	} else {

@@ -44,6 +44,23 @@ type Options struct {
 	// when the backdrop is turned off, so the old frame does not stay visible.
 	// It has no effect where backdrops are not supported.
 	DynamicBackdrop bool
+	// Headless makes a window that is not on screen, to draw the UI inside
+	// another program such as a game. It renders into an offscreen texture
+	// whenever the view changes, at most about 60 frames per second, and
+	// hands each frame to OnFrame. Size it with SetHeadlessSize, drive it with
+	// the Inject methods and SetFocused, and show the pointer shape OnCursor
+	// reports. Width and Height give the first size at the system DPI. It
+	// clears to transparent instead of Background. Title bar, frame, icon,
+	// backdrop, minimum size, file drop, IME and native menu options do not
+	// apply, and the methods that move, show or activate a window do nothing.
+	// Like a window on screen, it keeps Main running until it is closed.
+	Headless bool
+	// OnFrame receives each frame of a Headless window on the UI thread,
+	// right after it is drawn.
+	OnFrame func(Frame)
+	// OnCursor receives the pointer shape that the element under a Headless
+	// window's injected pointer asks for, whenever it changes.
+	OnCursor func(Cursor)
 	// SpellLanguage is the BCP 47 tag, such as "en-US", of the dictionary
 	// that checks spelling in Inputs. Empty uses the user's locale.
 	SpellLanguage string
@@ -263,9 +280,12 @@ type Window struct {
 
 	backdrop Backdrop
 
-	mu     sync.Mutex
-	posted []func()
-	quit   bool
+	hl *headlessState // set for Options.Headless windows
+
+	mu          sync.Mutex
+	posted      []func()
+	injectQueue []injected
+	quit        bool
 }
 
 type texEntry struct {
@@ -378,6 +398,12 @@ func NewWindow(opts Options) (*Window, error) {
 	}
 	dpi := win.GetDpiForSystem()
 	w.scale = float32(dpi) / 96
+	if opts.Headless {
+		if err := w.initHeadless(); err != nil {
+			return nil, err
+		}
+		return w, nil
+	}
 	rc := w.outerRect(int32(opts.Width*w.scale), int32(opts.Height*w.scale), dpi)
 	title, _ := syscall.UTF16PtrFromString(opts.Title)
 	hwnd, err := win.CreateWindowEx(
@@ -492,12 +518,14 @@ func wakeWindows() {
 
 // Show shows and activates the window.
 func (w *Window) Show() {
-	if win.IsIconic(w.hwnd) {
-		win.ShowWindow(w.hwnd, win.SW_RESTORE)
-	} else {
-		win.ShowWindow(w.hwnd, win.SW_SHOW)
+	if w.hl == nil {
+		if win.IsIconic(w.hwnd) {
+			win.ShowWindow(w.hwnd, win.SW_RESTORE)
+		} else {
+			win.ShowWindow(w.hwnd, win.SW_SHOW)
+		}
+		win.SetForegroundWindow(w.hwnd)
 	}
-	win.SetForegroundWindow(w.hwnd)
 	if !w.ready {
 		w.ready = true
 		if w.opts.OnReady != nil {
@@ -712,8 +740,11 @@ func (w *Window) ScrollStep(key string, up bool) {
 func (w *Window) invalidate() {
 	if !w.needPaint {
 		w.needPaint = true
-		// InvalidateRect with no window repaints every window on the desktop.
-		if w.hwnd != 0 {
+		switch {
+		case w.hl != nil:
+			w.scheduleFrame()
+		case w.hwnd != 0:
+			// InvalidateRect with no window repaints every window on the desktop.
 			win.InvalidateRect(w.hwnd, false)
 		}
 	}
@@ -743,6 +774,9 @@ func (w *Window) Mods() keyboard.Mods { return w.mods() }
 func (w *Window) mods() keyboard.Mods {
 	if w.scriptMods != nil {
 		return *w.scriptMods
+	}
+	if w.hl != nil {
+		return w.hl.mods
 	}
 	var m keyboard.Mods
 	if win.GetKeyState(win.VK_SHIFT) < 0 {
@@ -815,6 +849,10 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 	case win.WM_MOVE:
 		w.notifyWebViewsMoved()
 	case win.WM_SIZE:
+		if w.hl != nil {
+			// Only SetHeadlessSize sizes a headless window.
+			return 0
+		}
 		if wp == win.SIZE_MINIMIZED {
 			// Pixels stay in memory, so the textures upload again on restore.
 			w.releaseTextures()
@@ -1015,19 +1053,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		}
 		x, y := w.screenToLogical(lp)
 		raw := int16(win.HIWORD(wp))
-		delta := float32(raw) / win.WHEEL_DELTA
-		hwheel := msg == win.WM_MOUSEHWHEEL
-		if hwheel {
-			delta = -delta
-		}
-		// Precision touchpads and high-resolution wheels send fractions of a
-		// notch. A whole notch in the middle of such a stream is treated alike.
-		now := time.Now()
-		if raw%win.WHEEL_DELTA != 0 {
-			w.preciseWheelAt = now
-		}
-		precise := now.Sub(w.preciseWheelAt) < 100*time.Millisecond
-		w.onWheel(x, y, delta, hwheel, precise)
+		w.wheel(x, y, float32(raw)/win.WHEEL_DELTA, raw%win.WHEEL_DELTA != 0, msg == win.WM_MOUSEHWHEEL)
 		return 0
 	case win.WM_XBUTTONDOWN:
 		return 1
@@ -1117,6 +1143,14 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		case timerAnim:
 			win.KillTimer(w.hwnd, timerAnim)
 			w.invalidate()
+		case timerFrame:
+			win.KillTimer(w.hwnd, timerFrame)
+			switch {
+			case w.needPaint:
+				w.renderFrame()
+			case w.hl != nil && w.hl.copyPending && w.r != nil:
+				w.publishFrame()
+			}
 		case timerTouch:
 			win.KillTimer(w.hwnd, timerTouch)
 			w.onTouchLongPress()
@@ -1131,6 +1165,17 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case msgWake:
 		w.runPosted()
+		return 0
+	case msgPaint:
+		if w.needPaint {
+			w.renderFrame()
+		}
+		return 0
+	case msgInvalidate:
+		w.invalidate()
+		return 0
+	case msgInput:
+		w.runInjected()
 		return 0
 	case win.WM_CLOSE:
 		if w.opts.OnClose != nil && !w.opts.OnClose() {
@@ -1182,6 +1227,7 @@ func (w *Window) destroy() {
 	liveMu.Unlock()
 	w.releaseTextures()
 	w.textures = nil
+	w.releaseShared()
 	for _, se := range w.surfaces {
 		se.target.Release()
 	}
@@ -1280,9 +1326,41 @@ func (w *Window) showSystemMenu(x, y int32) {
 }
 
 func (w *Window) applyCursor() {
+	if w.hl != nil {
+		w.reportCursor()
+		return
+	}
 	if w.autoScroll != nil {
 		w.setPanCursor()
 		return
+	}
+	id := uintptr(win.IDC_ARROW)
+	switch w.wantedCursor() {
+	case CursorPointer:
+		id = win.IDC_HAND
+	case CursorText:
+		id = win.IDC_IBEAM
+	case CursorMove:
+		id = win.IDC_SIZEALL
+	case CursorNotAllowed:
+		id = win.IDC_NO
+	case CursorResizeEW:
+		id = win.IDC_SIZEWE
+	case CursorResizeNS:
+		id = win.IDC_SIZENS
+	case CursorWait:
+		id = win.IDC_WAIT
+	case CursorCrosshair:
+		id = win.IDC_CROSS
+	}
+	win.SetCursor(win.LoadCursor(id))
+}
+
+// wantedCursor is the pointer shape for the element under the pointer or the
+// press in progress. Autoscroll, which draws its own shapes, asks for Move.
+func (w *Window) wantedCursor() Cursor {
+	if w.autoScroll != nil {
+		return CursorMove
 	}
 	c := CursorDefault
 	for _, e := range w.hoverPath {
@@ -1302,24 +1380,5 @@ func (w *Window) applyCursor() {
 	if w.press != nil && w.press.cursor != CursorInherit {
 		c = w.press.cursor
 	}
-	id := uintptr(win.IDC_ARROW)
-	switch c {
-	case CursorPointer:
-		id = win.IDC_HAND
-	case CursorText:
-		id = win.IDC_IBEAM
-	case CursorMove:
-		id = win.IDC_SIZEALL
-	case CursorNotAllowed:
-		id = win.IDC_NO
-	case CursorResizeEW:
-		id = win.IDC_SIZEWE
-	case CursorResizeNS:
-		id = win.IDC_SIZENS
-	case CursorWait:
-		id = win.IDC_WAIT
-	case CursorCrosshair:
-		id = win.IDC_CROSS
-	}
-	win.SetCursor(win.LoadCursor(id))
+	return c
 }

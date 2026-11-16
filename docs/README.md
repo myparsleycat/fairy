@@ -21,6 +21,7 @@ Detailed usage and development notes for [Fairy](../README.md). Run commands fro
 - **Localization** (`i18n`): a message catalog that loads i18next JSON files, with interpolation, CLDR plural rules, Korean particles (`Josa`), number and list formatting, and matching of the system UI languages (`UseSystemLanguage`).
 - **Native surfaces**: `Surface` elements drawn by the app with Direct3D 11, `VideoView` playing files and URLs through Media Foundation, and `WebViewHost` embedding Edge WebView2 without `WebView2Loader.dll`. All windows share one Direct3D device.
 - **Offscreen rendering**: `RenderImage` draws an element tree into an `image.NRGBA` without a window. `SurfaceImage` and `NewTextureImage` turn rendered textures into `Image`s without a copy to memory.
+- **Headless windows**: `Options.Headless` windows draw into a texture shared with other Direct3D 11 devices instead of onto the screen, for UI drawn inside another program such as a game, and take input injected by that program. See [Headless windows](#headless-windows).
 - **Accessibility**: a UI Automation provider, so screen readers such as Narrator and UI test tools see the element tree. See [Accessibility](#accessibility).
 - **Platform integration**: file dialogs, message boxes, file drop from Explorer (`OnFileDrop`), native popup menus, tray icons with notifications, single instance with launch forwarding, several windows, taskbar progress, clipboard images.
 
@@ -144,6 +145,28 @@ Rules for the shared device:
 - Drivers keep the system memory of released buffers and textures for reuse. After releasing many or large resources, such as when closing a 3D view, call `fairy.TrimDevice()` outside any Surface draw function or `UseDevice` to clear the pipeline state and return that memory (`IDXGIDevice3::Trim`). Fairy also trims when Windows reports low memory.
 
 The shared device requires feature level 10.1 or later and falls back to WARP when no hardware device is available. A standalone `d3d.CreateDevice` accepts feature level 10.0; `d3d.CreateDeviceWithOptions` sets a higher minimum and reports the adapter in `DeviceInfo`.
+
+## Headless windows
+
+A window with `Options.Headless` has no window on screen. It keeps the UI thread, `Post`, `Do`, timers and animations of a normal window, keeps `Main` running until it is closed, draws whenever its view changes, at most about 60 frames per second, and passes each frame to `OnFrame`:
+
+```go
+w, err := fairy.NewWindow(fairy.Options{
+	Headless: true,
+	View:     view,
+	OnFrame: func(f fairy.Frame) {
+		// f.Handle, f.Width, f.Height, f.Seq, f.AdapterLUID
+	},
+	OnCursor: func(c fairy.Cursor) { /* show c over the surface */ },
+})
+w.SetHeadlessSize(1920, 1080, 144) // physical pixels and DPI of the program's surface
+```
+
+- `Frame.Handle` is a legacy shared handle (`IDXGIResource::GetSharedHandle`) of a `DXGI_FORMAT_R8G8B8A8_UNORM` texture with premultiplied alpha. The other program opens it with `ID3D11Device::OpenSharedResource` and holds its `IDXGIKeyedMutex` with key 0 (`AcquireSync(0)`, `ReleaseSync(0)`) around each read; Fairy does the same while copying a frame in. The texture and handle are replaced when the size changes or the device is recreated. `Seq` numbers the frames.
+- A program on another adapter than `Frame.AdapterLUID` cannot open the handle. It reads the pixels with `Window.ReadFrame(dst)` from `OnFrame`, in the same layout: rows of `Width*4` bytes.
+- The program forwards its input in physical pixels of the surface: `InjectPointerMove`, `InjectPointerLeave`, `InjectButton` (0 left, 1 right, 2 middle, 3 back, 4 forward), `InjectWheel` (notches, signed as `WM_MOUSEWHEEL` and `WM_MOUSEHWHEEL`), `InjectKey` with the modifiers held and the printable character the key types (`KeyEvent.Text`), `InjectChar` for typed text, and `SetFocused` for keyboard focus, which a headless window starts without. They and `SetHeadlessSize` are safe from any goroutine and run in order on the UI thread. A character that follows a key a handler used is dropped, as for a window on screen.
+- `OnCursor` reports the pointer shape the element under the injected pointer asks for, whenever it changes.
+- A headless window clears to transparent. It has no title bar, frame, backdrop, file drop, IME window or native menus (`PopupMenu` returns an error, and inputs have no context menu), and the methods that show, move or activate a window do nothing.
 
 ## Examples
 

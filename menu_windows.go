@@ -66,6 +66,9 @@ func (w *Window) PopupMenu(x, y float32, items []MenuItem) error {
 	if !onUIThread() {
 		return errors.New("fairy: PopupMenu must run on the UI thread")
 	}
+	if w.hl != nil {
+		return errors.New("fairy: PopupMenu needs a window on screen, not a Headless one")
+	}
 	p := win.POINT{X: int32(x * w.scale), Y: int32(y * w.scale)}
 	win.ClientToScreen(w.hwnd, &p)
 	w.cancelPress()

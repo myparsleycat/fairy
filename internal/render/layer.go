@@ -194,7 +194,7 @@ func (r *Renderer) planLayers(s *Scene) ([]int, error) {
 				}
 			}
 		}
-		return r.pool.acquire(r.ds, w, h)
+		return r.pool.acquire(r.ds, w, h, r.colorFormat())
 	}
 	for i := range s.Layers {
 		l := &s.Layers[i]
@@ -463,16 +463,16 @@ const poolKeep = 12
 // targetSize is the size of the pooled target for a w x h layer.
 func targetSize(w, h int) (int, int) { return (w + 63) / 64 * 64, (h + 63) / 64 * 64 }
 
-func (p *targetPool) acquire(d *Device, w, h int) (*Target, error) {
+func (p *targetPool) acquire(d *Device, w, h int, format uint32) (*Target, error) {
 	w, h = targetSize(w, h)
 	for i, t := range p.free {
-		if t.Width == w && t.Height == h {
+		if t.Width == w && t.Height == h && t.Format == format {
 			p.free = append(p.free[:i], p.free[i+1:]...)
 			p.used = append(p.used, t)
 			return t, nil
 		}
 	}
-	t, err := NewTarget(d, w, h)
+	t, err := NewTargetFormat(d, w, h, format)
 	if err != nil {
 		return nil, err
 	}

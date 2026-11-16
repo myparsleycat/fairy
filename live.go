@@ -48,7 +48,12 @@ func (l *Live[T]) Set(v T) {
 	l.shownIn = nil
 	l.mu.Unlock()
 	for w := range ws {
-		if h := w.hwnd; h != 0 {
+		switch h := w.hwnd; {
+		case h != 0 && w.opts.Headless:
+			// A message-only window gets no WM_PAINT; the window paces
+			// its own frames on the UI thread.
+			win.PostMessage(h, msgInvalidate, 0, 0)
+		case h != 0:
 			win.InvalidateRect(h, false)
 		}
 	}

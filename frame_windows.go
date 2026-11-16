@@ -4,6 +4,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/myparsleycat/fairy/d3d"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/win"
 )
@@ -12,19 +13,27 @@ const stateTTL = 3 // frames an element's state survives without being built
 
 func (w *Window) renderFrame() {
 	w.needPaint = false
+	if w.hl != nil {
+		w.hl.copyPending = false
+	}
 	if w.r == nil || w.width <= 0 || w.height <= 0 {
 		return
 	}
 	// A minimized window draws nothing. Restoring it sends WM_PAINT, which
 	// resumes any animation.
-	if win.IsIconic(w.hwnd) {
+	if w.hl == nil && win.IsIconic(w.hwnd) {
 		return
 	}
-	if !w.r.HasTarget() && !w.resizeRenderer() {
+	// An offscreen target whose resize failed keeps its old size; a headless
+	// frame is only drawn at the size it reports.
+	if (w.hl != nil || !w.r.HasTarget()) && !w.resizeRenderer() {
 		return
 	}
 	w.wakeAt = time.Time{}
 	start := time.Now()
+	if w.hl != nil {
+		w.hl.drawnAt = start
+	}
 	ticks := win.Ticks()
 	dt := w.frameDT(start)
 	w.lastFrame = start
@@ -32,6 +41,65 @@ func (w *Window) renderFrame() {
 	w.animating = false
 	w.flushPointerMove()
 	w.stepAutoScroll(dt)
+	w.layout(dt)
+	w.dt = dt
+	w.uploaded = 0
+	w.imageWorkEpoch++
+	for {
+		w.mark()
+		ok := w.paintScene()
+		w.lap(&w.ft.paint)
+		w.dt = 0
+		if ok || w.r.Atlas.Grow() != nil {
+			break
+		}
+	}
+	w.finishImageWork()
+	w.dt = 0
+	err := w.r.Draw(&w.scene, w.clearColor())
+	occluded := err == nil && w.r.Occluded()
+	if err == render.ErrDeviceLost {
+		w.recreateRenderer()
+	} else if err == nil && w.hl != nil {
+		w.publishFrame()
+	}
+	// WM_IME_COMPOSITION arrives before the composed text is laid out, so the
+	// candidate window is moved again once the caret is where it is drawn.
+	if w.imeOn {
+		if _, st := w.imeInput(); st != nil && st.comp != "" {
+			w.updateIMEPosition()
+		}
+	}
+	w.ts.EndFrame()
+	w.a11yAfterFrame()
+	if w.hl != nil {
+		w.reportCursor()
+	}
+	if debugFrames && w.r != nil {
+		st := w.r.Stats()
+		w.ft.record, w.ft.present = st.Record, st.Present
+		w.logFrame(win.Ticks()-ticks, st.Batches)
+	}
+	w.frame++
+	switch {
+	case w.hl == nil && !win.IsWindowVisible(w.hwnd):
+		// Hidden windows wait for the WM_PAINT that showing them sends.
+	case w.animating && occluded:
+		win.SetTimer(w.hwnd, timerAnim, hiddenFrameMs)
+	case w.animating && w.sizeMove:
+		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
+	case w.animating:
+		w.invalidate()
+	case !w.wakeAt.IsZero():
+		win.SetTimer(w.hwnd, timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
+	}
+	if !w.animating {
+		w.lastFrame = time.Time{}
+	}
+}
+
+// layout builds the view when it changed and places it, advancing tracks by dt.
+func (w *Window) layout(dt float32) {
 	for i := 0; i < 3; i++ {
 		if w.dirty {
 			w.ft.causes |= w.dirtyBy
@@ -55,55 +123,6 @@ func (w *Window) renderFrame() {
 		if !w.dirty {
 			break
 		}
-	}
-	w.dt = dt
-	w.uploaded = 0
-	w.imageWorkEpoch++
-	for {
-		w.mark()
-		ok := w.paintScene()
-		w.lap(&w.ft.paint)
-		w.dt = 0
-		if ok || w.r.Atlas.Grow() != nil {
-			break
-		}
-	}
-	w.finishImageWork()
-	w.dt = 0
-	err := w.r.Draw(&w.scene, w.clearColor())
-	occluded := err == nil && w.r.Occluded()
-	if err == render.ErrDeviceLost {
-		w.recreateRenderer()
-	}
-	// WM_IME_COMPOSITION arrives before the composed text is laid out, so the
-	// candidate window is moved again once the caret is where it is drawn.
-	if w.imeOn {
-		if _, st := w.imeInput(); st != nil && st.comp != "" {
-			w.updateIMEPosition()
-		}
-	}
-	w.ts.EndFrame()
-	w.a11yAfterFrame()
-	if debugFrames {
-		st := w.r.Stats()
-		w.ft.record, w.ft.present = st.Record, st.Present
-		w.logFrame(win.Ticks()-ticks, st.Batches)
-	}
-	w.frame++
-	switch {
-	case !win.IsWindowVisible(w.hwnd):
-		// Hidden windows wait for the WM_PAINT that showing them sends.
-	case w.animating && occluded:
-		win.SetTimer(w.hwnd, timerAnim, hiddenFrameMs)
-	case w.animating && w.sizeMove:
-		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
-	case w.animating:
-		w.invalidate()
-	case !w.wakeAt.IsZero():
-		win.SetTimer(w.hwnd, timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
-	}
-	if !w.animating {
-		w.lastFrame = time.Time{}
 	}
 }
 
@@ -140,6 +159,9 @@ func (w *Window) newRenderer() (r *render.Renderer, err error) {
 			r.SetGPUTiming(true)
 		}
 	}()
+	if w.hl != nil {
+		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
+	}
 	composition := w.opts.DynamicBackdrop || w.backdrop != BackdropNone
 	r, err = render.New(uintptr(w.hwnd), w.width, w.height, composition)
 	if err == nil || !composition {
@@ -165,6 +187,7 @@ func (w *Window) recreateRenderer() {
 			se.target.Release()
 		}
 		clear(w.surfaces)
+		w.releaseShared()
 		w.r.Release()
 		w.r = nil
 	}

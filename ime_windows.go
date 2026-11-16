@@ -10,7 +10,7 @@ func (w *Window) updateIME() {
 	}
 	e := w.focusedEl()
 	editing := e != nil && e.kind == kindInput
-	on := w.takesIME(e)
+	on := w.takesIME(e) && w.hl == nil
 	if on != w.imeOn {
 		win.ImmEnable(w.hwnd, on)
 		w.imeOn = on

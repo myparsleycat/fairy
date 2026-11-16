@@ -277,7 +277,7 @@ func (w *Window) onTouchCancel(id uint32) {
 	win.KillTimer(w.hwnd, timerTouch)
 	if t.phase == touchPressed && w.press != nil {
 		w.cancelPress()
-		win.ReleaseCapture()
+		w.releaseCapture()
 	}
 	w.endTouchHover()
 }

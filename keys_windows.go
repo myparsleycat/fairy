@@ -161,7 +161,7 @@ func (w *Window) onKeyDown(k keyboard.Key, repeat bool, text string) bool {
 	if k == keyboard.KeyEscape && ev.Mods == 0 {
 		if p := w.press; p != nil && p.dragging {
 			w.cancelPress()
-			win.ReleaseCapture()
+			w.releaseCapture()
 			return true
 		}
 		if l := w.topLayer(); l != nil && l.onDismiss != nil {

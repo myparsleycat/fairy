@@ -359,7 +359,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 				p.barStart = e.state.scrollX
 			}
 			w.press = p
-			win.SetCapture(w.hwnd)
+			w.setCapture()
 			w.invalidate()
 			return
 		}
@@ -444,7 +444,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	}
 	p.sel = selecting && p.drag == 0 && p.input == 0
 	w.press = p
-	win.SetCapture(w.hwnd)
+	w.setCapture()
 	if w.dirty {
 		w.Update()
 	} else {
@@ -461,7 +461,7 @@ func (w *Window) onButtonUp(x, y float32, button int) {
 		return
 	}
 	w.press = nil
-	win.ReleaseCapture()
+	w.releaseCapture()
 	if p.bar != nil {
 		w.invalidate()
 		return

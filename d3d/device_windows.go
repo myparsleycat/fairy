@@ -24,16 +24,24 @@ type DeviceInfo struct {
 	// the feature level the device runs at, and CreationFlags are the
 	// CREATE_DEVICE_* flags it was made with.
 	DriverType, FeatureLevel, CreationFlags uint32
-	// AdapterName, VendorID and DeviceID identify the adapter when
-	// AdapterKnown is set.
+	// AdapterName, VendorID, DeviceID and AdapterLUID identify the adapter
+	// when AdapterKnown is set.
 	AdapterName        string
 	VendorID, DeviceID uint32
+	AdapterLUID        LUID
 	// Software reports a WARP device or a software adapter. AdapterKnown
 	// reports whether the adapter description could be read.
 	Software, AdapterKnown bool
 	// FallbackReason lists why the hardware attempts failed when the device
 	// is WARP.
 	FallbackReason string
+}
+
+// LUID is a locally unique identifier, as DXGI_ADAPTER_DESC.AdapterLuid
+// names an adapter until the system restarts.
+type LUID struct {
+	LowPart  uint32
+	HighPart int32
 }
 
 // CreateDeviceWithOptions is CreateDevice that also returns a description of
@@ -139,14 +147,14 @@ func readAdapterInfo(d Device, info *DeviceInfo) {
 		Description                                                     [128]uint16
 		VendorID, DeviceID, SubSysID, Revision                          uint32
 		DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory uintptr
-		LUID                                                            [2]uint32
+		LUID                                                            LUID
 		Flags                                                           uint32
 	}
 	if com.HR(a, 10, uintptr(unsafe.Pointer(&desc))).Failed() {
 		return
 	}
 	info.AdapterName = windows.UTF16ToString(desc.Description[:])
-	info.VendorID, info.DeviceID = desc.VendorID, desc.DeviceID
+	info.VendorID, info.DeviceID, info.AdapterLUID = desc.VendorID, desc.DeviceID, desc.LUID
 	info.Software = info.Software || desc.Flags&dxgiAdapterFlagSoftware != 0
 	info.AdapterKnown = true
 }
