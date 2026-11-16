@@ -306,7 +306,10 @@ func (i *Image) NRGBA() (*image.NRGBA, error) {
 			if err != nil {
 				return nil, err
 			}
-			i = full
+			// The full decode is not kept, so convert its pixels in place.
+			px := full.data.Pixels
+			imaging.UnpremultiplyRGBA(px, px)
+			return &image.NRGBA{Pix: px, Stride: full.data.W * 4, Rect: image.Rect(0, 0, full.data.W, full.data.H)}, nil
 		}
 		img := image.NewNRGBA(image.Rect(0, 0, i.data.W, i.data.H))
 		imaging.UnpremultiplyRGBA(img.Pix, i.data.Pixels)

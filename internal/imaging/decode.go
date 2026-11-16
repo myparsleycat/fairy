@@ -189,14 +189,14 @@ func (in Input) decodeFirst() (*Bitmap, error) {
 			}
 			canvas := image.NewNRGBA(image.Rect(0, 0, a.W, a.H))
 			draw.Draw(canvas, f.Bounds(), f, f.Bounds().Min, draw.Src)
-			return New(canvas), nil
+			return newOwned(canvas), nil
 		case in.AnimatedWebP:
 			s := a.sink(Bound{}, 0)
 			if err := decodeWebPFrames(in.data, &s, true); err != nil {
 				return nil, err
 			}
 			if len(s.frames) != 0 {
-				return New(s.frames[0]), nil
+				return newOwned(s.frames[0]), nil
 			}
 		}
 	}

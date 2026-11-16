@@ -300,3 +300,34 @@ func TestRichTextUnicodeLayout(t *testing.T) {
 		}
 	}
 }
+
+// Runs that differ in any field must not share a layout cache key.
+func TestRunsKeyDistinguishesRuns(t *testing.T) {
+	base := Run{Start: 1, End: 5, Weight: 600, Italic: true, Size: 14, Family: "Segoe UI", Color: 2, Underline: true, Strike: true}
+	key := func(runs ...Run) string { return string(appendRunsKey(nil, runs)) }
+	want := key(base)
+	typ := reflect.TypeFor[Run]()
+	for i := range typ.NumField() {
+		r := base
+		f := reflect.ValueOf(&r).Elem().Field(i)
+		switch f.Kind() {
+		case reflect.Int:
+			f.SetInt(f.Int() + 1)
+		case reflect.Bool:
+			f.SetBool(!f.Bool())
+		case reflect.Float32:
+			f.SetFloat(f.Float() + 1)
+		case reflect.String:
+			f.SetString(f.String() + "x")
+		default:
+			t.Fatalf("Run.%s has kind %s, which this test does not change", typ.Field(i).Name, f.Kind())
+		}
+		if key(r) == want {
+			t.Errorf("changing Run.%s kept the key", typ.Field(i).Name)
+		}
+	}
+	// A Family that holds the encoding of the run after it.
+	if key(Run{Family: "a" + key(Run{})}) == key(Run{Family: "a"}, Run{}) {
+		t.Error("a Family that ends like a following run shares its key")
+	}
+}

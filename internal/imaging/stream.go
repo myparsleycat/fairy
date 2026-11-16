@@ -68,7 +68,7 @@ func (in Input) firstFrame(bound Bound) (*Bitmap, error) {
 		}
 		return nil, err
 	}
-	return Resize(first, bound), nil
+	return resize(first, bound, true), nil
 }
 
 // streamImage returns an animation that decodes its frames as it plays, or

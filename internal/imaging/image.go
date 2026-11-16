@@ -22,13 +22,21 @@ type Bitmap struct {
 
 // New converts any image.Image.
 func New(src image.Image) *Bitmap {
-	w, h, pix := premulPixels(src)
+	w, h, pix := premulPixels(src, false)
+	return &Bitmap{W: w, H: h, Pixels: pix}
+}
+
+// newOwned is New for an image that nothing else uses afterwards: a tightly
+// packed *image.NRGBA is premultiplied in place instead of copied.
+func newOwned(src image.Image) *Bitmap {
+	w, h, pix := premulPixels(src, true)
 	return &Bitmap{W: w, H: h, Pixels: pix}
 }
 
 // premulPixels returns src as tightly packed premultiplied RGBA at the
-// origin, reusing the pixels of such an *image.RGBA.
-func premulPixels(src image.Image) (int, int, []byte) {
+// origin, reusing the pixels of such an *image.RGBA, and with owned those of
+// such an *image.NRGBA, which it premultiplies in place.
+func premulPixels(src image.Image, owned bool) (int, int, []byte) {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	switch s := src.(type) {
@@ -38,6 +46,10 @@ func premulPixels(src image.Image) (int, int, []byte) {
 			return w, h, s.Pix
 		}
 	case *image.NRGBA:
+		if owned && s.Stride == w*4 && b.Min == (image.Point{}) && len(s.Pix) == w*h*4 {
+			premultiplyRGBA(s.Pix, s.Pix)
+			return w, h, s.Pix
+		}
 		pix := make([]byte, w*h*4)
 		for y := range h {
 			premultiplyRGBA(pix[y*w*4:][:w*4], s.Pix[s.PixOffset(b.Min.X, b.Min.Y+y):][:w*4])
@@ -50,6 +62,7 @@ func premulPixels(src image.Image) (int, int, []byte) {
 }
 
 // premultiplyRGBA copies straight-alpha RGBA src into dst premultiplied.
+// dst may be src: each pixel is read before it is written.
 func premultiplyRGBA(dst, src []byte) {
 	for i := 0; i+3 < len(src); i += 4 {
 		switch a := uint32(src[i+3]); a {
@@ -67,6 +80,7 @@ func premultiplyRGBA(dst, src []byte) {
 }
 
 // UnpremultiplyRGBA copies premultiplied RGBA src into dst with straight alpha.
+// dst may be src: each pixel is read before it is written.
 func UnpremultiplyRGBA(dst, src []byte) {
 	for i := 0; i+3 < len(src); i += 4 {
 		switch a := uint32(src[i+3]); a {
@@ -171,13 +185,20 @@ func (in Input) decode(bound Bound, keepBytes, animBytes int64) (*Bitmap, error)
 		}
 		return nil, err
 	}
-	return Resize(src, in.srcBound(bound)), nil
+	return resize(src, in.srcBound(bound), true), nil
 }
 
-func Resize(src image.Image, bound Bound) *Bitmap {
+// resize scales src within bound. With owned, nothing else uses src
+// afterwards, so an unscaled *image.NRGBA is premultiplied in place.
+func resize(src image.Image, bound Bound, owned bool) *Bitmap {
 	b := src.Bounds()
-	w, h := bound.Size(b.Dx(), b.Dy())
-	return ResizeTo(src, w, h)
+	if w, h := bound.Size(b.Dx(), b.Dy()); w != b.Dx() || h != b.Dy() {
+		return ResizeTo(src, w, h)
+	}
+	if owned {
+		return newOwned(src)
+	}
+	return New(src)
 }
 
 func ResizeTo(src image.Image, dw, dh int) *Bitmap {

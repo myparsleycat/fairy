@@ -154,12 +154,13 @@ func (c Context) ReadImage(tex Texture2D, premultiplied bool) (*image.NRGBA, err
 		return nil, err
 	}
 	bgra := desc.Format == FORMAT_B8G8R8A8_UNORM || desc.Format == FORMAT_B8G8R8A8_UNORM_SRGB
-	img := image.NewNRGBA(image.Rect(0, 0, int(desc.Width), int(desc.Height)))
-	toNRGBA(img.Pix, pix, bgra, premultiplied)
-	return img, nil
+	toNRGBA(pix, pix, bgra, premultiplied)
+	w, h := int(desc.Width), int(desc.Height)
+	return &image.NRGBA{Pix: pix, Stride: w * 4, Rect: image.Rect(0, 0, w, h)}, nil
 }
 
 // toNRGBA converts four-byte texels in src to straight-alpha RGBA in dst.
+// dst may be src: each texel is read before it is written.
 func toNRGBA(dst, src []byte, bgra, premultiplied bool) {
 	for i := 0; i+3 < len(src) && i+3 < len(dst); i += 4 {
 		r, g, b, a := src[i], src[i+1], src[i+2], src[i+3]

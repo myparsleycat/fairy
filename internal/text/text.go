@@ -4,8 +4,8 @@
 package text
 
 import (
+	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -101,11 +101,30 @@ type shapeKey struct {
 
 func (k layoutKey) shape() shapeKey { return shapeKey{k.text, k.style, k.runs} }
 
-func runsKey(runs []Run) string {
-	if len(runs) == 0 {
-		return ""
+// appendRunsKey appends an encoding of runs that differs whenever any run
+// differs. Family is length-prefixed so that no two run lists share one.
+func appendRunsKey(b []byte, runs []Run) []byte {
+	for _, r := range runs {
+		b = binary.AppendVarint(b, int64(r.Start))
+		b = binary.AppendVarint(b, int64(r.End))
+		b = binary.AppendVarint(b, int64(r.Weight))
+		b = binary.AppendVarint(b, int64(r.Color))
+		b = binary.LittleEndian.AppendUint32(b, math.Float32bits(r.Size))
+		var flags byte
+		if r.Italic {
+			flags |= 1
+		}
+		if r.Underline {
+			flags |= 2
+		}
+		if r.Strike {
+			flags |= 4
+		}
+		b = append(b, flags)
+		b = binary.AppendUvarint(b, uint64(len(r.Family)))
+		b = append(b, r.Family...)
 	}
-	return fmt.Sprint(runs)
+	return b
 }
 
 var (
@@ -173,9 +192,17 @@ type System struct {
 	// loose holds the layouts that the latest pass of their owner did not
 	// measure. Only they can expire between rebuilds, so EndFrame checks them
 	// on every frame and the whole cache only after a pass.
-	loose   []layoutKey
-	scratch []byte
+	loose  []layoutKey
+	keyBuf []byte
+	u16Buf []uint16
 }
+
+// The largest scratch buffers a System keeps between layouts, so one huge
+// text or run list does not stay allocated for the window's life.
+const (
+	maxKeyBuf = 64 << 10 // bytes
+	maxU16Buf = 64 << 10 // UTF-16 code units
+)
 
 type passMark struct{ pass, frame int }
 
@@ -325,7 +352,18 @@ func (s *System) Layout(str string, st Style, width float32) *Layout {
 		width = Unbounded
 	}
 	width = float32(math.Ceil(float64(width)*8) / 8)
-	k := layoutKey{text: str, style: keyOf(st), width: width, runs: runsKey(st.Runs)}
+	var runs string
+	if len(st.Runs) > 0 {
+		buf := appendRunsKey(s.keyBuf[:0], st.Runs)
+		// runs aliases buf for the lookups; it is cloned before any key is stored.
+		runs = unsafe.String(unsafe.SliceData(buf), len(buf))
+		if cap(buf) <= maxKeyBuf {
+			s.keyBuf = buf
+		} else {
+			s.keyBuf = nil
+		}
+	}
+	k := layoutKey{text: str, style: keyOf(st), width: width, runs: runs}
 	if l, ok := s.layouts[k]; ok {
 		l.frame, l.painted = s.frame, s.paints
 		return l
@@ -339,7 +377,16 @@ func (s *System) Layout(str string, st Style, width float32) *Layout {
 	if err != nil {
 		return &Layout{sys: s, text: str}
 	}
-	u := utf16.Encode([]rune(str))
+	u := s.u16Buf[:0]
+	for _, r := range str {
+		u = utf16.AppendRune(u, r)
+	}
+	if cap(u) <= maxU16Buf {
+		s.u16Buf = u
+	} else {
+		s.u16Buf = nil
+	}
+	// DirectWrite copies the text, so u can be reused once this returns.
 	dl, err := s.factory.CreateTextLayout(u, f.TextFormat, width, Unbounded)
 	if err != nil {
 		return &Layout{sys: s, text: str}
@@ -351,7 +398,11 @@ func (s *System) Layout(str string, st Style, width float32) *Layout {
 	if k.style.letterSpacing != 0 {
 		dl.SetCharacterSpacing(0, k.style.letterSpacing, 0, dwrite.TextRange{Length: uint32(len(u))})
 	}
-	l := &Layout{sys: s, dl: dl, text: str, u16: u, frame: s.frame, painted: s.paints, width: width}
+	if runs != "" {
+		k.runs = strings.Clone(runs)
+		sk.runs = k.runs
+	}
+	l := &Layout{sys: s, dl: dl, text: str, n16: uint32(len(u)), frame: s.frame, painted: s.paints, width: width}
 	l.applyRuns(st.Runs)
 	l.metrics = dl.Metrics()
 	s.layouts[k] = l
@@ -533,7 +584,7 @@ type Layout struct {
 	sys     *System
 	dl      dwrite.TextLayout
 	text    string
-	u16     []uint16
+	n16     uint32 // length of the text in UTF-16 code units
 	metrics dwrite.TextMetrics
 	frame   int    // System.frame when last used
 	painted int    // System.paints when last used
@@ -727,12 +778,12 @@ func (l *Layout) CaretAt(b int, upstream bool) (x, y, h float32) {
 		return 0, 0, 0
 	}
 	u := l.utf8ToUTF16(b)
-	if upstream && u > 0 && int(u) < len(l.u16) {
+	if upstream && u > 0 && u < l.n16 {
 		x, y, m := l.dl.HitTestTextPosition(u-1, true)
 		return x, y, m.Height
 	}
-	if int(u) >= len(l.u16) && len(l.u16) > 0 {
-		x, y, m := l.dl.HitTestTextPosition(uint32(len(l.u16)-1), true)
+	if u >= l.n16 && l.n16 > 0 {
+		x, y, m := l.dl.HitTestTextPosition(l.n16-1, true)
 		return x, y, m.Height
 	}
 	x, y, m := l.dl.HitTestTextPosition(u, false)

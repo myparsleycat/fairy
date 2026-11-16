@@ -498,13 +498,22 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 	ctx.RSSetViewports(d3d.Viewport{Width: float32(r.width), Height: float32(r.height), MaxDepth: 1})
 
 	if len(s.Prims) > 0 {
-		r.frame = append(r.frame[:0], s.Prims...)
+		// Only layers add or patch prims, so without any the scene's own
+		// prims are uploaded as they are.
+		layered := len(s.Layers) > 0
+		if layered {
+			r.frame = append(r.frame[:0], s.Prims...)
+		}
 		defer r.pool.endFrame()
 		top, err := r.planLayers(s)
 		if err != nil {
 			return err
 		}
-		if err := uploadStruct(r, &r.prims, r.frame); err != nil {
+		prims := s.Prims
+		if layered {
+			prims = r.frame
+		}
+		if err := uploadStruct(r, &r.prims, prims); err != nil {
 			return err
 		}
 		if err := uploadStruct(r, &r.clips, s.Clips); err != nil {

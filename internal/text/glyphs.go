@@ -125,7 +125,7 @@ type glyphQuad struct {
 
 // DrawRuns is Draw with the colors that Run.Color selects (colors[i-1]).
 func (l *Layout) DrawRuns(scene *render.Scene, x, y float32, base [4]float32, colors [][4]float32, clip [4]float32) bool {
-	if l.dl.P == nil || len(l.u16) == 0 {
+	if l.dl.P == nil || l.n16 == 0 {
 		return true
 	}
 	s := l.sys

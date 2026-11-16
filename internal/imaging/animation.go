@@ -43,13 +43,14 @@ func NewFrames(frames []image.Image, delays []time.Duration, plays int) (*Bitmap
 	return newAnimImage(out, delays, plays), nil
 }
 
+// newAnimImage takes frames that nothing else uses afterwards.
 func newAnimImage(frames []image.Image, delays []time.Duration, plays int) *Bitmap {
 	if len(frames) < 2 {
-		return New(frames[0])
+		return newOwned(frames[0])
 	}
 	img := &Bitmap{FrameData: make([]animFrame, len(frames)), Plays: plays}
 	for i, f := range frames {
-		w, h, pix := premulPixels(f)
+		w, h, pix := premulPixels(f, true)
 		if i == 0 {
 			img.W, img.H, img.Pixels = w, h, pix
 		}

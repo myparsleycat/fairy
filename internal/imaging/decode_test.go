@@ -25,6 +25,20 @@ func TestNewTopRowsOfRGBA(t *testing.T) {
 	}
 }
 
+// New premultiplies into its own pixels: the caller still owns src.
+func TestNewKeepsNRGBASource(t *testing.T) {
+	src := image.NewNRGBA(image.Rect(0, 0, 2, 1))
+	copy(src.Pix, []byte{200, 100, 50, 128, 10, 20, 30, 255})
+	want := bytes.Clone(src.Pix)
+	b := New(src)
+	if !bytes.Equal(src.Pix, want) {
+		t.Fatalf("New changed its source to %v, want %v", src.Pix, want)
+	}
+	if got := b.Pixels[:4]; !bytes.Equal(got, []byte{100, 50, 25, 128}) {
+		t.Fatalf("New premultiplied %v to %v, want [100 50 25 128]", want[:4], got)
+	}
+}
+
 func TestImageDecodeKeepsStillPixels(t *testing.T) {
 	nrgba := image.NewNRGBA(image.Rect(0, 0, 97, 65))
 	nrgba64 := image.NewNRGBA64(nrgba.Bounds())
