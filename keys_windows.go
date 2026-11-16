@@ -149,6 +149,7 @@ func (w *Window) onKeyDown(k keyboard.Key, repeat bool, text string) bool {
 		w.stopAutoScroll()
 		return true
 	}
+	w.settleView()
 	ev := keyboard.KeyEvent{Key: k, Mods: w.mods(), Repeat: repeat, Text: text}
 	focused := w.keyTarget()
 	if focused != nil && focused.kind == kindInput && w.inputKey(focused, ev) {

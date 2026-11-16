@@ -126,6 +126,15 @@ func (w *Window) layout(dt float32) {
 	}
 }
 
+// settleView builds a stale view before input is dispatched. Messages queued
+// behind an edit arrive before the frame that would build it, and their
+// handlers would otherwise run closures and hit-test the tree from before it.
+func (w *Window) settleView() {
+	if w.dirty && w.r != nil && w.width > 0 && w.height > 0 {
+		w.layout(0)
+	}
+}
+
 // resizeRenderer matches the swap chain to the client size and reports whether
 // the renderer can draw afterwards.
 func (w *Window) resizeRenderer() bool {

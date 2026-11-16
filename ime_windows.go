@@ -101,6 +101,21 @@ func (w *Window) commitComposition() {
 	win.ImmReleaseContext(w.hwnd, himc)
 }
 
+// commitCompositionOutside commits the focused input's composition when a
+// press at (x, y) lands outside that input.
+func (w *Window) commitCompositionOutside(x, y float32) {
+	e, st := w.imeInput()
+	if st == nil || st.comp == "" {
+		return
+	}
+	for t := w.hitTest(x, y); t != nil; t = t.parent {
+		if t == e {
+			return
+		}
+	}
+	w.commitComposition()
+}
+
 func (w *Window) updateIMEPosition() {
 	_, st := w.imeInput()
 	if st == nil || st.geom == nil {

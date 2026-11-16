@@ -303,6 +303,13 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	if w.press != nil {
 		return
 	}
+	// A left press in the content moves focus, which commits a composition.
+	// Committing it first lets the press hit-test the view built with the
+	// committed text, such as a submit button it enables.
+	if button == 0 && w.chromeHitTest(x, y) == nil && w.barAt(x, y) == nil {
+		w.commitCompositionOutside(x, y)
+	}
+	w.settleView()
 	top := w.chromeHitTest(x, y)
 	chrome := top != nil
 
