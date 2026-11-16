@@ -345,7 +345,9 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		}
 	}
 
-	items := make([]*item, 0, len(n.Children))
+	m := n.inFlow()
+	buf := make([]item, m)
+	items := make([]*item, 0, m)
 	for _, c := range n.Children {
 		if c.Style.Hidden {
 			if perform {
@@ -356,7 +358,9 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if c.Style.Absolute {
 			continue
 		}
-		items = append(items, n.prepareItem(gen, c, row, innerMain, innerCross, availMain, availCross))
+		it := &buf[len(items)]
+		n.prepareItem(it, gen, c, row, innerMain, innerCross, availMain, availCross)
+		items = append(items, it)
 	}
 
 	// Break into lines.
@@ -555,9 +559,20 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 	return w, h
 }
 
-func (n *Node) prepareItem(gen uint32, c *Node, row bool, innerMain, innerCross, availMain, availCross float32) *item {
+// inFlow counts the children that are neither hidden nor absolutely positioned.
+func (n *Node) inFlow() int {
+	m := 0
+	for _, c := range n.Children {
+		if !c.Style.Hidden && !c.Style.Absolute {
+			m++
+		}
+	}
+	return m
+}
+
+func (n *Node) prepareItem(it *item, gen uint32, c *Node, row bool, innerMain, innerCross, availMain, availCross float32) {
 	cs := &c.Style
-	it := &item{n: c}
+	*it = item{n: c}
 	var mainDim, crossDim, minMainDim, maxMainDim, minCrossDim, maxCrossDim Dim
 	if row {
 		mainDim, crossDim = cs.Width, cs.Height
@@ -627,7 +642,6 @@ func (n *Node) prepareItem(gen uint32, c *Node, row bool, innerMain, innerCross,
 	}
 	it.base = basis
 	it.hyp = clamp(basis, it.minMain, it.maxMain)
-	return it
 }
 
 func (it *item) measureCross(gen uint32, row bool, availCross float32) float32 {
@@ -823,12 +837,16 @@ func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
 		if st.ScrollX {
 			innerW, availW = nan, nan
 		}
-		items := make([]*item, 0, len(n.Children))
+		m := n.inFlow()
+		buf := make([]item, m)
+		items := make([]*item, 0, m)
 		for _, c := range n.Children {
 			if c.Style.Hidden || c.Style.Absolute {
 				continue
 			}
-			items = append(items, n.prepareItem(gen, c, true, innerW, nan, availW, nan))
+			it := &buf[len(items)]
+			n.prepareItem(it, gen, c, true, innerW, nan, availW, nan)
+			items = append(items, it)
 		}
 		if !isNaN(innerW) {
 			resolveFlex(items, innerW-st.Gap*float32(max(len(items)-1, 0)))

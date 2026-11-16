@@ -347,7 +347,7 @@ scan:
 			}
 			stack = append(stack[:p], stack[p+1:]...)
 		case (c == 'h' || c == 'w') && !isWordBefore(run, i):
-			if m := reAutolink.FindString(run[i:]); m != "" {
+			if m := reAutolink().FindString(run[i:]); m != "" {
 				i += len(m)
 				continue
 			}

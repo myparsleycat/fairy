@@ -179,6 +179,10 @@ type editState struct {
 	geom       *inputGeom
 	upstream   bool // the caret sits at the end of a wrapped line, not the start of the next
 	spell      *Latest[spellResult]
+	// zwspText is the text a multiline field last painted, followed by a
+	// zero-width space, kept so that painting an unchanged value does not
+	// copy it again.
+	zwspText string
 }
 
 // keyProcess is VK_PROCESSKEY: the key press an input method is handling.

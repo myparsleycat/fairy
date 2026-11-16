@@ -2,6 +2,7 @@ package fairy
 
 import (
 	"math"
+	"slices"
 
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/layout"
@@ -309,6 +310,13 @@ func Text(s string) *El {
 
 // Child appends children; nil entries are skipped.
 func (e *El) Child(children ...*El) *El {
+	n := 0
+	for _, c := range children {
+		if c != nil {
+			n++
+		}
+	}
+	e.children = slices.Grow(e.children, n)
 	for _, c := range children {
 		if c != nil {
 			e.children = append(e.children, c)

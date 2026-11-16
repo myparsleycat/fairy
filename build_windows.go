@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"slices"
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/text"
@@ -225,7 +226,7 @@ func (w *Window) prepare(e, parent *El, pid uint64, index int, inh textProps) {
 	n := &e.node
 	n.Style = e.style
 	n.Style.Padding = e.padding()
-	n.Children = n.Children[:0]
+	n.Children = slices.Grow(n.Children[:0], len(e.children))
 	n.Measure = nil
 	switch e.kind {
 	case kindText:

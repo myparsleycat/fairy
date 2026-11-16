@@ -7,45 +7,48 @@ import "math"
 func BlurPixels(src []byte, w, h int, sigma float32) []byte {
 	kernel := gaussianKernel(sigma)
 	n := w * h
-	premul := make([]float32, n*4)
-	for i, v := range src[:n*4] {
-		premul[i] = float32(v)
-	}
-
 	tmp := make([]float32, n*4)
-	blurPass(premul, tmp, w, h, kernel, 1, w)
-	blurPass(tmp, premul, h, w, kernel, w, 1)
-
-	out := make([]byte, n*4)
-	for p := range n {
-		a := clampByte(premul[p*4+3])
-		for c := range 3 {
-			out[p*4+c] = min(clampByte(premul[p*4+c]), a)
-		}
-		out[p*4+3] = a
-	}
-	return out
-}
-
-// blurPass convolves each of lines lines of length samples, whose pixels are
-// step apart and whose starts are stride apart, clamping at the ends.
-func blurPass(src, dst []float32, length, lines int, kernel []float32, step, stride int) {
 	radius := len(kernel) / 2
-	for line := range lines {
-		base := line * stride
-		for x := range length {
+	// Rows, from the bytes into tmp. Each row is converted to float once
+	// rather than on every kernel tap.
+	row := make([]float32, w*4)
+	for y := range h {
+		base := y * w
+		for i, v := range src[base*4 : (base+w)*4] {
+			row[i] = float32(v)
+		}
+		for x := range w {
 			var sum [4]float32
 			for k, weight := range kernel {
-				sx := min(max(x+k-radius, 0), length-1)
-				p := (base + sx*step) * 4
-				sum[0] += src[p] * weight
-				sum[1] += src[p+1] * weight
-				sum[2] += src[p+2] * weight
-				sum[3] += src[p+3] * weight
+				p := min(max(x+k-radius, 0), w-1) * 4
+				sum[0] += row[p] * weight
+				sum[1] += row[p+1] * weight
+				sum[2] += row[p+2] * weight
+				sum[3] += row[p+3] * weight
 			}
-			copy(dst[(base+x*step)*4:], sum[:])
+			copy(tmp[(base+x)*4:], sum[:])
 		}
 	}
+	out := make([]byte, n*4)
+	for x := range w {
+		for y := range h {
+			var sum [4]float32
+			for k, weight := range kernel {
+				p := (x + min(max(y+k-radius, 0), h-1)*w) * 4
+				sum[0] += tmp[p] * weight
+				sum[1] += tmp[p+1] * weight
+				sum[2] += tmp[p+2] * weight
+				sum[3] += tmp[p+3] * weight
+			}
+			p := (x + y*w) * 4
+			a := clampByte(sum[3])
+			out[p] = min(clampByte(sum[0]), a)
+			out[p+1] = min(clampByte(sum[1]), a)
+			out[p+2] = min(clampByte(sum[2]), a)
+			out[p+3] = a
+		}
+	}
+	return out
 }
 
 func gaussianKernel(sigma float32) []float32 {

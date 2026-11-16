@@ -87,7 +87,7 @@ func (c *ImageCache) decodeBlur(k imageKey, p *imageLoad, read func() ([]byte, e
 		return nil, errImageLoadInvalidated
 	}
 	kernel := min(imaging.WorkBudget, int64(2*math.Ceil(float64(k.sigma)*3)+1)*4)
-	weight := min(imaging.WorkBudget, src.data.ByteSize()+int64(src.data.W)*int64(src.data.H)*36+kernel)
+	weight := min(imaging.WorkBudget, src.data.ByteSize()+int64(src.data.W)*int64(src.data.H)*20+kernel)
 	var img *Image
 	c.withWork(k, p, weight, func() {
 		img = wrapImage(&imaging.Bitmap{W: src.data.W, H: src.data.H, Pixels: imaging.BlurPixels(src.data.Pixels, src.data.W, src.data.H, k.sigma)})

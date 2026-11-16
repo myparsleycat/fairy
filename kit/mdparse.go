@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 )
@@ -49,15 +50,21 @@ type mdItem struct {
 }
 
 var (
-	reHeading = regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$`)
-	reFence   = regexp.MustCompile("^( {0,3})(`{3,}|~{3,})[ \t]*([^`]*)$")
-	reRule    = regexp.MustCompile(`^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`)
-	reQuote   = regexp.MustCompile(`^ {0,3}> ?`)
-	reBullet  = regexp.MustCompile(`^( {0,3})([-*+])([ \t]+|$)`)
-	reOrdered = regexp.MustCompile(`^( {0,3})(\d{1,9})([.)])([ \t]+|$)`)
-	reDelim   = regexp.MustCompile(`^ *\|? *:?-+:? *(\| *:?-+:? *)*\|? *$`)
-	reTask    = regexp.MustCompile(`^\[([ xX])\][ \t]+`)
-	reCallout = regexp.MustCompile(`(?i)^ {0,3}\[!(note|tip|important|warning|caution)\][ \t]*$`)
+	reHeading = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$`)
+	})
+	reFence = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile("^( {0,3})(`{3,}|~{3,})[ \t]*([^`]*)$") })
+	reRule  = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`^ {0,3}(?:(?:-[ \t]*){3,}|(?:\*[ \t]*){3,}|(?:_[ \t]*){3,})$`)
+	})
+	reQuote   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^ {0,3}> ?`) })
+	reBullet  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^( {0,3})([-*+])([ \t]+|$)`) })
+	reOrdered = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^( {0,3})(\d{1,9})([.)])([ \t]+|$)`) })
+	reDelim   = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^ *\|? *:?-+:? *(\| *:?-+:? *)*\|? *$`) })
+	reTask    = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^\[([ xX])\][ \t]+`) })
+	reCallout = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`(?i)^ {0,3}\[!(note|tip|important|warning|caution)\][ \t]*$`)
+	})
 )
 
 // parseMarkdown splits source into blocks. It covers CommonMark's common
@@ -80,14 +87,14 @@ type listMarker struct {
 }
 
 func matchList(line string) (listMarker, bool) {
-	if m := reBullet.FindStringSubmatch(line); m != nil && !reRule.MatchString(line) {
+	if m := reBullet().FindStringSubmatch(line); m != nil && !reRule().MatchString(line) {
 		w := len(m[0])
 		if len(m[3]) > 4 { // a long gap means indented content; the marker takes one space
 			w = len(m[1]) + 2
 		}
 		return listMarker{char: m[2][0], indent: w, rest: line[min(w, len(line)):]}, true
 	}
-	if m := reOrdered.FindStringSubmatch(line); m != nil {
+	if m := reOrdered().FindStringSubmatch(line); m != nil {
 		n, _ := strconv.Atoi(m[2])
 		w := len(m[0])
 		if len(m[4]) > 4 {
@@ -102,7 +109,7 @@ func isListStart(line string) bool { _, ok := matchList(line); return ok }
 
 // interrupts reports whether line starts a block that ends a paragraph.
 func interrupts(line string) bool {
-	if reHeading.MatchString(line) || reFence.MatchString(line) || reRule.MatchString(line) || reQuote.MatchString(line) {
+	if reHeading().MatchString(line) || reFence().MatchString(line) || reRule().MatchString(line) || reQuote().MatchString(line) {
 		return true
 	}
 	if m, ok := matchList(line); ok && !isBlank(m.rest) {
@@ -161,8 +168,8 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 		case isBlank(line):
 			i++
 
-		case reFence.MatchString(line):
-			m := reFence.FindStringSubmatch(line)
+		case reFence().MatchString(line):
+			m := reFence().FindStringSubmatch(line)
 			indent, fence := len(m[1]), m[2]
 			var body []string
 			closed := false
@@ -190,20 +197,20 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 			}
 			out = append(out, b)
 
-		case reHeading.MatchString(line):
-			m := reHeading.FindStringSubmatch(line)
+		case reHeading().MatchString(line):
+			m := reHeading().FindStringSubmatch(line)
 			out = append(out, mdBlock{kind: mdHeading, level: len(m[1]), text: strings.TrimSpace(m[2])})
 			i++
 
-		case reRule.MatchString(line):
+		case reRule().MatchString(line):
 			out = append(out, mdBlock{kind: mdRule})
 			i++
 
-		case reQuote.MatchString(line):
+		case reQuote().MatchString(line):
 			var inner []string
 			for i < len(lines) {
 				l := lines[i]
-				if loc := reQuote.FindStringIndex(l); loc != nil {
+				if loc := reQuote().FindStringIndex(l); loc != nil {
 					inner = append(inner, l[loc[1]:])
 				} else if !isBlank(l) && len(inner) > 0 && !isBlank(inner[len(inner)-1]) && !interrupts(l) {
 					inner = append(inner, l) // lazy continuation
@@ -212,7 +219,7 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 				}
 				i++
 			}
-			if m := reCallout.FindStringSubmatch(inner[0]); m != nil {
+			if m := reCallout().FindStringSubmatch(inner[0]); m != nil {
 				out = append(out, mdBlock{kind: mdCallout, callout: strings.ToLower(m[1]), kids: parseBlocks(inner[1:])})
 			} else {
 				out = append(out, mdBlock{kind: mdQuote, kids: parseBlocks(inner)})
@@ -223,7 +230,7 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 			i, b = parseList(lines, i)
 			out = append(out, b)
 
-		case strings.Contains(line, "|") && i+1 < len(lines) && reDelim.MatchString(lines[i+1]) && strings.Contains(lines[i+1], "-"):
+		case strings.Contains(line, "|") && i+1 < len(lines) && reDelim().MatchString(lines[i+1]) && strings.Contains(lines[i+1], "-"):
 			b := mdBlock{kind: mdTable, head: splitRow(line)}
 			fallback := len(b.head) > mdMaxTableColumns
 			delims := splitRow(lines[i+1])
@@ -310,7 +317,7 @@ func parseList(lines []string, i int) (int, mdBlock) {
 		}
 	done:
 		it := mdItem{}
-		if t := reTask.FindStringSubmatch(body[0]); t != nil {
+		if t := reTask().FindStringSubmatch(body[0]); t != nil {
 			it.task, it.checked = true, t[1] != " "
 			body[0] = body[0][len(t[0]):]
 		}
@@ -694,10 +701,12 @@ func openImage(s string, i int) (alt string, ok bool) {
 	return "", false
 }
 
-var reAutolink = regexp.MustCompile(`^(?:https?://|www\.)[^\s<]+`)
+var reAutolink = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^(?:https?://|www\.)[^\s<]+`) })
 
 // reEmail is CommonMark's email autolink, with at least one dot in the domain.
-var reEmail = regexp.MustCompile(`^[a-zA-Z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$`)
+var reEmail = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[a-zA-Z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$`)
+})
 
 func trimAutolink(u string) string {
 	opens, closes := strings.Count(u, "("), strings.Count(u, ")")
@@ -788,9 +797,9 @@ func (p *inlineParser) run(s string, style mdStyle, link string) {
 			if angleEnd < len(s) {
 				u, dest := s[i+1:angleEnd], ""
 				switch {
-				case reAutolink.MatchString(u) && !strings.ContainsAny(u, " <"):
+				case reAutolink().MatchString(u) && !strings.ContainsAny(u, " <"):
 					dest = u
-				case reEmail.MatchString(u):
+				case reEmail().MatchString(u):
 					dest = "mailto:" + u
 				}
 				if dest != "" {
@@ -802,7 +811,7 @@ func (p *inlineParser) run(s string, style mdStyle, link string) {
 				}
 			}
 		case (c == 'h' || c == 'w') && link == "" && !isWordBefore(s, i):
-			if m := reAutolink.FindString(s[i:]); m != "" {
+			if m := reAutolink().FindString(s[i:]); m != "" {
 				u := trimAutolink(m)
 				p.flush(style, link)
 				p.buf.WriteString(u)

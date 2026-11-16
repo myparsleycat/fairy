@@ -195,6 +195,8 @@ type Window struct {
 	byID           map[uint64]*El
 
 	hoverPath      []*El
+	hoverScratch   []*El // updateHover builds the next path here
+	hoverBusy      bool  // flushPointerMove is ranging over hoverPath
 	hoverIDs       map[uint64]bool
 	mouseX, mouseY float32
 	mouseIn        bool
@@ -1249,7 +1251,7 @@ func (w *Window) destroy() {
 	// Maps are emptied rather than dropped, as methods called on the closed
 	// window may still write to them.
 	w.root, w.sel, w.press = nil, nil, nil
-	w.layers, w.hits, w.focusables, w.hoverPath = nil, nil, nil, nil
+	w.layers, w.hits, w.focusables, w.hoverPath, w.hoverScratch = nil, nil, nil, nil, nil
 	w.ghosts, w.flights = nil, nil
 	w.scene = render.Scene{}
 	clear(w.states)

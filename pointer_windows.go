@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"slices"
 	"time"
 	"unsafe"
 
@@ -186,6 +187,9 @@ func (w *Window) flushPointerMove() {
 		return
 	}
 	x, y := w.mouseX, w.mouseY
+	busy := w.hoverBusy
+	w.hoverBusy = true
+	defer func() { w.hoverBusy = busy }()
 	for _, e := range w.hoverPath {
 		if e.onPointerMove != nil &&
 			e.onPointerMove(
@@ -226,35 +230,52 @@ func (w *Window) onMouseLeave() {
 func (w *Window) updateHover(x, y float32) bool {
 	top := w.pointerHitTest(x, y)
 	chrome := top != nil && top.inChrome && !top.excludeChrome
-	var path []*El
+	path := w.hoverScratch[:0]
 	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
 		path = append(path, e)
 	}
-	return w.setHoverPath(path)
+	changed := w.setHoverPath(path)
+	clear(path)
+	w.hoverScratch = path[:0]
+	return changed
 }
 
+// setHoverPath makes path the hovered path. It does not keep path.
 func (w *Window) setHoverPath(path []*El) bool {
-	ids := make(map[uint64]bool, len(path))
-	for _, e := range path {
-		ids[e.id] = true
-	}
-	changed := len(ids) != len(w.hoverIDs)
-	for id := range w.hoverIDs {
-		if !ids[id] {
-			changed = true
-			if e := w.byID[id]; e != nil && e.onHover != nil {
-				e.onHover(false)
+	changed := false
+	if slices.EqualFunc(path, w.hoverPath, func(a, b *El) bool { return a.id == b.id }) {
+		// The same elements, rebuilt: only the pointers change. While
+		// flushPointerMove ranges over hoverPath, handlers that render a
+		// frame synchronously must not change the slice it holds.
+		if w.hoverBusy {
+			w.hoverPath = slices.Clone(path)
+		} else {
+			copy(w.hoverPath, path)
+		}
+	} else {
+		path = slices.Clone(path)
+		ids := make(map[uint64]bool, len(path))
+		for _, e := range path {
+			ids[e.id] = true
+		}
+		changed = len(ids) != len(w.hoverIDs)
+		for id := range w.hoverIDs {
+			if !ids[id] {
+				changed = true
+				if e := w.byID[id]; e != nil && e.onHover != nil {
+					e.onHover(false)
+					w.markDirty(dirtyHover)
+				}
+			}
+		}
+		for _, e := range path {
+			if !w.hoverIDs[e.id] && e.onHover != nil {
+				e.onHover(true)
 				w.markDirty(dirtyHover)
 			}
 		}
+		w.hoverPath, w.hoverIDs = path, ids
 	}
-	for _, e := range path {
-		if !w.hoverIDs[e.id] && e.onHover != nil {
-			e.onHover(true)
-			w.markDirty(dirtyHover)
-		}
-	}
-	w.hoverPath, w.hoverIDs = path, ids
 	w.hoverMoves = false
 	for _, e := range path {
 		if e.onPointerMove != nil {

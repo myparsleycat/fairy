@@ -41,6 +41,13 @@ func (s *editState) shownGeom() *inputGeom {
 	return &c
 }
 
+func (s *editState) withZWSP(v string) string {
+	if len(s.zwspText) != len(v)+len("​") || s.zwspText[:len(v)] != v {
+		s.zwspText = v + "​"
+	}
+	return s.zwspText
+}
+
 func (g *inputGeom) toDisplay(b int) int {
 	if g.password {
 		return maskedOffset(g.value, edit.ClampOffset(g.value, b))
@@ -104,7 +111,7 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	}
 	measureText := shown
 	if props.multiline {
-		measureText = shown + "​"
+		measureText = st.withZWSP(shown)
 	}
 	l := w.ts.Layout(measureText, style, layoutW)
 	tw, th := l.Size()
