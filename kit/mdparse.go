@@ -36,6 +36,7 @@ type mdBlock struct {
 	callout string // note, tip, important, warning or caution
 	// lists
 	ordered bool
+	char    byte // bullet char or ordered delimiter
 	start   int
 	items   []mdItem
 	// tables
@@ -47,6 +48,9 @@ type mdBlock struct {
 type mdItem struct {
 	task, checked bool
 	blocks        []mdBlock
+	// line is where the item starts, from the list's first line. The items
+	// before it end where they did however the text after it goes on.
+	line int
 }
 
 var (
@@ -232,7 +236,6 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 
 		case strings.Contains(line, "|") && i+1 < len(lines) && reDelim().MatchString(lines[i+1]) && strings.Contains(lines[i+1], "-"):
 			b := mdBlock{kind: mdTable, head: splitRow(line)}
-			fallback := len(b.head) > mdMaxTableColumns
 			delims := splitRow(lines[i+1])
 			for _, d := range delims[:min(len(b.head), len(delims))] {
 				a := CellStart
@@ -244,18 +247,8 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 				}
 				b.aligns = append(b.aligns, a)
 			}
-			i += 2
-			cells := len(b.head)
-			for i < len(lines) && !isBlank(lines[i]) && strings.Contains(lines[i], "|") && !interrupts(lines[i]) {
-				fallback = fallback || len(b.head) > mdMaxTableCells-cells
-				if !fallback {
-					row := splitRow(lines[i])
-					row = append(row, make([]string, max(len(b.head)-len(row), 0))...)
-					b.rows = append(b.rows, row[:len(b.head)])
-					cells += len(b.head)
-				}
-				i++
-			}
+			var fallback bool
+			i, fallback = tableRows(&b, lines, i+2)
 			for len(b.aligns) < len(b.head) {
 				b.aligns = append(b.aligns, CellStart)
 			}
@@ -279,14 +272,35 @@ func parseBlocksAt(lines []string) (out []mdBlock, starts []int) {
 	return out, starts
 }
 
+// tableRows adds to b the rows that start at line i, after its header and
+// delimiter lines and any rows b has, and returns the line after them. It
+// reports a table too large to keep as one, which is kept as text instead.
+func tableRows(b *mdBlock, lines []string, i int) (int, bool) {
+	fallback := len(b.head) > mdMaxTableColumns
+	cells := len(b.head) * (1 + len(b.rows))
+	for i < len(lines) && !isBlank(lines[i]) && strings.Contains(lines[i], "|") && !interrupts(lines[i]) {
+		fallback = fallback || len(b.head) > mdMaxTableCells-cells
+		if !fallback {
+			row := splitRow(lines[i])
+			row = append(row, make([]string, max(len(b.head)-len(row), 0))...)
+			b.rows = append(b.rows, row[:len(b.head)])
+			cells += len(b.head)
+		}
+		i++
+	}
+	return i, fallback
+}
+
 func parseList(lines []string, i int) (int, mdBlock) {
 	first, _ := matchList(lines[i])
-	b := mdBlock{kind: mdList, ordered: first.ordered, start: first.num}
+	b := mdBlock{kind: mdList, ordered: first.ordered, char: first.char, start: first.num}
+	top := i
 	for i < len(lines) {
 		m, ok := matchList(lines[i])
 		if !ok || m.ordered != first.ordered || m.char != first.char {
 			break
 		}
+		line := i - top
 		body := []string{m.rest}
 		i++
 		for i < len(lines) {
@@ -316,7 +330,7 @@ func parseList(lines []string, i int) (int, mdBlock) {
 			i++
 		}
 	done:
-		it := mdItem{}
+		it := mdItem{line: line}
 		if t := reTask().FindStringSubmatch(body[0]); t != nil {
 			it.task, it.checked = true, t[1] != " "
 			body[0] = body[0][len(t[0]):]

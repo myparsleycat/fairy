@@ -174,6 +174,14 @@ type Window struct {
 	recoverMs int       // delay before the next renderer recreation attempt; 0 when none failed
 	resizeErr bool      // the last swap chain resize failed; logged once per failure streak
 
+	// growStale is set when the view was laid out since the last growPass,
+	// and grew when that pass moved anything; otherwise the pass has
+	// nothing to undo or apply.
+	growStale, grew bool
+	// exits counts the elements with an Exit transition indexed since the
+	// last build began, and prevExits those of the build before.
+	exits, prevExits int
+
 	preciseWheelAt time.Time // last wheel message with a fraction of a notch
 	wheelLatch     wheelLatch
 	// scriptWheelLines replaces the system's wheel scroll lines setting, so
@@ -237,6 +245,7 @@ type Window struct {
 	paintingFlight bool
 	memoPath       string    // the key of the Memo being built, which prefixes those inside it
 	memoRec        *[]string // collects the Local keys the Memo being built touches
+	keeping        bool      // prepare is inside a reused Memo subtree that lays out as before
 
 	lastClickAt uint32
 	lastClickX  float32

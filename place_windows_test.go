@@ -12,7 +12,7 @@ func TestOnLayoutChangeRebuildsInSameFrame(t *testing.T) {
 	var follower *El
 	w := newListWindow(t, func() *El {
 		follower = Box().W(10).H(measured)
-		return Col(Box().Size(30, 24).OnLayout(func(_, h float32) { measured = h }), follower)
+		return Col(Box().Size(30, 24).OnLayout(func(_, h float32) bool { measured = h; return true }), follower)
 	})
 	frame := func() {
 		for i := 0; i < 3; i++ {

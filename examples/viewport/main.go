@@ -224,7 +224,7 @@ func (v *viewer) view(cx *fairy.Cx) *fairy.El {
 		thumb,
 	).Gap(8).Align(fairy.Center)
 	return fairy.Col(
-		fairy.Box(surface, scene).Grow(1).OnLayout(func(w, h float32) { v.w, v.h = w, h }),
+		fairy.Box(surface, scene).Grow(1).OnLayout(func(w, h float32) bool { v.w, v.h = w, h; return true }),
 		controls,
 		fairy.Text(hud).Color(t.Foreground).Font(t.MonoFont).FontSize(12),
 		fairy.Text(fmt.Sprintf("surface draws %d", v.draws)).Color(t.Foreground).Font(t.MonoFont).FontSize(12),

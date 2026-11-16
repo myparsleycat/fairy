@@ -49,6 +49,7 @@ func View(id string, s *State, p ViewProps) *fairy.El {
 	lk := newLook(t)
 	key := "kit.diff:" + id
 	w := fairy.CurrentWindow()
+	s.ensure()
 	if s.reveal >= 0 && w != nil {
 		w.ScrollToRowTop(key, s.reveal)
 		s.reveal = -1
@@ -206,7 +207,7 @@ func (v *view) row(i int) *fairy.El {
 		e = v.line(i)
 	}
 	key := s.keys[i]
-	return e.OnLayout(func(_, h float32) { s.heights[key] = h })
+	return e.OnLayout(func(_, h float32) bool { s.heights[key] = h; return false })
 }
 
 // cell is one side's line in a row: what a half draws.
@@ -552,7 +553,7 @@ func (v *view) fileHeader(f int) *fairy.El {
 		inner.Child(small(file.OldMode+" → "+file.NewMode, l.faint))
 	}
 	inner.Child(fairy.Spacer())
-	adds, dels := file.Additions(), file.Deletions()
+	adds, dels := s.counts[f][0], s.counts[f][1]
 	if adds > 0 {
 		inner.Child(small(fmt.Sprintf("+%d", adds), l.add.count))
 	}

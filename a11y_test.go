@@ -21,8 +21,8 @@ func prepareIDs(e, parent *El, next *uint64) {
 // a11yDump renders what assistive technology sees below id.
 func a11yDump(t *a11yTree, id uint64) string {
 	var parts []string
-	for _, k := range t.kids[id] {
-		e, r := t.el[k], t.role[k]
+	for _, k := range t.kids(id) {
+		e, r := t.info[k].el, t.info[k].role
 		s := fmt.Sprintf("%d:%s", r, e.a11yName(r))
 		if e.disabled() {
 			s += "(disabled)"
@@ -53,7 +53,7 @@ func TestA11yTree(t *testing.T) {
 	)
 	var next uint64
 	prepareIDs(root, nil, &next)
-	tree := buildA11yTree([]*El{root})
+	tree := buildA11yTree(nil, []*El{root})
 
 	want := fmt.Sprintf("%d:Save %d:Settings %d:[%d:Mod %d:Open] %d:Sync %d:Delete(disabled)",
 		RoleButton, RoleButton, RoleGroup, RoleText, RoleButton, RoleCheckBox, RoleButton)

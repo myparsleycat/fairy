@@ -3,7 +3,9 @@
 package text
 
 import (
+	"iter"
 	"math"
+	"sort"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/com"
@@ -123,6 +125,47 @@ type glyphQuad struct {
 	flags  uint8
 }
 
+// glyphBand is the quads one glyph run or decoration recorded, from start to
+// the next band's start. DirectWrite reports runs line by line, then the
+// underlines and strikethroughs line by line, so the bands form a few
+// sequences that each move down the layout. Within each sequence the extents
+// are running bounds, so both grow with the band index even where runs on a
+// line overlap, and DrawRuns can binary-search the bands a clip covers.
+type glyphBand struct {
+	start uint32
+	end   uint32 // on the first band of a sequence, the index of the band after it
+	minY0 int32  // least top of this band and the later ones in its sequence
+	maxY1 int32  // greatest bottom of this band and the earlier ones in its sequence
+}
+
+// visibleQuads yields, in order, the quads of the bands that may reach the
+// rows from top to bottom of the layout; all of them when there are no bands.
+func (l *Layout) visibleQuads(top, bottom float32) iter.Seq[[]glyphQuad] {
+	return func(yield func([]glyphQuad) bool) {
+		if len(l.bands) == 0 {
+			yield(l.quads)
+			return
+		}
+		for first := 0; first < len(l.bands); {
+			last := int(l.bands[first].end)
+			seq := l.bands[first:last]
+			// A pixel of margin keeps rounding from dropping a quad that touches the clip.
+			lo := sort.Search(len(seq), func(i int) bool { return float32(seq[i].maxY1)+1 >= top })
+			hi := sort.Search(len(seq), func(i int) bool { return float32(seq[i].minY0)-1 > bottom })
+			if lo < hi {
+				end := len(l.quads)
+				if first+hi < len(l.bands) {
+					end = int(l.bands[first+hi].start)
+				}
+				if !yield(l.quads[seq[lo].start:end]) {
+					return
+				}
+			}
+			first = last
+		}
+	}
+}
+
 // DrawRuns is Draw with the colors that Run.Color selects (colors[i-1]).
 func (l *Layout) DrawRuns(scene *render.Scene, x, y float32, base [4]float32, colors [][4]float32, clip [4]float32) bool {
 	if l.dl.P == nil || l.n16 == 0 {
@@ -136,30 +179,33 @@ func (l *Layout) DrawRuns(scene *render.Scene, x, y float32, base [4]float32, co
 		ok = l.record()
 	}
 	as := float32(s.atlas.Size())
-	for i := range l.quads {
-		q := &l.quads[i]
-		b := [4]float32{ox + float32(q.x), oy + float32(q.y), float32(q.w), float32(q.h)}
-		if q.kind == render.KindGlyph && (b[0] > clip[0]+clip[2] || b[1] > clip[1]+clip[3] || b[0]+b[2] < clip[0] || b[1]+b[3] < clip[1]) {
-			continue
+	// Quads outside the clip draw nothing, so skipping them leaves the pixels unchanged.
+	for quads := range l.visibleQuads(clip[1]-oy, clip[1]+clip[3]-oy) {
+		for i := range quads {
+			q := &quads[i]
+			b := [4]float32{ox + float32(q.x), oy + float32(q.y), float32(q.w), float32(q.h)}
+			if q.kind == render.KindGlyph && (b[0] > clip[0]+clip[2] || b[1] > clip[1]+clip[3] || b[0]+b[2] < clip[0] || b[1]+b[3] < clip[1]) {
+				continue
+			}
+			color := base
+			if e := int(q.effect); e > 0 && e <= len(colors) {
+				color = colors[e-1]
+			}
+			if q.fixed > 0 {
+				c := l.fixed[q.fixed-1]
+				c[3] *= color[3]
+				color = c
+			}
+			p := render.Prim{Bounds: b, Clip: clip, Color: color, Kind: uint32(q.kind), Flags: uint32(q.flags)}
+			if q.kind == render.KindGlyph {
+				p.UV = [4]float32{float32(q.tx) / as, float32(q.ty) / as, b[2] / as, b[3] / as}
+			}
+			scene.Add(p)
 		}
-		color := base
-		if e := int(q.effect); e > 0 && e <= len(colors) {
-			color = colors[e-1]
-		}
-		if q.fixed > 0 {
-			c := l.fixed[q.fixed-1]
-			c[3] *= color[3]
-			color = c
-		}
-		p := render.Prim{Bounds: b, Clip: clip, Color: color, Kind: uint32(q.kind), Flags: uint32(q.flags)}
-		if q.kind == render.KindGlyph {
-			p.UV = [4]float32{float32(q.tx) / as, float32(q.ty) / as, b[2] / as, b[3] / as}
-		}
-		scene.Add(p)
 	}
 	if !ok {
 		// Glyphs that did not fit in the atlas are missing; record again after it grows.
-		l.quads, l.fixed, l.quadsGen = l.quads[:0], l.fixed[:0], 0
+		l.quads, l.fixed, l.bands, l.quadsGen = l.quads[:0], l.fixed[:0], l.bands[:0], 0
 	}
 	return ok
 }
@@ -168,12 +214,13 @@ func (l *Layout) DrawRuns(scene *render.Scene, x, y float32, base [4]float32, co
 // It returns false when the atlas ran out of space.
 func (l *Layout) record() bool {
 	s := l.sys
-	l.quads, l.fixed = l.quads[:0], l.fixed[:0]
+	l.quads, l.fixed, l.bands = l.quads[:0], l.fixed[:0], l.bands[:0]
 	ok := true
 	dwrite.DrawLayout(l.dl, 0, 0, func(bx, by float32, run *dwrite.GlyphRun, desc *dwrite.GlyphRunDescription, effect unsafe.Pointer) {
 		if run.GlyphCount == 0 {
 			return
 		}
+		defer l.endBand(len(l.quads))
 		q := glyphQuad{effect: uint32(max(dwrite.EffectIndex(effect), 0))}
 		if s.isColorFace(run.FontFace) {
 			if e, err := s.factory.TranslateColorGlyphRun(bx, by, run, desc); err == nil {
@@ -192,6 +239,7 @@ func (l *Layout) record() bool {
 		}
 		ok = s.recordRun(&l.quads, bx, by, run, q) && ok
 	}, func(x, y, width, thickness, offset float32, effect unsafe.Pointer) {
+		defer l.endBand(len(l.quads))
 		l.quads = append(l.quads, glyphQuad{
 			x:      int32(math.Round(float64(x))),
 			y:      int32(math.Round(float64(y + offset))),
@@ -201,8 +249,42 @@ func (l *Layout) record() bool {
 			effect: uint32(max(dwrite.EffectIndex(effect), 0)),
 		})
 	})
+	l.sequenceBands()
 	l.quadsGen = s.atlasGen
 	return ok
+}
+
+// endBand records the quads appended since start as a band.
+func (l *Layout) endBand(start int) {
+	if len(l.quads) == start {
+		return
+	}
+	b := glyphBand{start: uint32(start), minY0: math.MaxInt32, maxY1: math.MinInt32}
+	for _, q := range l.quads[start:] {
+		b.minY0 = min(b.minY0, q.y)
+		b.maxY1 = max(b.maxY1, q.y+int32(q.h))
+	}
+	l.bands = append(l.bands, b)
+}
+
+// sequenceBands splits the bands where one lies wholly above the band before
+// it, and turns each band's extents into running bounds over its sequence.
+func (l *Layout) sequenceBands() {
+	bands := l.bands
+	for first := 0; first < len(bands); {
+		end := first + 1
+		for end < len(bands) && bands[end].maxY1 >= bands[end-1].minY0 {
+			end++
+		}
+		bands[first].end = uint32(end)
+		for i := first + 1; i < end; i++ {
+			bands[i].maxY1 = max(bands[i].maxY1, bands[i-1].maxY1)
+		}
+		for i := end - 2; i >= first; i-- {
+			bands[i].minY0 = min(bands[i].minY0, bands[i+1].minY0)
+		}
+		first = end
+	}
 }
 
 // recordRun appends the glyphs of run, with tmpl's color and flags.

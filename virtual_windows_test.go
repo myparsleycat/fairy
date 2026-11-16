@@ -181,12 +181,21 @@ func TestStickToBottomMeasured(t *testing.T) {
 
 	w.scrollNow(w.root, 0, -30)
 	settle(t, w)
-	y := w.root.state.scrollY
+	shown := map[int]float32{}
+	for i := range count {
+		for _, c := range w.root.children {
+			if top := c.absY - w.root.absY; c.key == strconv.Itoa(i) && top >= 0 && top < 100 {
+				shown[i] = top
+			}
+		}
+	}
 	count = 60
 	w.dirty = true
 	settle(t, w)
-	if got := w.root.state.scrollY; got != y {
-		t.Fatalf("scrolled up: offset moved from %v to %v", y, got)
+	for i, top := range shown {
+		if got, _ := rowSpan(t, w, i); got != top {
+			t.Fatalf("scrolled up: row %d moved from %v to %v", i, top, got)
+		}
 	}
 
 	w.scrollNow(w.root, 0, 1e6)
@@ -291,6 +300,37 @@ func TestVirtualRowsRemoveDepartedDescendants(t *testing.T) {
 				t.Fatalf("scroll %d: current element %d is not indexed", step, id)
 			}
 		}
+	}
+}
+
+// Scrolling a few pixels at a time keeps the rows built with overscan until
+// the view reaches past them, while every row in view stays built.
+func TestVirtualRowsHoldWhileViewInRange(t *testing.T) {
+	calls := 0
+	w := newListWindow(t, func() *El {
+		return VirtualList(10000, 20, func(i int) *El {
+			calls++
+			return Box().H(20).Key(strconv.Itoa(i))
+		})
+	})
+	w.build()
+	w.placeAll()
+	calls = 0
+	for step := range 200 {
+		w.scrollNow(w.root, 0, 1)
+		w.placeAll()
+		y := w.root.state.scrollY
+		for i := int(y / 20); float32(i*20) < y+w.root.node.H; i++ {
+			rowSpan(t, w, i)
+		}
+		if t.Failed() {
+			t.Fatalf("step %d", step)
+		}
+	}
+	// 200px past a 100px view with 50px of overscan on each side needs a
+	// new range about every 50px, of 11 rows each.
+	if calls > 60 {
+		t.Fatalf("built %d rows while scrolling 200px", calls)
 	}
 }
 

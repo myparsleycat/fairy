@@ -3,6 +3,7 @@ package diff
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -93,6 +94,16 @@ type lineKey struct {
 	n    int
 }
 
+// fileSeg is the rows of one file, from its header, with the hunks' first
+// rows and each line's row counted from there. lines is made when asked for.
+type fileSeg struct {
+	rows  []row
+	keys  []string
+	hunks []int
+	lines map[lineKey]int
+	ok    bool
+}
+
 // State is a diff and everything about how it is shown: the app keeps one
 // and View draws it. Its methods run on the UI thread.
 type State struct {
@@ -108,17 +119,21 @@ type State struct {
 	sideLines        [][][2][]int // per file, hunk and side: the hunk index of each of its lines on that side
 	gaps             [][]gap
 	digits           []int
+	counts           [][2]int // per file, the added and removed lines
 	rows             []row
 	keys             []string
-	rowOf            map[lineKey]int
 	fileRows         []int
 	hunkRows         []int
-	rev              uint64
 	scrollY          float32
 	nav              int // the row navigation last put at the top, or -1
 	reveal           int // a row to scroll to the top, or -1
 	hlCache          map[chunkKey]*chunk
 	heights          map[string]float32 // measured row heights by row key
+
+	// segs holds each file's rows; rows, keys, fileRows and hunkRows join
+	// them, made again by ensure once dirty.
+	segs  []fileSeg
+	dirty bool
 }
 
 // NewState returns the state of a diff of files.
@@ -135,8 +150,11 @@ func (s *State) SetFiles(files []FileDiff) {
 	s.sideLines = make([][][2][]int, len(files))
 	s.gaps = make([][]gap, len(files))
 	s.digits = make([]int, len(files))
+	s.counts = make([][2]int, len(files))
+	s.segs = make([]fileSeg, len(files))
 	for f := range files {
 		file := &files[f]
+		s.counts[f] = [2]int{file.Additions(), file.Deletions()}
 		s.ui[f].revealed = make([][2]int, len(file.Hunks)+1)
 		s.sideLines[f] = make([][2][]int, len(file.Hunks))
 		for h := range file.Hunks {
@@ -155,7 +173,7 @@ func (s *State) SetFiles(files []FileDiff) {
 	s.selection = nil
 	s.hlCache = nil
 	s.heights = map[string]float32{}
-	s.rebuild()
+	s.nav, s.dirty = -1, true
 }
 
 // Files returns the files of the diff, in order.
@@ -169,7 +187,9 @@ func (s *State) Mode() Mode { return s.mode }
 func (s *State) SetMode(m Mode) {
 	if s.mode != m {
 		s.mode = m
-		s.rebuild()
+		for f := range s.segs {
+			s.changed(f)
+		}
 	}
 }
 
@@ -180,7 +200,14 @@ func (s *State) Collapsed(file int) bool { return file < len(s.ui) && s.ui[file]
 func (s *State) SetCollapsed(file int, collapsed bool) {
 	if file < len(s.ui) && s.ui[file].collapsed != collapsed {
 		s.ui[file].collapsed = collapsed
-		s.rebuild()
+		s.changed(file)
+	}
+}
+
+// SetAllCollapsed shows only the files' headers, or all their lines again.
+func (s *State) SetAllCollapsed(collapsed bool) {
+	for f := range s.ui {
+		s.SetCollapsed(f, collapsed)
 	}
 }
 
@@ -218,7 +245,7 @@ func (s *State) Expand(file, gap int, how Expand) {
 	default:
 		r[1] += step
 	}
-	s.rebuild()
+	s.changed(file)
 }
 
 // Selection is the selected lines, or nil.
@@ -241,6 +268,7 @@ func (s *State) SelectedText() (string, bool) {
 		return "", false
 	}
 	sel := *s.selection
+	s.ensure()
 	a, b, ok := s.selectedRows(sel)
 	if !ok {
 		return "", false
@@ -256,8 +284,8 @@ func (s *State) SelectedText() (string, bool) {
 }
 
 func (s *State) selectedRows(sel LineRange) (int, int, bool) {
-	a, ok1 := s.rowOf[lineKey{sel.File, sel.Start.Side, sel.Start.Line}]
-	b, ok2 := s.rowOf[lineKey{sel.File, sel.End.Side, sel.End.Line}]
+	a, ok1 := s.rowOf(lineKey{sel.File, sel.Start.Side, sel.Start.Line})
+	b, ok2 := s.rowOf(lineKey{sel.File, sel.End.Side, sel.End.Line})
 	if !ok1 || !ok2 {
 		return 0, 0, false
 	}
@@ -271,6 +299,7 @@ func (s *State) rowSelected(r int, side Side, both bool) bool {
 		return false
 	}
 	sel := *s.selection
+	s.ensure()
 	a, b, ok := s.selectedRows(sel)
 	if !ok || s.rows[r].f != sel.File || r < a || r > b {
 		return false
@@ -334,6 +363,7 @@ func (s *State) VisibleFile() int {
 
 // ScrollToFile scrolls file's header to the top.
 func (s *State) ScrollToFile(file int) {
+	s.ensure()
 	if file < len(s.fileRows) {
 		s.reveal, s.nav = s.fileRows[file], s.fileRows[file]
 	}
@@ -347,7 +377,7 @@ func (s *State) ScrollToLine(file int, at LineRef) {
 	}
 	s.SetCollapsed(file, false)
 	k := lineKey{file, at.Side, at.Line}
-	if _, ok := s.rowOf[k]; !ok {
+	if _, ok := s.rowOf(k); !ok {
 		for i, g := range s.gaps[file] {
 			first := g.old
 			if at.Side == New {
@@ -359,7 +389,7 @@ func (s *State) ScrollToLine(file int, at LineRef) {
 			}
 		}
 	}
-	if r, ok := s.rowOf[k]; ok {
+	if r, ok := s.rowOf(k); ok {
 		s.reveal, s.nav = r, r
 	}
 }
@@ -367,6 +397,7 @@ func (s *State) ScrollToLine(file int, at LineRef) {
 // NextHunk scrolls the next (or previous) hunk to the top. It reports
 // whether there was one.
 func (s *State) NextHunk(forward bool) bool {
+	s.ensure()
 	from := s.position()
 	target := -1
 	if forward {
@@ -412,6 +443,7 @@ func (s *State) NextFile(forward bool) bool {
 // position is the row at the top of the view: where navigation last put
 // it, unless the list has scrolled away since.
 func (s *State) position() int {
+	s.ensure()
 	top := s.rowFrom(0, s.scrollY)
 	if s.nav >= 0 && abs(top-s.nav) <= 3 {
 		return s.nav
@@ -429,6 +461,7 @@ func abs(n int) int {
 // rowFrom is the row reached by moving y pixels down from the top of row
 // from, by the rows' estimated heights.
 func (s *State) rowFrom(from int, y float32) int {
+	s.ensure()
 	if len(s.rows) == 0 {
 		return 0
 	}
@@ -507,23 +540,74 @@ func (s *State) rowLine(r row, side Side) (int, bool) {
 	return n, n > 0
 }
 
-// rebuild lays the rows out again from the files, mode and revealed ranges.
-func (s *State) rebuild() {
-	s.rev++
-	s.nav = -1
-	var rows []row
+// changed marks file's rows to be laid out again from the files, mode and
+// revealed ranges. The rows move, so navigation starts again from the view.
+func (s *State) changed(file int) {
+	s.segs[file].ok = false
+	s.dirty, s.nav = true, -1
+}
+
+// ensure joins the files' rows again after a change, laying out those of
+// the files that changed.
+func (s *State) ensure() {
+	if !s.dirty {
+		return
+	}
+	s.dirty = false
+	n := 0
+	for f := range s.segs {
+		if !s.segs[f].ok {
+			s.layOut(f)
+		}
+		n += len(s.segs[f].rows)
+	}
+	rows, keys := make([]row, 0, n), make([]string, 0, n)
 	s.fileRows, s.hunkRows = s.fileRows[:0], s.hunkRows[:0]
-	for f := range s.files {
-		file := &s.files[f]
+	for f := range s.segs {
+		seg := &s.segs[f]
 		s.fileRows = append(s.fileRows, len(rows))
-		rows = append(rows, row{kind: rowFile, f: f})
-		if s.ui[f].collapsed {
-			continue
+		for _, h := range seg.hunks {
+			s.hunkRows = append(s.hunkRows, len(rows)+h)
 		}
-		if len(file.Hunks) == 0 {
-			rows = append(rows, row{kind: rowNote, f: f})
-			continue
+		rows = append(rows, seg.rows...)
+		keys = append(keys, seg.keys...)
+	}
+	s.rows, s.keys = rows, keys
+}
+
+// rowOf is the row that shows line k.n of file k.f on side k.side.
+func (s *State) rowOf(k lineKey) (int, bool) {
+	s.ensure()
+	if k.f < 0 || k.f >= len(s.segs) {
+		return 0, false
+	}
+	seg := &s.segs[k.f]
+	if seg.lines == nil {
+		seg.lines = make(map[lineKey]int, len(seg.rows))
+		for i, r := range seg.rows {
+			for _, side := range []Side{Old, New} {
+				if n, ok := s.rowLine(r, side); ok {
+					seg.lines[lineKey{r.f, side, n}] = i
+				}
+			}
 		}
+	}
+	i, ok := seg.lines[k]
+	return s.fileRows[k.f] + i, ok
+}
+
+// layOut lays out the rows of file f from its hunks, mode and revealed ranges.
+func (s *State) layOut(f int) {
+	seg := &s.segs[f]
+	file := &s.files[f]
+	rows := seg.rows[:0]
+	seg.hunks = seg.hunks[:0]
+	rows = append(rows, row{kind: rowFile, f: f})
+	switch {
+	case s.ui[f].collapsed:
+	case len(file.Hunks) == 0:
+		rows = append(rows, row{kind: rowNote, f: f})
+	default:
 		for gi := 0; gi <= len(file.Hunks); gi++ {
 			g := s.gaps[f][gi]
 			rev := s.ui[f].revealed[gi]
@@ -543,7 +627,7 @@ func (s *State) rebuild() {
 			if gi == len(file.Hunks) {
 				break
 			}
-			s.hunkRows = append(s.hunkRows, firstRow)
+			seg.hunks = append(seg.hunks, firstRow)
 			lines := file.Hunks[gi].Lines
 			for i := 0; i < len(lines); {
 				if s.mode == Split && lines[i].Kind == Removed {
@@ -573,42 +657,41 @@ func (s *State) rebuild() {
 			}
 		}
 	}
-	s.rows = rows
-	s.keys = make([]string, len(rows))
-	s.rowOf = make(map[lineKey]int, len(rows))
+	seg.rows = rows
+	seg.keys = make([]string, len(rows))
+	var buf []byte
 	for i, r := range rows {
-		s.keys[i] = s.keyOf(r)
-		for _, side := range []Side{Old, New} {
-			if n, ok := s.rowLine(r, side); ok {
-				s.rowOf[lineKey{r.f, side, n}] = i
-			}
-		}
+		buf = s.appendKey(buf[:0], r)
+		seg.keys[i] = string(buf)
 	}
+	seg.lines = nil
+	seg.ok = true
 }
 
-// keyOf is a row's key: the same for an unchanged or removed line in both
-// modes, so switching keeps it.
-func (s *State) keyOf(r row) string {
+// appendKey appends a row's key: the same for an unchanged or removed line
+// in both modes, so switching keeps it.
+func (s *State) appendKey(b []byte, r row) []byte {
+	b = strconv.AppendInt(append(b, "df"...), int64(r.f), 10)
 	switch r.kind {
 	case rowFile:
-		return fmt.Sprintf("df%d", r.f)
+		return b
 	case rowNote:
-		return fmt.Sprintf("df%d.note", r.f)
+		return append(b, ".note"...)
 	case rowGap:
-		return fmt.Sprintf("df%d.g%d", r.f, r.i)
+		return strconv.AppendInt(append(b, ".g"...), int64(r.i), 10)
 	case rowCtx:
-		return fmt.Sprintf("df%d.c%d", r.f, r.old)
+		return strconv.AppendInt(append(b, ".c"...), int64(r.old), 10)
 	case rowPair:
-		return fmt.Sprintf("df%d.o%d", r.f, s.files[r.f].Hunks[r.h].Lines[r.del].Old)
+		return strconv.AppendInt(append(b, ".o"...), int64(s.files[r.f].Hunks[r.h].Lines[r.del].Old), 10)
 	}
 	l := &s.files[r.f].Hunks[r.h].Lines[r.i]
 	switch l.Kind {
 	case Removed:
-		return fmt.Sprintf("df%d.o%d", r.f, l.Old)
+		return strconv.AppendInt(append(b, ".o"...), int64(l.Old), 10)
 	case Added:
-		return fmt.Sprintf("df%d.n%d", r.f, l.New)
+		return strconv.AppendInt(append(b, ".n"...), int64(l.New), 10)
 	}
-	return fmt.Sprintf("df%d.c%d", r.f, l.Old)
+	return strconv.AppendInt(append(b, ".c"...), int64(l.Old), 10)
 }
 
 // gaps are the unchanged ranges before each hunk of f and after its last.

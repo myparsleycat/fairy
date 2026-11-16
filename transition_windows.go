@@ -7,9 +7,20 @@ import (
 
 // collectGhosts keeps elements with an Exit transition drawn after they leave the tree.
 func (w *Window) collectGhosts() {
-	if w.gen <= 1 {
-		return
+	if w.gen > 1 && w.prevExits > 0 {
+		w.collectLeaving()
 	}
+	if w.ghostIn == nil {
+		w.ghostIn = map[uint64]bool{}
+	}
+	clear(w.ghostIn)
+	for _, g := range w.ghosts {
+		w.ghostIn[g.parent] = true
+	}
+}
+
+func (w *Window) collectLeaving() {
+	var staying map[*El]map[*El]uint64
 	for id, old := range w.prevByID {
 		if old.exit == nil || old.culled || w.byID[id] != nil {
 			continue
@@ -26,32 +37,35 @@ func (w *Window) collectGhosts() {
 		}
 		g := newGhost(old)
 		g.parent = parent
-		if old.parent != nil {
-			g.next = nextStayingSibling(old, w.byID)
+		if p := old.parent; p != nil {
+			next, ok := staying[p]
+			if !ok {
+				if staying == nil {
+					staying = map[*El]map[*El]uint64{}
+				}
+				next = nextStaying(p, w.byID)
+				staying[p] = next
+			}
+			g.next = next[old]
 		}
 		g.subs = exitingInside(old, nil)
 		w.ghosts = append(w.ghosts, g)
 	}
-	if w.ghostIn == nil {
-		w.ghostIn = map[uint64]bool{}
-	}
-	clear(w.ghostIn)
-	for _, g := range w.ghosts {
-		w.ghostIn[g.parent] = true
-	}
 }
 
-func nextStayingSibling(e *El, live map[uint64]*El) uint64 {
-	after := false
-	for _, c := range e.parent.children {
-		switch {
-		case c == e:
-			after = true
-		case after && live[c.id] != nil:
-			return c.id
+// nextStaying returns, for each child of p that left the tree, the id of
+// the first later sibling that is still in it.
+func nextStaying(p *El, live map[uint64]*El) map[*El]uint64 {
+	next := map[*El]uint64{}
+	var after uint64
+	for i := len(p.children) - 1; i >= 0; i-- {
+		if c := p.children[i]; live[c.id] != nil {
+			after = c.id
+		} else {
+			next[c] = after
 		}
 	}
-	return 0
+	return next
 }
 
 func newGhost(e *El) *ghost {
@@ -300,14 +314,12 @@ func (e *El) ghostTransform(k float32) {
 	}
 }
 
-// paintGhostsOf draws the exiting children of parent that go just below its
-// live child before, so they keep the stacking order they left in, as the
-// front toast of a stack stays in front while it leaves. A nil before draws
-// those that no live child of parent follows. Inside a parent they keep to
-// the clip its children have now, as a parent that shrinks while they leave
-// would otherwise show them past its edge.
-func (w *Window) paintGhostsOf(parent, before *El, opacity float32, color Color) bool {
-	ok := true
+// ghostSlots sorts the exiting children of parent by where they are drawn:
+// byNext holds those that go just below a live child, by its id, so they
+// keep the stacking order they left in, as the front toast of a stack stays
+// in front while it leaves; last holds those that no live child of parent
+// follows.
+func (w *Window) ghostSlots(parent *El) (byNext map[uint64][]*ghost, last []*ghost) {
 	var id uint64
 	if parent != nil {
 		id = parent.id
@@ -316,13 +328,24 @@ func (w *Window) paintGhostsOf(parent, before *El, opacity float32, color Color)
 		if g.parent != id {
 			continue
 		}
-		if before != nil {
-			if g.next != before.id {
-				continue
+		if n := w.byID[g.next]; g.next != 0 && n != nil && n.parent == parent {
+			if byNext == nil {
+				byNext = map[uint64][]*ghost{}
 			}
-		} else if n := w.byID[g.next]; g.next != 0 && n != nil && n.parent == parent {
-			continue
+			byNext[g.next] = append(byNext[g.next], g)
+		} else {
+			last = append(last, g)
 		}
+	}
+	return byNext, last
+}
+
+// paintGhostsOf draws exiting children of parent. Inside a parent they keep
+// to the clip its children have now, as a parent that shrinks while they
+// leave would otherwise show them past its edge.
+func (w *Window) paintGhostsOf(parent *El, ghosts []*ghost, opacity float32, color Color) bool {
+	ok := true
+	for _, g := range ghosts {
 		start := len(w.scene.Prims)
 		g.el.fade = 1
 		ok = w.paint(g.el, opacity*g.alpha, color) && ok

@@ -74,3 +74,46 @@ func TestMemo(t *testing.T) {
 		t.Fatalf("a key used twice in one build ran build %d times, want once more", builds-n)
 	}
 }
+
+// A reused Memo subtree keeps its laid-out sizes only while it is laid out
+// in the same room with the same inherited text: a narrower window or a
+// larger inherited font size lays it out as a fresh build of it would.
+func TestMemoLaysOutAgainWhenRoomOrTextChanges(t *testing.T) {
+	version, size := 1, float32(14)
+	var label *El
+	w := newListWindow(t, func() *El {
+		return Col(Memo("m", version, func() *El {
+			label = Text("one two three four five six seven eight nine ten eleven twelve")
+			return Col(label)
+		})).FontSize(size)
+	})
+	frame := func() {
+		w.dirty = true
+		for i := 0; i < 3 && w.dirty; i++ {
+			w.build()
+		}
+	}
+	fresh := func() float32 {
+		version++
+		frame()
+		return label.node.H
+	}
+	frame()
+	frame()
+	wide := label.node.H
+
+	w.width = 100
+	frame()
+	got := label.node.H
+	if want := fresh(); got != want || got <= wide {
+		t.Fatalf("reused text in a narrower window is %v tall, want %v (it was %v)", got, want, wide)
+	}
+
+	frame()
+	size = 22
+	frame()
+	got = label.node.H
+	if want := fresh(); got != want {
+		t.Fatalf("reused text after the inherited size grew is %v tall, want %v", got, want)
+	}
+}

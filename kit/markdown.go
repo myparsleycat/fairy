@@ -2,7 +2,7 @@ package kit
 
 import (
 	"fmt"
-	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -401,10 +401,19 @@ func (r *mdRenderer) callout(b mdBlock, depth int) *fairy.El {
 
 type copyState struct{ at time.Time }
 
+// fnv64 is the 64-bit FNV-1a hash of s.
+func fnv64(s string) uint64 {
+	h := uint64(14695981039346656037)
+	for i := 0; i < len(s); i++ {
+		h = (h ^ uint64(s[i])) * 1099511628211
+	}
+	return h
+}
+
 func (r *mdRenderer) code(b mdBlock) *fairy.El {
 	t := r.t
 	spans := []fairy.Span{{Text: b.text}}
-	hs := r.opts.Highlighter.Highlight(b.lang, b.text)
+	hs := r.opts.Highlighter.highlight(b.lang, b.text, !b.open)
 	p := r.opts.Typography
 	plain := p != nil && p.PlainCode
 	if plain {
@@ -450,9 +459,13 @@ func (r *mdRenderer) code(b mdBlock) *fairy.El {
 		head := fairy.Row(fairy.Text(b.lang).FontSize(t.SmallSize).Color(t.MutedForeground).Grow(1)).
 			Align(fairy.Center).H(30).PadEdges(0, 4, 0, 14).BorderEdges(0, 0, 1, 0, t.Border)
 		if f := r.opts.OnCopy; f != nil {
-			h := fnv.New64a()
-			h.Write([]byte(b.text))
-			st := fairy.Local[copyState](fmt.Sprint("kit.md.copy:", h.Sum64()))
+			// An open fence, which may still be growing, is keyed by its
+			// first 256 bytes, which stop changing once it is that long.
+			key := b.text
+			if b.open {
+				key = key[:min(len(key), 256)]
+			}
+			st := fairy.Local[copyState]("kit.md.copy:" + strconv.FormatUint(fnv64(key), 36))
 			label, icon := Messages.Copy, lucide.Copy
 			if time.Since(st.at) < 1500*time.Millisecond {
 				label, icon = Messages.Copied, lucide.Check

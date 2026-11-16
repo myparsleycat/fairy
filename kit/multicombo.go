@@ -39,8 +39,23 @@ func MultiCombobox(id string, values []string, items []Item, onChange func([]str
 		h, radius = 28, t.RadiusMd()
 	}
 	chips := fairy.Row().Wrap().Gap(4).Align(fairy.Center).Grow(1).MinW(0)
+	var labels map[string]string
+	if len(values) > 8 {
+		labels = make(map[string]string, len(items))
+		for _, it := range items {
+			if _, dup := labels[it.Value]; !it.Heading && !dup {
+				labels[it.Value] = it.Label
+			}
+		}
+	}
 	for _, v := range values {
-		label, ok := itemLabel(items, v)
+		var label string
+		var ok bool
+		if labels != nil {
+			label, ok = labels[v]
+		} else {
+			label, ok = itemLabel(items, v)
+		}
 		if !ok {
 			label = v
 		}

@@ -305,10 +305,11 @@ func pick(ds []*mdDoc, back int) *mdDoc {
 // Streaming a document parses each view as parsing it whole would, and the
 // cache keeps one parse for the stream rather than one per view.
 func TestStreamViewDocs(t *testing.T) {
-	saved := mdDocs
-	t.Cleanup(func() { mdDocs = saved })
-	mdDocs = genCache[*mdDoc]{size: 64}
-	doc := strings.Repeat("Some *emphasis* and `code` here,\nthen **more**.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n", 20)
+	saved, savedNormal := mdDocs, mdNormal
+	t.Cleanup(func() { mdDocs, mdNormal = saved, savedNormal })
+	mdDocs, mdNormal = genCache[*mdDoc]{size: 64}, genCache[string]{size: 8}
+	doc := strings.Repeat("Some *emphasis* and `code` here,\nthen **more**.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n", 20) +
+		strings.Repeat("```go\nfunc f() {\n\treturn\n}\n```\n\n", 10)
 	for n := 1; n <= len(doc); n += 3 {
 		d := parseDoc(doc[:n])
 		v := streamView(d)
@@ -322,6 +323,9 @@ func TestStreamViewDocs(t *testing.T) {
 	}
 	if n := len(mdDocs.cur) + len(mdDocs.old); n != 1 {
 		t.Errorf("%d parses cached after streaming one document, want 1", n)
+	}
+	if n := len(mdNormal.cur) + len(mdNormal.old); n != 1 {
+		t.Errorf("%d normalized sources cached after streaming one document, want 1", n)
 	}
 }
 

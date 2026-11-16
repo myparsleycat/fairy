@@ -214,9 +214,19 @@ func clearVariant(v *variant) {
 
 // allocBSTR keeps embedded NULs, which BSTRs allow since they carry a length.
 func allocBSTR(s string) uintptr {
-	u := utf16.Encode([]rune(s))
-	r, _, _ := pSysAllocStringLen.Call(uintptr(unsafe.Pointer(unsafe.SliceData(u))), uintptr(len(u)))
-	return r
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	b, _, _ := pSysAllocStringLen.Call(0, uintptr(n))
+	if b == 0 || n == 0 {
+		return b
+	}
+	u := unsafe.Slice((*uint16)(com.Ptr(b)), n)[:0]
+	for _, r := range s {
+		u = utf16.AppendRune(u, r)
+	}
+	return b
 }
 
 func int32SafeArray(v []int32) uintptr {

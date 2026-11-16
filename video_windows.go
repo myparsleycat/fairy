@@ -22,6 +22,8 @@ type Video struct {
 	err    error
 	resume time.Duration // position to restore after the device is recreated
 	closed bool
+	pacer  videoPacer
+	fresh  bool // the last currentFrame transferred a new frame
 }
 
 // OpenVideo starts loading source, a file path or URL. Errors while loading
@@ -76,6 +78,9 @@ func (v *Video) onEvent(event uint32) {
 		}
 	case mf.EventPlay, mf.EventPlaying:
 		v.state = VideoPlaying
+		v.pacer.next = time.Time{}
+	case mf.EventSeeked:
+		v.pacer.next = time.Time{}
 	case mf.EventPause:
 		if v.state == VideoPlaying {
 			v.state = VideoReady
@@ -147,6 +152,7 @@ func (v *Video) Playing() bool { return v.eng != nil && !v.eng.Paused() && v.sta
 func (v *Video) Seek(d time.Duration) {
 	if v.eng != nil {
 		v.eng.Seek(d.Seconds())
+		v.pacer.next = time.Time{}
 	}
 }
 
@@ -211,6 +217,7 @@ func (v *Video) SetLoop(loop bool) {
 // currentFrame transfers a new frame if one is ready and returns the texture
 // holding the latest frame.
 func (v *Video) currentFrame() *render.Target {
+	v.fresh = false
 	if v.closed {
 		return nil
 	}
@@ -240,10 +247,70 @@ func (v *Video) currentFrame() *render.Target {
 		}
 		v.frame, fresh = t, true
 	}
-	if v.eng.NewFrame() || fresh {
+	pts, ok := v.eng.NewFrame()
+	if ok {
+		v.pacer.frame(pts)
+		v.fresh = true
+	}
+	if ok || fresh {
 		v.eng.Transfer(v.frame.Resource().P, w, h)
 	}
 	return v.frame
+}
+
+const (
+	// videoPollInterval is the longest frame interval polled on every
+	// display refresh. Longer ones, such as 24 and 30 fps, sleep between frames.
+	videoPollInterval = 25 * time.Millisecond
+	// videoWakeEarly is how long before a frame is due the window wakes to
+	// poll for it, covering timer resolution and scheduling delay.
+	videoWakeEarly = 20 * time.Millisecond
+)
+
+// videoPacer estimates a video's frame interval from the presentation times
+// of the frames it shows, to decide when to paint next.
+type videoPacer struct {
+	last     time.Duration // presentation time of the last frame
+	have     bool
+	step     time.Duration // between the last two frames
+	interval time.Duration // 0 while unknown
+	next     time.Time     // when a wake-up is scheduled; zero when polling
+}
+
+func (p *videoPacer) frame(pts int64) {
+	t := time.Duration(pts) * 100
+	// Seeks and loops move backwards or far ahead and say nothing of the rate.
+	if d := t - p.last; p.have && d > 0 && d <= time.Second {
+		// A dropped frame doubles one step, so a longer interval is taken
+		// only once two steps in a row agree on it.
+		if p.interval == 0 || d < p.interval || (d-p.step).Abs() <= time.Millisecond {
+			p.interval = d
+		}
+		p.step = d
+	}
+	p.last, p.have = t, true
+}
+
+// wake returns when to paint next after a paint at now, given whether that
+// paint showed a new frame and the playback position. It reports false to
+// paint on every display refresh instead.
+func (p *videoPacer) wake(now time.Time, fresh bool, pos time.Duration) (time.Time, bool) {
+	if p.interval <= videoPollInterval {
+		p.next = time.Time{}
+		return time.Time{}, false
+	}
+	if fresh {
+		due := min(max(p.last+p.interval-pos, 0), p.interval)
+		p.next = now.Add(max(due-videoWakeEarly, 0))
+		return p.next, true
+	}
+	// Woken early by something else; keep the wake-up. Past it, the frame is
+	// late, so poll until it arrives.
+	if !p.next.IsZero() && now.Before(p.next) {
+		return p.next, true
+	}
+	p.next = time.Time{}
+	return time.Time{}, false
 }
 
 func (w *Window) paintVideo(e *El, box rectF, radii, clip [4]float32, opacity float32) {
@@ -252,8 +319,18 @@ func (w *Window) paintVideo(e *El, box rectF, radii, clip [4]float32, opacity fl
 		return
 	}
 	frame := v.currentFrame()
-	if v.Playing() || v.state == VideoLoading {
+	if v.state == VideoLoading {
 		w.animating = true
+	} else if v.Playing() {
+		var pos time.Duration
+		if v.fresh {
+			pos = v.Position()
+		}
+		if at, ok := v.pacer.wake(w.now(), v.fresh, pos); ok {
+			w.frameAt(at)
+		} else {
+			w.animating = true
+		}
 	}
 	if frame == nil {
 		return

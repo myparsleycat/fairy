@@ -155,7 +155,11 @@ func Table(p TableProps) *fairy.El {
 				OnClick(func() { p.OnSort(i, desc) })
 		}
 		if st != nil {
-			cell.OnLayout(func(w, _ float32) { st.laidOut[i] = w })
+			cell.OnLayout(func(w, _ float32) bool {
+				changed := st.laidOut[i] != w
+				st.laidOut[i] = w
+				return changed
+			})
 			if c.Resizable {
 				cell.Child(resizeHandle(st, p, i, c))
 			}
@@ -232,7 +236,11 @@ func Table(p TableProps) *fairy.El {
 	if ts == nil {
 		return root
 	}
-	body.OnLayout(func(_, h float32) { ts.viewport, ts.rowHeight = h, rh })
+	body.OnLayout(func(_, h float32) bool {
+		changed := ts.viewport != h || ts.rowHeight != rh
+		ts.viewport, ts.rowHeight = h, rh
+		return changed
+	})
 	w := fairy.CurrentWindow()
 	return root.Key("kit.table:"+id).Focusable().FocusVisibleBorder(t.Ring).FocusRing(3, alpha(t.Ring, 0.5)).
 		OnKey(func(ev keyboard.KeyEvent) bool {

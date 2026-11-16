@@ -307,6 +307,12 @@ func (e *El) a11yName(r Role) string {
 		return e.input.placeholder
 	}
 	if r.nameFromContent() {
+		if e.kind == kindText && len(e.children) == 0 && !e.style.Hidden {
+			if s := strings.TrimSpace(e.text); s != "" {
+				return s
+			}
+			return e.tooltip
+		}
 		var b strings.Builder
 		textContent(e, &b)
 		if b.Len() > 0 {
@@ -350,27 +356,55 @@ func textContent(e *El, b *strings.Builder) {
 // a11yTree is the accessibility view of a window: the exposed elements and
 // their exposed parents. ID 0 is the window.
 type a11yTree struct {
-	parent map[uint64]uint64
-	kids   map[uint64][]uint64
-	el     map[uint64]*El
-	role   map[uint64]Role
-	active uint64 // an element marked ActiveDescendant
+	info   map[uint64]*a11yInfo
+	top    []uint64 // the window's exposed children
+	active uint64   // an element marked ActiveDescendant
+	slabs  [][]a11yInfo
+	used   int // entries of slabs handed out by the last build
 }
 
-func buildA11yTree(roots []*El) *a11yTree {
-	t := &a11yTree{
-		parent: map[uint64]uint64{},
-		kids:   map[uint64][]uint64{},
-		el:     map[uint64]*El{},
-		role:   map[uint64]Role{},
+// a11yInfo is one exposed element.
+type a11yInfo struct {
+	parent uint64
+	role   Role
+	el     *El
+	idx    int // position in the parent's kids
+	kids   []uint64
+}
+
+const a11ySlab = 256
+
+// buildA11yTree builds the tree of roots into t, reusing its storage, or into
+// a new tree when t is nil.
+func buildA11yTree(t *a11yTree, roots []*El) *a11yTree {
+	if t == nil {
+		t = &a11yTree{info: map[uint64]*a11yInfo{}}
 	}
+	clear(t.info)
+	t.top, t.active = t.top[:0], 0
+	prev := t.used
+	t.used = 0
 	for _, r := range roots {
-		t.walk(r, 0)
+		t.walk(r, 0, &t.top)
+	}
+	for i := t.used; i < prev; i++ {
+		t.slabs[i/a11ySlab][i%a11ySlab].el = nil
 	}
 	return t
 }
 
-func (t *a11yTree) walk(e *El, parent uint64) {
+func (t *a11yTree) alloc() *a11yInfo {
+	s := t.used / a11ySlab
+	if s == len(t.slabs) {
+		t.slabs = append(t.slabs, make([]a11yInfo, a11ySlab))
+	}
+	n := &t.slabs[s][t.used%a11ySlab]
+	t.used++
+	*n = a11yInfo{kids: n.kids[:0]}
+	return n
+}
+
+func (t *a11yTree) walk(e *El, parent uint64, kids *[]uint64) {
 	if e.style.Hidden {
 		return
 	}
@@ -379,33 +413,43 @@ func (t *a11yTree) walk(e *El, parent uint64) {
 		return
 	}
 	if r != RoleNone {
-		t.parent[e.id] = parent
-		t.kids[parent] = append(t.kids[parent], e.id)
-		t.el[e.id] = e
-		t.role[e.id] = r
+		n := t.alloc()
+		n.parent, n.role, n.el, n.idx = parent, r, e, len(*kids)
+		*kids = append(*kids, e.id)
+		t.info[e.id] = n
 		if e.a11y != nil && e.a11y.active {
 			t.active = e.id
 		}
 		if r.leaf() {
 			return
 		}
-		parent = e.id
+		parent, kids = e.id, &n.kids
 	}
 	for _, c := range e.children {
-		t.walk(c, parent)
+		t.walk(c, parent, kids)
 	}
+}
+
+// kids returns the exposed children of id, the window's for 0.
+func (t *a11yTree) kids(id uint64) []uint64 {
+	if id == 0 {
+		return t.top
+	}
+	if n := t.info[id]; n != nil {
+		return n.kids
+	}
+	return nil
 }
 
 // sibling returns the exposed sibling of id at offset d, or 0.
 func (t *a11yTree) sibling(id uint64, d int) uint64 {
-	kids := t.kids[t.parent[id]]
-	for i, k := range kids {
-		if k == id {
-			if j := i + d; j >= 0 && j < len(kids) {
-				return kids[j]
-			}
-			return 0
-		}
+	n := t.info[id]
+	if n == nil {
+		return 0
+	}
+	kids := t.kids(n.parent)
+	if j := n.idx + d; j >= 0 && j < len(kids) {
+		return kids[j]
 	}
 	return 0
 }
@@ -413,7 +457,7 @@ func (t *a11yTree) sibling(id uint64, d int) uint64 {
 // exposedAncestor returns the nearest exposed element at or above e, or 0.
 func (t *a11yTree) exposedAncestor(e *El) uint64 {
 	for ; e != nil; e = e.parent {
-		if _, ok := t.el[e.id]; ok {
+		if _, ok := t.info[e.id]; ok {
 			return e.id
 		}
 	}

@@ -183,6 +183,11 @@ type editState struct {
 	// zero-width space, kept so that painting an unchanged value does not
 	// copy it again.
 	zwspText string
+	// clusterText and clusterBounds are the value a password field last
+	// masked and its text.Clusters result.
+	clusterText   string
+	clusterBounds []int
+	spellShift    spellShift
 }
 
 // keyProcess is VK_PROCESSKEY: the key press an input method is handling.

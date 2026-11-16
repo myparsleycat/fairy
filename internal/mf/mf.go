@@ -168,10 +168,11 @@ func (e *Engine) VideoSize() (int, int) {
 	return int(w), int(h)
 }
 
-// NewFrame reports whether a frame newer than the last transferred one is ready.
-func (e *Engine) NewFrame() bool {
-	var pts int64
-	return com.HR(e.p, 44, uintptr(unsafe.Pointer(&pts))) == 0
+// NewFrame reports whether a frame newer than the last transferred one is
+// ready, and its presentation time in 100-nanosecond units.
+func (e *Engine) NewFrame() (pts int64, ok bool) {
+	ok = com.HR(e.p, 44, uintptr(unsafe.Pointer(&pts))) == 0
+	return pts, ok
 }
 
 type rect struct{ left, top, right, bottom int32 }

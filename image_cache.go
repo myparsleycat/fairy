@@ -28,7 +28,8 @@ type ImageCache struct {
 	lru      list.List // of *imageEntry, most recently used first
 	evicted  map[imageKey]evictedImage
 	loading  map[imageKey]*imageLoad
-	reusable map[string]map[*imageEntry]struct{}
+	bySrc    map[string]map[*imageEntry]struct{}
+	used     uint64 // counts moves to the front of lru
 	seq      uint64 // numbers loads and direct requests, in order
 	failed   map[imageKey]error
 	failLRU  list.List
@@ -219,6 +220,7 @@ type imageEntry struct {
 	start      uint64      // seq when its load started
 	hit        uint64      // seq of the last request for exactly this key
 	sourceSize image.Point // nonzero for directly decoded, reusable stills
+	used       uint64      // c.used when it last moved to the front of c.lru
 	// direct is false for a blur's source that nothing else asked for. Sized
 	// does not stand it in for another size, as it is often far smaller.
 	direct bool
@@ -293,7 +295,7 @@ func NewImageCache(maxBytes int64, workers int) *ImageCache {
 		entries:  map[imageKey]*list.Element{},
 		evicted:  map[imageKey]evictedImage{},
 		loading:  map[imageKey]*imageLoad{},
-		reusable: map[string]map[*imageEntry]struct{}{},
+		bySrc:    map[string]map[*imageEntry]struct{}{},
 		failed:   map[imageKey]error{},
 		failKeys: map[imageKey]*list.Element{},
 		latest:   map[string]imageKey{},
@@ -362,7 +364,7 @@ func (c *ImageCache) Sized(src string, w, h float32, fit Fit, read func() ([]byt
 	}
 	if k, ok := c.latest[src]; ok {
 		el := c.entries[k]
-		c.lru.MoveToFront(el)
+		c.touch(el)
 		return el.Value.(*imageEntry).img
 	}
 	return nil
@@ -408,7 +410,7 @@ func (c *ImageCache) requestAs(k imageKey, read func() ([]byte, error), direct b
 	c.resolveBudget()
 	c.seq++
 	if el, ok := c.entries[k]; ok {
-		c.lru.MoveToFront(el)
+		c.touch(el)
 		e := el.Value.(*imageEntry)
 		e.hit = c.seq
 		if direct && !e.direct {
@@ -458,11 +460,9 @@ func (c *ImageCache) Err(src string, maxW, maxH int) error {
 func (c *ImageCache) Forget(src string) {
 	c.mu.Lock()
 	removed := false
-	for k, el := range c.entries {
-		if k.src == src {
-			c.remove(el)
-			removed = true
-		}
+	for e := range c.bySrc[src] {
+		c.remove(c.entries[e.key])
+		removed = true
 	}
 	for k := range c.evicted {
 		if k.src == src {
@@ -486,30 +486,38 @@ func (c *ImageCache) Forget(src string) {
 	}
 }
 
+// touch moves el to the front of the LRU list. c.mu is held.
+func (c *ImageCache) touch(el *list.Element) {
+	c.lru.MoveToFront(el)
+	c.used++
+	el.Value.(*imageEntry).used = c.used
+}
+
 func (c *ImageCache) remove(el *list.Element) {
 	e := c.lru.Remove(el).(*imageEntry)
 	delete(c.entries, e.key)
-	if e.sourceSize != (image.Point{}) {
-		stills := c.reusable[e.key.src]
-		delete(stills, e)
-		if len(stills) == 0 {
-			delete(c.reusable, e.key.src)
-		}
+	same := c.bySrc[e.key.src]
+	delete(same, e)
+	if len(same) == 0 {
+		delete(c.bySrc, e.key.src)
 	}
 	if c.latest[e.key.src] == e.key {
 		delete(c.latest, e.key.src)
-		for cur := c.lru.Front(); cur != nil; cur = cur.Next() {
-			other := cur.Value.(*imageEntry)
-			if other.key.src == e.key.src && other.key.sigma == 0 && other.direct {
-				c.latest[e.key.src] = other.key
-				break
+		var recent *imageEntry
+		for other := range same {
+			if other.key.sigma == 0 && other.direct && (recent == nil || other.used > recent.used) {
+				recent = other
 			}
+		}
+		if recent != nil {
+			c.latest[e.key.src] = recent.key
 		}
 	}
 	c.bytes -= e.img.data.ByteSize()
 	e.img.retired.Store(true)
 	c.evicted[e.key] = evictedImage{img: weak.Make(e.img), sourceSize: e.sourceSize, direct: e.direct}
-	if len(c.evicted) > maxImageEntries {
+	// Pruning only at twice the limit keeps the cost per removal constant.
+	if len(c.evicted) >= 2*maxImageEntries {
 		maps.DeleteFunc(c.evicted, func(_ imageKey, ev evictedImage) bool { return ev.img.Value() == nil })
 		for k := range c.evicted {
 			if len(c.evicted) <= maxImageEntries {
@@ -579,9 +587,9 @@ func (c *ImageCache) pruneSizes(k imageKey) {
 	removed := false
 	if el, ok := c.entries[k]; ok {
 		since := el.Value.(*imageEntry).start
-		for k2, el2 := range c.entries {
-			if k2.src == k.src && k2.sigma == k.sigma && k2 != k && !k2.lazy() && el2.Value.(*imageEntry).hit < since {
-				c.remove(el2)
+		for e := range c.bySrc[k.src] {
+			if e.key.sigma == k.sigma && e.key != k && !e.key.lazy() && e.hit < since {
+				c.remove(c.entries[e.key])
 				removed = true
 			}
 		}
@@ -638,14 +646,14 @@ func (c *ImageCache) insert(e *imageEntry) {
 	}
 	delete(c.evicted, e.key)
 	c.entries[e.key] = c.lru.PushFront(e)
-	if e.sourceSize != (image.Point{}) {
-		stills := c.reusable[e.key.src]
-		if stills == nil {
-			stills = make(map[*imageEntry]struct{})
-			c.reusable[e.key.src] = stills
-		}
-		stills[e] = struct{}{}
+	c.used++
+	e.used = c.used
+	same := c.bySrc[e.key.src]
+	if same == nil {
+		same = make(map[*imageEntry]struct{})
+		c.bySrc[e.key.src] = same
 	}
+	same[e] = struct{}{}
 	if e.key.sigma == 0 && e.direct {
 		c.latest[e.key.src] = e.key
 	}
@@ -763,7 +771,10 @@ func (c *ImageCache) decodeFit(k imageKey, p *imageLoad, read func() ([]byte, er
 
 func (c *ImageCache) reuseCandidate(k imageKey) (candidate *Image, dw, dh int) {
 	var best *imageEntry
-	for e := range c.reusable[k.src] {
+	for e := range c.bySrc[k.src] {
+		if e.sourceSize == (image.Point{}) {
+			continue
+		}
 		w, h := k.Bound.Size(e.sourceSize.X, e.sourceSize.Y)
 		if e.img.data.W < w || e.img.data.H < h || e.img.data.W == w && e.img.data.H == h {
 			continue

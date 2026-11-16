@@ -226,7 +226,7 @@ type El struct {
 	onBlur        func()
 	onScroll      func(x, y float32)
 	onScrollEdges func(top, bottom bool)
-	onLayout      func(w, h float32)
+	onLayout      func(w, h float32) bool
 	focusable     bool
 	focus         focusProps
 	dragRegion    bool
@@ -772,9 +772,11 @@ func (e *El) OnScroll(f func(x, y float32)) *El { e.onScroll = f; return e }
 func (e *El) OnScrollEdges(f func(top, bottom bool)) *El { e.onScrollEdges = f; return e }
 
 // OnLayout reports the element's laid-out size when it is first placed and
-// whenever it changes, as for a table that records its column widths.
-// Changes f makes to state appear on the next build.
-func (e *El) OnLayout(f func(w, h float32)) *El { e.onLayout = f; return e }
+// whenever it changes, as for a table that records its column widths. f
+// returns whether the view shows something that depends on the size; the
+// view is then built again before the frame is drawn. Otherwise changes f
+// makes to state appear on the next build.
+func (e *El) OnLayout(f func(w, h float32) bool) *El { e.onLayout = f; return e }
 
 // Focusable lets the element take keyboard focus by click or Tab.
 func (e *El) Focusable() *El { e.focusable = true; return e }

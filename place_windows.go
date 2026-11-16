@@ -95,7 +95,8 @@ func (w *Window) placeAll() {
 		return
 	}
 	wr := w.windowRect()
-	if w.growing {
+	if w.growing && (w.growStale || w.grew) {
+		w.growStale, w.grew = false, false
 		w.growPass(w.root)
 		for _, l := range w.layers {
 			w.growPass(l.root)
@@ -273,6 +274,9 @@ func (w *Window) growPass(e *El) float32 {
 	}
 	n.H += e.grow.dh
 	n.ContentH += e.grow.ch
+	if e.grow.dh != 0 || e.grow.ch != 0 || e.grow.clip || shift != 0 {
+		w.grew = true
+	}
 	return e.grow.dh
 }
 
@@ -423,10 +427,9 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	e.clipR = clip
 	if e.onLayout != nil && (n.W != s.layoutW || n.H != s.layoutH || !s.laidOut) {
 		s.layoutW, s.layoutH, s.laidOut = n.W, n.H, true
-		e.onLayout(n.W, n.H)
-		// The view may depend on the reported size, as the toasts do on
-		// their heights, so it is built again within this frame.
-		w.markDirty(dirtyLayout)
+		if e.onLayout(n.W, n.H) {
+			w.markDirty(dirtyLayout)
+		}
 	}
 	h := hit{el: e, x: r.x, y: r.y, w: r.w, h: r.h, clip: clip, radii: e.radii}
 	if !e.xf.identity() {

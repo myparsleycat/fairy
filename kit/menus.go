@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
@@ -121,7 +122,11 @@ func popupPanel(large bool, children ...*fairy.El) *fairy.El {
 
 // trackWidth records the width of trigger in st, for a popup at least as wide.
 func trackWidth(st *popupState, trigger *fairy.El) {
-	trigger.OnLayout(func(w, _ float32) { st.anchorW = w })
+	trigger.OnLayout(func(w, _ float32) bool {
+		changed := st.anchorW != w
+		st.anchorW = w
+		return changed
+	})
 }
 
 type menuRowState struct {
@@ -893,7 +898,7 @@ func Combobox(id, value string, items []Item, onChange func(string), opts ...Opt
 func comboMatches(items []Item, query string) (matching, enabled []Item) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	for _, it := range items {
-		if it.Heading || q != "" && !strings.Contains(strings.ToLower(it.Label), q) {
+		if it.Heading || q != "" && !containsLower(it.Label, q) {
 			continue
 		}
 		matching = append(matching, it)
@@ -902,6 +907,33 @@ func comboMatches(items []Item, query string) (matching, enabled []Item) {
 		}
 	}
 	return matching, enabled
+}
+
+// containsLower reports whether strings.ToLower(s) contains q, without
+// lowering s when it is ASCII.
+func containsLower(s, q string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return strings.Contains(strings.ToLower(s), q)
+		}
+	}
+	for i := 0; i+len(q) <= len(s); i++ {
+		j := 0
+		for j < len(q) {
+			c := s[i+j]
+			if 'A' <= c && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != q[j] {
+				break
+			}
+			j++
+		}
+		if j == len(q) {
+			return true
+		}
+	}
+	return false
 }
 
 // comboPanel lists matching, the disabled items grayed out and skipped by the

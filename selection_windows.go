@@ -33,8 +33,12 @@ type selPos struct {
 type textSelection struct {
 	scope         uint64
 	anchor, focus selPos
-	order         map[uint64]int // text element id to its index in tree order, for the current paint
-	orderTreeVer  int
+	// texts are the scope's text elements in tree order and order maps their
+	// ids to their index, both for the tree of treeVer.
+	texts   []*El
+	order   map[uint64]int
+	treeVer int
+	cached  bool
 }
 
 // selectableScope returns the nearest Selectable element containing e.
@@ -47,20 +51,38 @@ func selectableScope(e *El) *El {
 	return nil
 }
 
-// selTexts lists the text elements of a selectable scope in tree order.
-func selTexts(scope *El) []*El {
-	var out []*El
-	var walk func(*El)
-	walk = func(e *El) {
-		if e.kind == kindText && e.text != "" {
-			out = append(out, e)
-		}
-		for _, c := range e.children {
-			walk(c)
+// appendTexts appends the text elements of e's subtree in tree order.
+func appendTexts(out []*El, e *El) []*El {
+	if e.kind == kindText && e.text != "" {
+		out = append(out, e)
+	}
+	for _, c := range e.children {
+		out = appendTexts(out, c)
+	}
+	return out
+}
+
+// selTexts returns the text elements of the selection's scope in tree order,
+// or nil when the scope left the tree.
+func (w *Window) selTexts() []*El {
+	s := w.sel
+	if s.cached && s.treeVer == w.treeVer {
+		return s.texts
+	}
+	clear(s.texts)
+	s.texts = s.texts[:0]
+	if s.order == nil {
+		s.order = map[uint64]int{}
+	}
+	clear(s.order)
+	if scope := w.byID[s.scope]; scope != nil {
+		s.texts = appendTexts(s.texts, scope)
+		for i, t := range s.texts {
+			s.order[t.id] = i
 		}
 	}
-	walk(scope)
-	return out
+	s.cached, s.treeVer = true, w.treeVer
+	return s.texts
 }
 
 // textLayout returns a text element's layout and the device-pixel origin it
@@ -131,18 +153,22 @@ func (w *Window) pressSelection(top *El, x, y float32, clicks int) bool {
 		}
 		return false
 	}
-	texts := selTexts(scope)
-	pos, ok := w.selPosAt(texts, x, y)
+	extend := clicks == 1 && w.mods()&keyboard.ModShift != 0 && w.sel != nil && w.sel.scope == scope.id
+	if !extend {
+		w.sel = &textSelection{scope: scope.id}
+	}
+	pos, ok := w.selPosAt(w.selTexts(), x, y)
 	if !ok {
 		w.sel = nil
 		return true
 	}
-	if clicks == 1 && w.mods()&keyboard.ModShift != 0 && w.sel != nil && w.sel.scope == scope.id {
+	if extend {
 		w.sel.focus = pos
 		w.invalidate()
 		return true
 	}
-	sel := &textSelection{scope: scope.id, anchor: pos, focus: pos}
+	sel := w.sel
+	sel.anchor, sel.focus = pos, pos
 	if e := w.byID[pos.el]; e != nil {
 		switch {
 		case clicks == 2:
@@ -152,7 +178,6 @@ func (w *Window) pressSelection(top *El, x, y float32, clicks int) bool {
 			sel.anchor.off, sel.focus.off = 0, len(e.text)
 		}
 	}
-	w.sel = sel
 	w.invalidate()
 	return true
 }
@@ -162,31 +187,17 @@ func (w *Window) dragSelection(x, y float32) {
 	if w.sel == nil {
 		return
 	}
-	scope := w.byID[w.sel.scope]
-	if scope == nil {
-		return
-	}
-	if pos, ok := w.selPosAt(selTexts(scope), x, y); ok && pos != w.sel.focus {
+	if pos, ok := w.selPosAt(w.selTexts(), x, y); ok && pos != w.sel.focus {
 		w.sel.focus = pos
 		w.invalidate()
 	}
 }
 
 // selOrder returns the tree-order index of each text in the selection's
-// scope, recomputed when the tree may have changed shape.
+// scope.
 func (w *Window) selOrder() map[uint64]int {
-	s := w.sel
-	if s.order != nil && s.orderTreeVer == w.treeVer {
-		return s.order
-	}
-	s.order = map[uint64]int{}
-	s.orderTreeVer = w.treeVer
-	if scope := w.byID[s.scope]; scope != nil {
-		for i, t := range selTexts(scope) {
-			s.order[t.id] = i
-		}
-	}
-	return s.order
+	w.selTexts()
+	return w.sel.order
 }
 
 // selRange returns the byte range of text element e inside the selection.
@@ -242,12 +253,8 @@ func (w *Window) SelectedText() string {
 	if w.sel == nil {
 		return ""
 	}
-	scope := w.byID[w.sel.scope]
-	if scope == nil {
-		return ""
-	}
 	var parts []string
-	for _, t := range selTexts(scope) {
+	for _, t := range w.selTexts() {
 		if a, b, ok := w.selRange(t); ok {
 			parts = append(parts, t.text[a:b])
 		}
@@ -261,13 +268,9 @@ func (w *Window) selectedHTML() string {
 	if w.sel == nil {
 		return ""
 	}
-	scope := w.byID[w.sel.scope]
-	if scope == nil {
-		return ""
-	}
 	var sb strings.Builder
 	styled := false
-	for _, t := range selTexts(scope) {
+	for _, t := range w.selTexts() {
 		a, b, ok := w.selRange(t)
 		if !ok {
 			continue
@@ -311,11 +314,7 @@ func (w *Window) selectionKey(ev keyboard.KeyEvent) bool {
 			return true
 		}
 	case keyboard.KeyA:
-		scope := w.byID[w.sel.scope]
-		if scope == nil {
-			return false
-		}
-		texts := selTexts(scope)
+		texts := w.selTexts()
 		if len(texts) == 0 {
 			return false
 		}

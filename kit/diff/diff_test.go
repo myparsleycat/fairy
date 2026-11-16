@@ -245,6 +245,7 @@ func TestWordChanges(t *testing.T) {
 }
 
 func shown(s *State) []string {
+	s.ensure()
 	var out []string
 	for _, r := range s.rows {
 		switch r.kind {
@@ -287,6 +288,7 @@ func TestRangesExpandByTwentyAndAll(t *testing.T) {
 	}
 	s.Expand(0, 1, ExpandAll)
 	s.Expand(0, 0, ExpandAll)
+	s.ensure()
 	if len(s.rows) != 1+101 {
 		t.Fatalf("%d rows after expanding all, want 102", len(s.rows))
 	}

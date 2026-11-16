@@ -7,7 +7,12 @@ import "github.com/myparsleycat/fairy/internal/text"
 // family names found in the file. Register fonts before opening windows; open
 // windows use them from their next update.
 func RegisterFont(data []byte) ([]string, error) {
-	return text.RegisterFont(data)
+	names, err := text.RegisterFont(data)
+	if err == nil {
+		// Memoized views keep their laid-out text sizes.
+		InvalidateMemos()
+	}
+	return names, err
 }
 
 // SetFontFallback makes text try these installed families, in order, for
@@ -17,4 +22,5 @@ func RegisterFont(data []byte) ([]string, error) {
 // that are not installed are skipped; no families restores the system fallback.
 func SetFontFallback(families ...string) {
 	text.SetFallbackFamilies(families)
+	InvalidateMemos()
 }

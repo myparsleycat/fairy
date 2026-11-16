@@ -98,7 +98,11 @@ func Tree[T any](id string, m *TreeModel[T], p TreeProps[T]) *fairy.El {
 		}
 		return row
 	}).Key(listKey).Grow(1).MinH(0).
-		OnLayout(func(_, h float32) { m.viewport, m.rowHeight = h, rh })
+		OnLayout(func(_, h float32) bool {
+			changed := m.viewport != h || m.rowHeight != rh
+			m.viewport, m.rowHeight = h, rh
+			return changed
+		})
 	root := fairy.Col(rows).Key("kit.tree.root:" + id).Focusable().Role(fairy.RoleTree).MinH(0).
 		FontSize(t.FontSize).
 		OnKey(func(ev keyboard.KeyEvent) bool {

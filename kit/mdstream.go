@@ -1,6 +1,7 @@
 package kit
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -9,8 +10,11 @@ import (
 // mdDoc is a parsed source with the line each top-level block starts on.
 type mdDoc struct {
 	src    string // with CRLF and tabs normalized
+	raw    string // the source before normalizing, when normalizing changed it
 	blocks []mdBlock
 	starts []int
+	offs   []int // where in src each block's first line starts
+	lines  int   // the number of newlines in src
 	// view is the parse of the latest stream view of src, or of an earlier
 	// version's. It stays here, not in mdDocs, so views do not pile up there.
 	view *mdDoc
@@ -31,27 +35,38 @@ func completeLen(src string) int { return strings.LastIndexByte(src, '\n') + 1 }
 // (completeLen) must begin src. A block ends where a later line ends it, so
 // the blocks before the one that holds prev's last complete line, or before
 // the last line block that starts by then, end where they did; the parse
-// starts again at that block.
-// Reuse avoids parsing stable blocks, but counting source lines and copying
-// the block index still cost O(N) per update for N source bytes.
+// starts again at that block, or within it at its last list item or table
+// row that starts by then, since those before it end where they did too.
+// Copying the block index still costs O(blocks) per update.
 func parseFrom(prev *mdDoc, src string) *mdDoc {
-	keep, from := 0, 0
-	if prev != nil {
-		last := strings.Count(prev.src, "\n") - 1
-		for j := len(prev.starts) - 1; j >= 0; j-- {
-			if prev.starts[j] <= last {
-				keep = j
-				break
-			}
-		}
-		for keep > 0 && prev.starts[keep-1] == prev.starts[keep] {
-			keep--
-		}
-		if keep > 0 {
-			from = prev.starts[keep]
+	d := &mdDoc{src: src}
+	if prev == nil {
+		d.lines = strings.Count(src, "\n")
+		bs, st := parseBlocksAt(strings.Split(src, "\n"))
+		d.add(bs, st, lineOffsets(src, st), 0, 0)
+		return d
+	}
+	d.lines = prev.lines + strings.Count(src[completeLen(prev.src):], "\n")
+	last := prev.lines - 1
+	keep := 0
+	for j := len(prev.starts) - 1; j >= 0; j-- {
+		if prev.starts[j] <= last {
+			keep = j
+			break
 		}
 	}
-	tail := src[lineStart(src, from):]
+	for keep > 0 && prev.starts[keep-1] == prev.starts[keep] {
+		keep--
+	}
+	if keep < len(prev.blocks) && d.resume(prev, keep, last) {
+		return d
+	}
+	from, off := 0, 0
+	if keep > 0 {
+		from, off = prev.starts[keep], prev.offs[keep]
+		d.keep(prev, keep)
+	}
+	tail := src[off:]
 	if keep > 0 {
 		// Block text points into the source it was parsed from, and kept
 		// blocks pass on to every later parse, so parsing src itself would
@@ -60,33 +75,96 @@ func parseFrom(prev *mdDoc, src string) *mdDoc {
 		tail = strings.Clone(tail)
 	}
 	bs, st := parseBlocksAt(strings.Split(tail, "\n"))
-	d := &mdDoc{
-		src:    src,
-		blocks: make([]mdBlock, 0, keep+len(bs)),
-		starts: make([]int, 0, keep+len(st)),
-	}
-	if keep > 0 {
-		d.blocks = append(d.blocks, prev.blocks[:keep]...)
-		d.starts = append(d.starts, prev.starts[:keep]...)
-	}
-	d.blocks = append(d.blocks, bs...)
-	for _, s := range st {
-		d.starts = append(d.starts, s+from)
-	}
+	d.add(bs, st, lineOffsets(tail, st), from, off)
 	return d
 }
 
-// lineStart returns where line n of src starts. src has more than n lines.
-func lineStart(src string, n int) int {
-	off := 0
-	for range n {
-		i := strings.IndexByte(src[off:], '\n')
-		if i < 0 {
-			panic("kit: markdown parse base is not a prefix of the source")
+// resume parses d.src again from within prev's block keep, a list or a
+// table, at its last item or row after the first that starts by line last.
+// It reports whether it did.
+func (d *mdDoc) resume(prev *mdDoc, keep, last int) bool {
+	b := &prev.blocks[keep]
+	at := last - prev.starts[keep]
+	var k, rel int
+	switch b.kind {
+	case mdList:
+		k, _ = slices.BinarySearchFunc(b.items, at+1, func(it mdItem, l int) int { return it.line - l })
+		k--
+		if k >= 1 {
+			rel = b.items[k].line
 		}
-		off += i + 1
+	case mdTable:
+		k = min(at-2, len(b.rows)-1)
+		rel = 2 + k
 	}
-	return off
+	if k < 1 {
+		return false
+	}
+	off := prev.offs[keep]
+	for range rel {
+		off += strings.IndexByte(d.src[off:], '\n') + 1
+	}
+	tail := strings.Clone(d.src[off:])
+	lines := strings.Split(tail, "\n")
+	merged := *b
+	var bs []mdBlock
+	var st []int
+	if b.kind == mdList {
+		bs, st = parseBlocksAt(lines)
+		if len(bs) == 0 || st[0] != 0 || bs[0].kind != mdList || bs[0].ordered != b.ordered || bs[0].char != b.char {
+			return false
+		}
+		merged.items = append(b.items[:k:k], bs[0].items...)
+		for i := range merged.items[k:] {
+			merged.items[k+i].line += rel
+		}
+		bs, st = bs[1:], st[1:]
+	} else {
+		merged.rows = b.rows[:k:k]
+		i, fallback := tableRows(&merged, lines, 0)
+		if fallback {
+			return false
+		}
+		bs, st = parseBlocksAt(lines[i:])
+		for j := range st {
+			st[j] += i
+		}
+	}
+	d.keep(prev, keep)
+	d.add([]mdBlock{merged}, []int{0}, []int{0}, prev.starts[keep], prev.offs[keep])
+	d.add(bs, st, lineOffsets(tail, st), prev.starts[keep]+rel, off)
+	return true
+}
+
+// keep takes prev's first n blocks, leaving room for the few a stream adds.
+func (d *mdDoc) keep(prev *mdDoc, n int) {
+	room := n + 8
+	d.blocks = append(make([]mdBlock, 0, room), prev.blocks[:n]...)
+	d.starts = append(make([]int, 0, room), prev.starts[:n]...)
+	d.offs = append(make([]int, 0, room), prev.offs[:n]...)
+}
+
+// add appends blocks whose first lines are starts and start at offs within
+// a part of the source that begins on line from, at offset off.
+func (d *mdDoc) add(bs []mdBlock, starts, offs []int, from, off int) {
+	d.blocks = append(d.blocks, bs...)
+	for i, s := range starts {
+		d.starts = append(d.starts, s+from)
+		d.offs = append(d.offs, offs[i]+off)
+	}
+}
+
+// lineOffsets returns where in src each of the ascending line numbers starts.
+func lineOffsets(src string, lines []int) []int {
+	offs := make([]int, len(lines))
+	line, off := 0, 0
+	for i, n := range lines {
+		for ; line < n; line++ {
+			off += strings.IndexByte(src[off:], '\n') + 1
+		}
+		offs[i] = off
+	}
+	return offs
 }
 
 // genCache keeps recent entries in two generations: when the current one
@@ -135,20 +213,33 @@ func (c *genCache[V]) each(f func(V)) {
 }
 
 var (
-	mdDocs  = genCache[*mdDoc]{size: 64}
-	mdSpans = genCache[[]mdSpan]{size: 1024}
+	mdDocs   = genCache[*mdDoc]{size: 64}
+	mdNormal = genCache[string]{size: 8} // normalized sources by the source
+	mdSpans  = genCache[[]mdSpan]{size: 1024}
 )
 
 // parseDoc returns the parse of src, from the cache or by extending the
 // cached parse that shares the most complete lines with it. A source that
 // grew (streamed text) replaces its earlier version in the cache.
 func parseDoc(src string) *mdDoc {
-	src = normalizeMarkdown(src)
+	// Most sources need no normalizing, and those that do are found by the
+	// copy normalizing made before, so a cached parse costs no copy.
+	if d, ok := mdDocs.get(src); ok {
+		return d
+	}
+	raw := ""
+	if n, ok := mdNormal.get(src); ok {
+		raw, src = src, n
+	} else if n := normalizeMarkdown(src); n != src {
+		mdNormal.put(src, n)
+		raw, src = src, n
+	}
 	if d, ok := mdDocs.get(src); ok {
 		return d
 	}
 	best := bestBase(src, nil)
 	d := parseFrom(best, src)
+	d.raw = raw
 	if best != nil {
 		// The earlier version's view is where the next view extends from.
 		d.view = best.view
@@ -158,6 +249,9 @@ func parseDoc(src string) *mdDoc {
 	mdDocs.each(func(c *mdDoc) {
 		if (c == best || completeLen(c.src) == 0) && strings.HasPrefix(src, c.src) {
 			mdDocs.drop(c.src)
+			if c.raw != "" {
+				mdNormal.drop(c.raw)
+			}
 		}
 	})
 	mdDocs.put(src, d)

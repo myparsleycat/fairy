@@ -174,23 +174,53 @@ func (r *rowHeights) sync(v *virtualList) {
 		}
 	}
 	if !same {
-		old := make(map[string]float32, len(r.keys))
-		for i, k := range r.keys {
-			if i < len(r.h) && r.h[i] >= 0 {
-				old[k] = r.h[i]
-			}
-		}
-		h := resizeHeights(r.h[:0], v.count)
-		for i, k := range keys {
-			if m, ok := old[k]; ok {
-				h[i] = m
-			}
-		}
-		r.h = h
+		r.h = matchHeights(r.keys, keys, r.h)
 		r.stale = true
 		r.snapShown()
 	}
 	r.keys, r.spare = keys, r.keys
+}
+
+// matchHeights returns the heights of rows keyed by keys, taking each from
+// the row of oldKeys with the same key. Rows added or removed at one place,
+// as appending messages does, leave the keys before and after it in order,
+// so only the rows between are looked up by key.
+func matchHeights(oldKeys, keys []string, oldH []float32) []float32 {
+	oldKeys = oldKeys[:min(len(oldKeys), len(oldH))]
+	n, m := len(keys), len(oldKeys)
+	p := 0
+	for p < n && p < m && keys[p] == oldKeys[p] {
+		p++
+	}
+	s := 0
+	for s < n-p && s < m-p && keys[n-1-s] == oldKeys[m-1-s] {
+		s++
+	}
+	if s == 0 && p == m {
+		return resizeHeights(oldH[:m], n)
+	}
+	h := make([]float32, n)
+	copy(h, oldH[:p])
+	copy(h[n-s:], oldH[m-s:m])
+	mid := h[p : n-s]
+	for i := range mid {
+		mid[i] = -1
+	}
+	if len(mid) == 0 || m-s == p {
+		return h
+	}
+	old := make(map[string]float32, m-s-p)
+	for i := p; i < m-s; i++ {
+		if oldH[i] >= 0 {
+			old[oldKeys[i]] = oldH[i]
+		}
+	}
+	for i, k := range keys[p : n-s] {
+		if v, ok := old[k]; ok {
+			mid[i] = v
+		}
+	}
+	return h
 }
 
 // snapShown drops any height animation, showing the measured heights.

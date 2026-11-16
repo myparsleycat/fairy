@@ -65,3 +65,29 @@ func BenchmarkMarkdownStreamUpdate(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMarkdownStream streams about 30 KB in 24-byte chunks through the
+// parse a streaming Markdown does on each update.
+func BenchmarkMarkdownStream(b *testing.B) {
+	docs := map[string]string{
+		"paragraphs": strings.Repeat("Some text with *emphasis* and `code` in a paragraph.\n\n", 560),
+		"list":       strings.Repeat("- an item with *emphasis* and `code` in it\n", 700),
+		"table":      "| a | b | c |\n|---|---|---|\n" + strings.Repeat("| one | *two* | `three` |\n", 1200),
+		"code":       "```go\n" + strings.Repeat("func f(x int) int { return x * 2 } // note\n", 700),
+	}
+	for name, doc := range docs {
+		b.Run(name, func(b *testing.B) {
+			saved := mdDocs
+			b.Cleanup(func() { mdDocs = saved })
+			for b.Loop() {
+				mdDocs = genCache[*mdDoc]{size: 64}
+				for n := 24; n < len(doc)+24; n += 24 {
+					d := parseDoc(doc[:min(n, len(doc))])
+					if v := streamView(d); v != d.src {
+						viewDoc(d, v)
+					}
+				}
+			}
+		})
+	}
+}

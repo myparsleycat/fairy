@@ -131,19 +131,40 @@ type Node struct {
 	// ContentW and ContentH cover the children's extent plus padding, for scrolling.
 	ContentW, ContentH float32
 
-	cache    [4]cacheEntry
-	cacheN   int
-	cacheGen uint32
+	// Keep tells that the node, its subtree, their styles and what Measure
+	// returns are as they were when the node was last laid out, so sizes
+	// found in earlier passes still hold: a pass that would lay the node
+	// out at the same size as last time leaves its subtree as it is.
+	Keep bool
+	// The constraints the node was last laid out at.
+	laid               bool
+	lkw, lkh, law, lah float32
 
-	mcGen     uint32
-	mcW, mcAW float32
-	mcH       float32
+	// A parent measures a child under several constraint sets in one pass,
+	// and nested rows and columns multiply them; an entry pushed out early
+	// measures the child's whole subtree again.
+	cache     [cacheSize]cacheEntry
+	cacheN    uint8
+	cacheNext uint8
+	cacheGen  uint32
+
+	mc     [mcSize]mcEntry
+	mcN    uint8
+	mcNext uint8
+	mcGen  uint32
 }
+
+const (
+	cacheSize = 8
+	mcSize    = 4
+)
 
 type cacheEntry struct {
 	kw, kh, aw, ah float32
 	w, h           float32
 }
+
+type mcEntry struct{ w, aw, h float32 }
 
 var generations atomic.Uint32
 
@@ -323,11 +344,18 @@ type line struct {
 // compute returns the border-box size of n. kw/kh are definite sizes (NaN when
 // content-sized); aw/ah bound content-sized nodes (NaN when unbounded).
 func (n *Node) compute(p *pass, kw, kh, aw, ah float32, perform bool) (float32, float32) {
-	if !perform {
-		if n.cacheGen != p.gen {
-			n.cacheGen, n.cacheN = p.gen, 0
+	if perform {
+		if n.Keep && n.laid && same(n.lkw, kw) && same(n.lkh, kh) && same(n.law, aw) && same(n.lah, ah) {
+			return n.W, n.H
 		}
-		for i := 0; i < n.cacheN; i++ {
+	} else {
+		if n.cacheGen != p.gen {
+			n.cacheGen = p.gen
+			if !n.Keep {
+				n.cacheN, n.cacheNext = 0, 0
+			}
+		}
+		for i := range int(n.cacheN) {
 			c := &n.cache[i]
 			if same(c.kw, kw) && same(c.kh, kh) && same(c.aw, aw) && same(c.ah, ah) {
 				return c.w, c.h
@@ -335,15 +363,12 @@ func (n *Node) compute(p *pass, kw, kh, aw, ah float32, perform bool) (float32, 
 		}
 	}
 	w, h := n.computeUncached(p, kw, kh, aw, ah, perform)
-	if !perform {
-		i := n.cacheN
-		if i == len(n.cache) {
-			copy(n.cache[:], n.cache[1:])
-			i--
-		} else {
-			n.cacheN++
-		}
-		n.cache[i] = cacheEntry{kw, kh, aw, ah, w, h}
+	if perform {
+		n.laid, n.lkw, n.lkh, n.law, n.lah = true, kw, kh, aw, ah
+	} else {
+		n.cache[n.cacheNext] = cacheEntry{kw, kh, aw, ah, w, h}
+		n.cacheNext = (n.cacheNext + 1) % cacheSize
+		n.cacheN = min(n.cacheN+1, cacheSize)
 	}
 	return w, h
 }
@@ -894,8 +919,16 @@ func (n *Node) minContentHeight(p *pass, width, aw float32) float32 {
 	if st.ScrollY {
 		return 0
 	}
-	if n.mcGen == p.gen && same(n.mcW, width) && same(n.mcAW, aw) {
-		return n.mcH
+	if n.mcGen != p.gen {
+		n.mcGen = p.gen
+		if !n.Keep {
+			n.mcN, n.mcNext = 0, 0
+		}
+	}
+	for i := range int(n.mcN) {
+		if c := &n.mc[i]; same(c.w, width) && same(c.aw, aw) {
+			return c.h
+		}
 	}
 	var h float32
 	if n.Measure != nil && len(n.Children) == 0 {
@@ -980,6 +1013,8 @@ func (n *Node) minContentHeight(p *pass, width, aw float32) float32 {
 		}
 		h = clamp(h+pad.Top+pad.Bottom, nan, maxH)
 	}
-	n.mcGen, n.mcW, n.mcAW, n.mcH = p.gen, width, aw, h
+	n.mc[n.mcNext] = mcEntry{width, aw, h}
+	n.mcNext = (n.mcNext + 1) % mcSize
+	n.mcN = min(n.mcN+1, mcSize)
 	return h
 }

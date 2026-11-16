@@ -64,11 +64,28 @@ const hlCacheBytes = 4 << 20
 var (
 	hlCache     = map[hlKey][]Highlight{}
 	hlCacheSize int
+	// The latest highlights not put in hlCache, for views built again before
+	// their code changes: a growing fence, and fences a document left open.
+	hlRecent     [4]hlEntry
+	hlRecentNext int
 )
+
+type hlEntry struct {
+	ok  bool
+	key hlKey
+	out []Highlight
+}
 
 // Highlight returns the highlights of code's first syntax.MaxSource bytes
 // (cut at a line end), cached. It is only called on the UI thread.
 func (h *Highlighter) Highlight(lang, code string) []Highlight {
+	return h.highlight(lang, code, true)
+}
+
+// highlight is Highlight that, without keep, does not cache the result for
+// long, for code that is still growing: each version is used once, and
+// caching them all would push out the highlights of finished code.
+func (h *Highlighter) highlight(lang, code string, keep bool) []Highlight {
 	code = code[:syntax.ColoredLen(code)]
 	k := hlKey{lang: lang, code: code}
 	if h != nil && h.Func != nil {
@@ -77,11 +94,23 @@ func (h *Highlighter) Highlight(lang, code string) []Highlight {
 	if out, ok := hlCache[k]; ok {
 		return out
 	}
+	if !keep {
+		for i := range hlRecent {
+			if e := &hlRecent[i]; e.ok && e.key == k {
+				return e.out
+			}
+		}
+	}
 	var out []Highlight
 	if k.custom {
 		out = tidyHighlights(h.Func(lang, code), code)
 	} else {
 		out = BuiltinHighlights(lang, code)
+	}
+	if !keep {
+		hlRecent[hlRecentNext] = hlEntry{true, k, out}
+		hlRecentNext = (hlRecentNext + 1) % len(hlRecent)
+		return out
 	}
 	size := len(code) + len(lang) + len(k.key) + len(out)*40 + 96
 	if hlCacheSize+size > hlCacheBytes {

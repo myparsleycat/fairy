@@ -18,6 +18,7 @@ type a11yState struct {
 	tree   *a11yTree
 	ver    int       // treeVer the tree was built from
 	evTree *a11yTree // tree of the last change-event pass
+	spare  *a11yTree // a built tree that neither tree nor evTree holds
 	focus  uint64
 }
 
@@ -93,10 +94,16 @@ func (w *Window) a11yRoots() []*El {
 func (w *Window) a11yTree() *a11yTree {
 	a := w.acc
 	if a.tree == nil || a.ver != w.treeVer {
-		a.tree = buildA11yTree(w.a11yRoots())
+		var reuse *a11yTree
+		if a.tree != a.evTree {
+			reuse = a.tree
+		} else {
+			reuse, a.spare = a.spare, nil
+		}
+		a.tree = buildA11yTree(reuse, w.a11yRoots())
 		a.ver = w.treeVer
 		for id, n := range a.nodes {
-			if _, ok := a.tree.el[id]; ok {
+			if _, ok := a.tree.info[id]; ok {
 				n.seen = a.ver
 			} else if a.ver-n.seen > stateTTL {
 				n.prov.Disconnect()
@@ -129,7 +136,7 @@ func (w *Window) a11yFocus() uint64 {
 		return 0
 	}
 	t := w.a11yTree()
-	if a := t.el[t.active]; a != nil && w.activeFor(a, f) {
+	if a := t.info[t.active]; a != nil && w.activeFor(a.el, f) {
 		return t.active
 	}
 	return t.exposedAncestor(f)
@@ -175,11 +182,11 @@ func (w *Window) a11yAfterFrame() {
 	if prev := a.evTree; prev != t {
 		a.evTree = t
 		if prev != nil {
-			for id, r := range t.role {
-				if _, was := prev.el[id]; was {
+			for id, in := range t.info {
+				if _, was := prev.info[id]; was {
 					continue
 				}
-				switch r {
+				switch in.role {
 				case RoleMenu:
 					w.a11yProvider(id).RaiseEvent(uia.EventMenuOpened)
 				case RoleDialog:
@@ -187,17 +194,21 @@ func (w *Window) a11yAfterFrame() {
 				}
 			}
 		}
-		if kids := t.kids[0]; prev != nil && !slices.Equal(prev.kids[0], kids) {
+		if prev != nil && !slices.Equal(prev.top, t.top) {
 			a.root.RaiseChildrenInvalidated()
 		}
+		if prev != nil {
+			a.spare = prev
+		}
 		for id, n := range a.nodes {
-			if _, ok := t.el[id]; !ok {
+			in := t.info[id]
+			if in == nil {
 				continue
 			}
-			if kids := t.kids[id]; n.kids != nil && !slices.Equal(n.kids, kids) {
+			if n.kids != nil && !slices.Equal(n.kids, in.kids) {
 				n.prov.RaiseChildrenInvalidated()
 			}
-			n.kids = append(n.kids[:0], t.kids[id]...)
+			n.kids = append(n.kids[:0], in.kids...)
 			if n.kids == nil {
 				n.kids = []uint64{}
 			}
@@ -330,7 +341,7 @@ type a11yRootEl struct{ w *Window }
 func (r *a11yRootEl) Alive() bool { return r.w.acc != nil && windows[r.w.hwnd] == r.w }
 
 func (r *a11yRootEl) Navigate(d uia.Direction) *uia.Provider {
-	kids := r.w.a11yTree().kids[0]
+	kids := r.w.a11yTree().top
 	if len(kids) == 0 {
 		return nil
 	}
@@ -375,8 +386,10 @@ func (r *a11yRootEl) Focus() *uia.Provider {
 }
 
 func (n *a11yNode) el() (*El, Role) {
-	t := n.w.a11yTree()
-	return t.el[n.id], t.role[n.id]
+	if in := n.w.a11yTree().info[n.id]; in != nil {
+		return in.el, in.role
+	}
+	return nil, RoleAuto
 }
 
 func (n *a11yNode) Alive() bool {
@@ -396,17 +409,20 @@ func (n *a11yNode) Navigate(d uia.Direction) *uia.Provider {
 	var id uint64
 	switch d {
 	case uia.Parent:
-		return w.a11yProvider(t.parent[n.id])
+		if in := t.info[n.id]; in != nil {
+			return w.a11yProvider(in.parent)
+		}
+		return nil
 	case uia.NextSibling:
 		id = t.sibling(n.id, 1)
 	case uia.PreviousSibling:
 		id = t.sibling(n.id, -1)
 	case uia.FirstChild:
-		if k := t.kids[n.id]; len(k) > 0 {
+		if k := t.kids(n.id); len(k) > 0 {
 			id = k[0]
 		}
 	case uia.LastChild:
-		if k := t.kids[n.id]; len(k) > 0 {
+		if k := t.kids(n.id); len(k) > 0 {
 			id = k[len(k)-1]
 		}
 	}
@@ -594,8 +610,13 @@ func (n *a11yNode) Select() {
 
 func (n *a11yNode) Container() *uia.Provider {
 	t := n.w.a11yTree()
-	for id := t.parent[n.id]; id != 0; id = t.parent[id] {
-		switch t.role[id] {
+	in := t.info[n.id]
+	for in != nil && in.parent != 0 {
+		id := in.parent
+		if in = t.info[id]; in == nil {
+			break
+		}
+		switch in.role {
 		case RoleList, RoleTabList, RoleTree, RoleMenu, RoleGroup, RoleGrid:
 			return n.w.a11yProvider(id)
 		}
@@ -718,7 +739,7 @@ func (n *a11yNode) raiseChanges() {
 	}
 	p := n.prov
 	if s.name != old.name {
-		p.RaisePropertyChanged(uia.PropName, old.name, s.name)
+		p.RaisePropertyChanged(uia.PropName, oldText(old.name), s.name)
 	}
 	if s.enabled != old.enabled {
 		p.RaisePropertyChanged(uia.PropIsEnabled, old.enabled, s.enabled)
@@ -733,7 +754,7 @@ func (n *a11yNode) raiseChanges() {
 		p.RaisePropertyChanged(uia.PropExpandCollapseState, old.expand, s.expand)
 	}
 	if s.value != old.value {
-		p.RaisePropertyChanged(uia.PropValueValue, old.value, s.value)
+		p.RaisePropertyChanged(uia.PropValueValue, oldText(old.value), s.value)
 	}
 	if s.rng != old.rng {
 		p.RaisePropertyChanged(uia.PropRangeValueValue, old.rng, s.rng)
@@ -741,6 +762,16 @@ func (n *a11yNode) raiseChanges() {
 	if s.live != old.live && s.live != "" {
 		p.RaiseEvent(uia.EventLiveRegionChanged)
 	}
+}
+
+// oldText returns the old value of a text property change event. Past 4 KB
+// it is nil, which is sent as VT_EMPTY, so that a long document is not copied
+// into one more BSTR per change.
+func oldText(s string) any {
+	if len(s) > 4096 {
+		return nil
+	}
+	return s
 }
 
 // Announce asks screen readers to read text in the focused window, or in

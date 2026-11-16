@@ -596,7 +596,8 @@ type Layout struct {
 
 	quads    []glyphQuad
 	fixed    [][4]float32 // color-font layer colors that quads refer to
-	quadsGen int          // atlas generation the quads were recorded in; 0 when none
+	bands    []glyphBand
+	quadsGen int // atlas generation the quads were recorded in; 0 when none
 }
 
 func (l *Layout) release() {
@@ -860,9 +861,13 @@ func isEmojiJoiner(r rune) bool {
 // Clusters returns the byte offsets of the grapheme cluster boundaries of s,
 // from 0 to len(s).
 func Clusters(s string) []int {
-	out := []int{0}
+	out := make([]int, 1, utf8.RuneCountInString(s)+1)
+	if out, ok := icuClusters(s, out); ok {
+		return out
+	}
 	for b := 0; b < len(s); {
-		b = NextBoundary(s, b)
+		_, size := utf8.DecodeRuneInString(s[b:])
+		b += size
 		out = append(out, b)
 	}
 	return out

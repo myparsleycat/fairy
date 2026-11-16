@@ -93,14 +93,19 @@ func (w *Window) virtualRows(e *El) {
 			w.startGlide(e, from, s.revealInstant)
 		}
 	}
-	overscan := n.H / 2
-	top := e.state.scrollY - pad.Top - overscan
-	bottom := e.state.scrollY + n.H + overscan
-	first := max(int(top/lineH), 0)
-	last := min(int(bottom/lineH)+1, v.lines(v.cols))
-	if v.built && first == v.first && last == v.last && innerW == v.builtW {
+	lines := v.lines(v.cols)
+	view := e.state.scrollY - pad.Top
+	// Rows built with overscan stay until the view reaches past them, so a
+	// scroll of a few pixels does not build the whole range again.
+	if v.built && innerW == v.builtW && v.last <= lines &&
+		v.first <= max(int(view/lineH), 0) && min(int((view+n.H)/lineH)+1, lines) <= v.last {
 		return
 	}
+	overscan := n.H / 2
+	top := view - overscan
+	bottom := e.state.scrollY + n.H + overscan
+	first := max(int(top/lineH), 0)
+	last := min(int(bottom/lineH)+1, lines)
 	v.built, v.first, v.last, v.builtW = true, first, last, innerW
 	w.clearRows(e)
 	cellW, x0 := v.lineCells(innerW)
@@ -322,7 +327,8 @@ func (w *Window) layoutMeasured(e *El, keep bool) bool {
 	view := s.scrollY - pad.Top
 	first := r.rowAt(view-overscan, v.estimate)
 	bottom := view + n.H + overscan
-	if v.built && first == v.first && innerW == v.builtW && (v.last >= v.count || r.top(v.last, v.estimate) >= bottom) {
+	if v.built && innerW == v.builtW && r.top(v.first, v.estimate) <= max(view, 0) &&
+		(v.last >= v.count || r.top(v.last, v.estimate) >= view+n.H) {
 		return false
 	}
 	// Hold the reader's place against a row that was already measured, so

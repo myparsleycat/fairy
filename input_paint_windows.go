@@ -20,6 +20,7 @@ type inputGeom struct {
 	password         bool
 	multiline        bool
 	value            string // the unmasked text being shown
+	bounds           []int  // grapheme cluster boundaries of value, for a password
 }
 
 // shownGeom returns the geometry of the field as it holds its value now. Keys
@@ -33,12 +34,20 @@ func (s *editState) shownGeom() *inputGeom {
 	c := *g
 	c.value, c.text = s.Value, s.Value
 	if c.password {
-		c.text = maskText(s.Value)
+		c.bounds = s.clusters(s.Value)
+		c.text = maskText(c.bounds)
 	}
 	if c.multiline {
 		c.text += "​"
 	}
 	return &c
+}
+
+func (s *editState) clusters(v string) []int {
+	if s.clusterBounds == nil || s.clusterText != v {
+		s.clusterText, s.clusterBounds = v, text.Clusters(v)
+	}
+	return s.clusterBounds
 }
 
 func (s *editState) withZWSP(v string) string {
@@ -50,14 +59,14 @@ func (s *editState) withZWSP(v string) string {
 
 func (g *inputGeom) toDisplay(b int) int {
 	if g.password {
-		return maskedOffset(g.value, edit.ClampOffset(g.value, b))
+		return maskedOffset(g.bounds, edit.ClampOffset(g.value, b))
 	}
 	return b
 }
 
 func (g *inputGeom) fromDisplay(d int) int {
 	if g.password {
-		d = unmaskedOffset(g.value, d)
+		d = unmaskedOffset(g.bounds, d)
 	}
 	return edit.ClampOffset(g.value, d)
 }
@@ -89,12 +98,13 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	g := &inputGeom{password: props.password, multiline: props.multiline, value: disp}
 	shown := disp
 	if props.password {
-		shown = maskText(disp)
-		caret = maskedOffset(disp, caret)
-		selA, selB = maskedOffset(disp, selA), maskedOffset(disp, selB)
+		g.bounds = st.clusters(disp)
+		shown = maskText(g.bounds)
+		caret = maskedOffset(g.bounds, caret)
+		selA, selB = maskedOffset(g.bounds, selA), maskedOffset(g.bounds, selB)
 		if compLen > 0 {
-			compLen = maskedOffset(disp, compStart+compLen) - maskedOffset(disp, compStart)
-			compStart = maskedOffset(disp, compStart)
+			compLen = maskedOffset(g.bounds, compStart+compLen) - maskedOffset(g.bounds, compStart)
+			compStart = maskedOffset(g.bounds, compStart)
 		}
 	}
 
@@ -255,14 +265,13 @@ func alignSlack(align text.Align, viewW, tw float32) float32 {
 
 // A password shows one dot per grapheme cluster, so the caret, which moves
 // by clusters, steps over one dot at a time.
-func maskText(s string) string {
-	return strings.Repeat("•", len(text.Clusters(s))-1)
+func maskText(bounds []int) string {
+	return strings.Repeat("•", len(bounds)-1)
 }
 
-// maskedOffset maps a byte offset in s to the start of its cluster's dot in
-// maskText(s).
-func maskedOffset(s string, b int) int {
-	bounds := text.Clusters(s)
+// maskedOffset maps a byte offset in a text with the given cluster bounds to
+// the start of its cluster's dot in maskText(bounds).
+func maskedOffset(bounds []int, b int) int {
 	i, found := slices.BinarySearch(bounds, b)
 	if !found {
 		i--
@@ -270,8 +279,8 @@ func maskedOffset(s string, b int) int {
 	return i * len("•")
 }
 
-// unmaskedOffset maps a byte offset in the masked text back to s.
-func unmaskedOffset(s string, mb int) int {
-	bounds := text.Clusters(s)
+// unmaskedOffset maps a byte offset in the masked text back to the text with
+// the given cluster bounds.
+func unmaskedOffset(bounds []int, mb int) int {
 	return bounds[min(max(mb/len("•"), 0), len(bounds)-1)]
 }

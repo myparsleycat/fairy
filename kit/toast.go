@@ -321,7 +321,11 @@ func (ts *Toaster) toastView(it toast, depth int, h, frontH, offset float32, exp
 	}
 	id := it.id
 	content := fairy.Row(mark.MarginEdges(0, 4, 0, -3), text).Gap(6).Align(fairy.Center).Pad(16).Shrink(0).
-		OnLayout(func(_, h float32) { ts.heights[id] = h }).Animate(toastMotion)
+		OnLayout(func(_, h float32) bool {
+			changed := ts.heights[id] != h
+			ts.heights[id] = h
+			return changed
+		}).Animate(toastMotion)
 	front := depth == 0
 	toastEl := fairy.Box(content).Key(fmt.Sprint(id)).Left(0).Right(0).Radius(t.RadiusLg())
 	switch {

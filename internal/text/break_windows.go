@@ -3,6 +3,7 @@ package text
 import (
 	"strings"
 	"sync"
+	"syscall"
 	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
@@ -157,7 +158,7 @@ func (bk *breaker) start() int { return bk.lo }
 func (bk *breaker) end() int { return bk.lo + bk.bytes[len(bk.bytes)-1] }
 
 func icuInt(p *windows.LazyProc, args ...uintptr) int {
-	r, _, _ := p.Call(args...)
+	r, _, _ := syscall.SyscallN(p.Addr(), args...)
 	return int(int32(r))
 }
 
@@ -254,4 +255,46 @@ func icuNextWord(s string, b int) (int, bool) {
 		}
 		at = u
 	}
+}
+
+// icuClusters appends the grapheme boundaries of s after 0 to out. It steps
+// through one window with repeated following calls and loads the next window
+// when a step reaches the window's end, so that every boundary is the one
+// icuNextBoundary would return.
+func icuClusters(s string, out []int) ([]int, bool) {
+	bk := charBreaker
+	bk.mu.Lock()
+	defer bk.mu.Unlock()
+	p, ok := bk.iterator()
+	if !ok {
+		return out, false
+	}
+	b, at, loaded, fresh := 0, 0, false, false
+	for b < len(s) {
+		if !loaded {
+			if at, loaded = bk.load(p, s, b); !loaded {
+				_, size := utf8.DecodeRuneInString(s[b:])
+				b += size
+				out = append(out, b)
+				continue
+			}
+			fresh = true
+		}
+		n := bk.end()
+		u := icuInt(p.following, bk.it, uintptr(at))
+		if u != ubrkDone {
+			n = bk.byteAt(u)
+		}
+		if n == bk.end() && n < len(s) {
+			// A window ends at a line end or where breakContext cut it. Only
+			// a cut end can differ from what a window loaded at b sees.
+			loaded = false
+			if !fresh && s[n-1] != '\n' {
+				continue
+			}
+		}
+		b, at, fresh = n, u, false
+		out = append(out, b)
+	}
+	return out, true
 }

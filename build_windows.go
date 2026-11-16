@@ -27,10 +27,12 @@ func (w *Window) build() {
 	w.gen++
 	w.treeVer++
 	w.prevByID, w.byID = w.byID, w.prevByID
+	w.prevExits, w.exits = w.exits, 0
 	clear(w.byID)
 	clear(w.layers)
 	w.layers = w.layers[:0]
 	w.growing = false
+	w.growStale = true
 	clear(w.matchClaims)
 	w.collecting = true
 	focusBefore := w.focused
@@ -165,6 +167,9 @@ func (w *Window) prepare(e, parent *El, pid uint64, index int, inh textProps) {
 	if e.heightMotion != nil {
 		w.growing = true
 	}
+	if e.exit != nil {
+		w.exits++
+	}
 	if e.matchID != "" {
 		if w.matchClaims == nil {
 			w.matchClaims = map[string]uint64{}
@@ -236,15 +241,28 @@ func (w *Window) prepare(e, parent *El, pid uint64, index int, inh textProps) {
 	default:
 		e.measureWin, n.Measure = nil, nil
 	}
+	n.Keep = w.keeping
 	if e.virtual != nil {
 		e.virtual.inh = childInh
 		e.virtual.built = false
 		e.virtual.synced = false
 		return
 	}
+	keeping, growing := w.keeping, w.growing
+	m := e.memo
+	if m != nil {
+		// A reused subtree whose inherited text is unchanged lays out as it
+		// did, so its nodes keep their sizes from the last build.
+		w.keeping = keeping || m.hit && m.prepared && m.el == e && m.inh == inh && !m.grows
+		w.growing = false
+	}
 	for i, c := range e.children {
 		w.prepare(c, e, 0, i, childInh)
 		n.Children = append(n.Children, &c.node)
+	}
+	if m != nil {
+		m.prepared, m.inh, m.grows = true, inh, w.growing
+		w.keeping, w.growing = keeping, growing || w.growing
 	}
 }
 

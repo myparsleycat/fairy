@@ -23,7 +23,10 @@ func (w *Window) paintScene() bool {
 				ok = w.paint(l.root, 1, w.opts.TextColor) && ok
 			}
 		}
-		ok = w.paintGhostsOf(nil, nil, 1, w.opts.TextColor) && ok
+		if len(w.ghosts) > 0 {
+			_, last := w.ghostSlots(nil)
+			ok = w.paintGhostsOf(nil, last, 1, w.opts.TextColor) && ok
+		}
 	}
 	ok = w.paintFlights() && ok
 	if w.tipText != "" && (w.tipShown || !w.tipLeft.IsZero()) {
@@ -308,15 +311,19 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		w.scene.Clip = own
 	}
 
-	ghosts := len(w.ghosts) > 0 && w.ghostIn[e.id]
+	var byNext map[uint64][]*ghost
+	var lastGhosts []*ghost
+	if len(w.ghosts) > 0 && w.ghostIn[e.id] {
+		byNext, lastGhosts = w.ghostSlots(e)
+	}
 	for _, c := range e.children {
-		if ghosts {
-			ok = w.paintGhostsOf(e, c, opacity, textColor) && ok
+		if gs := byNext[c.id]; len(gs) > 0 {
+			ok = w.paintGhostsOf(e, gs, opacity, textColor) && ok
 		}
 		ok = w.paint(c, opacity, textColor) && ok
 	}
-	if ghosts {
-		ok = w.paintGhostsOf(e, nil, opacity, textColor) && ok
+	if len(lastGhosts) > 0 {
+		ok = w.paintGhostsOf(e, lastGhosts, opacity, textColor) && ok
 	}
 	// Scroll bars are not faded, but stay inside rounded corners.
 	if w.scene.Clip != outerClip && e.edgeFade > 0 {

@@ -30,7 +30,7 @@ func Memo[V comparable](key string, version V, build func() *El) *El {
 	m := w.memos[full]
 	if m != nil && m.ver != w.treeVer && m.version == any(version) && m.epoch == memoEpoch.Load() &&
 		w.gen-m.gen <= 1 && m.el != nil {
-		m.gen, m.ver = w.gen, w.treeVer
+		m.gen, m.ver, m.hit = w.gen, w.treeVer, true
 		w.touchLocals(m.locals)
 		return m.el
 	}
@@ -71,6 +71,12 @@ type memoEntry struct {
 	// Whether the parent was disabled when the subtree was last prepared:
 	// preparing disables a subtree for good, so a change needs a new build.
 	placed, parentDisabled bool
+	// hit is set when the last Memo call reused el. prepared, inh and grows
+	// tell whether el's subtree was prepared before, with which inherited
+	// text, and whether it holds an AnimateHeight, which moves laid-out
+	// boxes between builds.
+	hit, prepared, grows bool
+	inh                  textProps
 }
 
 // prepareMemo notes the parent of a remembered subtree. When the parent's
