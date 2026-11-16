@@ -38,9 +38,9 @@ type toast struct {
 }
 
 // Toaster shows short notifications in the bottom-right corner. Its methods
-// may be called from any goroutine. Draw it with View. While the pointer is
-// over the toasts their timers hold, and they start again with the time that
-// was left when it leaves.
+// other than View may be called from any goroutine. Draw it with View from
+// the view. While the pointer is over the toasts their timers hold, and they
+// start again with the time that was left when it leaves.
 type Toaster struct {
 	// Duration is how long a toast stays; 4 seconds when zero, forever when negative.
 	Duration time.Duration
@@ -50,7 +50,7 @@ type Toaster struct {
 	heights  map[ToastID]float32 // natural heights, measured as toasts are laid out
 }
 
-// maxToasts is how many toasts show at once; older ones leave first.
+// maxToasts is how many toasts are kept; older ones leave first.
 const maxToasts = 5
 
 // Show adds a toast and returns its id. body may be empty.

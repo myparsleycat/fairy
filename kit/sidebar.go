@@ -107,7 +107,7 @@ const (
 	StatusBusy
 	// StatusAttention shows a dot in the warning color.
 	StatusAttention
-	// StatusUnread shows a dot in the accent color.
+	// StatusUnread shows a dot in the primary color.
 	StatusUnread
 )
 

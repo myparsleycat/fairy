@@ -15,7 +15,7 @@ var (
 )
 
 // E_NOCOLOR is returned by TranslateColorGlyphRun for runs without color glyphs.
-const E_NOCOLOR = com.HRESULT(-2004316148) // 0x8898500C
+const E_NOCOLOR = com.HRESULT(-2003283956) // 0x8898500C
 
 // FontCollection wraps IDWriteFontCollection. For memory collections it also
 // owns the registered in-memory loader that the font files reference.

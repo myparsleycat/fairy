@@ -347,5 +347,3 @@ func (w *Window) moveCaretTo(e *El, x, y float32, extend bool) {
 	w.resetBlink()
 	w.invalidate()
 }
-
-// IME.

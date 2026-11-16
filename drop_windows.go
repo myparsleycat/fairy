@@ -13,7 +13,7 @@ type fileDrag struct {
 	paths  []string
 	x, y   float32 // last pointer position
 	target uint64  // element that would receive the drop, or 0
-	key    string  // the target's keyboard.Key
+	key    string  // the target's El.Key
 	// rejected is set when the target's AcceptFiles turned the files down.
 	rejected bool
 }

@@ -30,7 +30,8 @@ func TestDecodeDIB(t *testing.T) {
 	// 1x1, 32 bpp with every alpha byte zero, as many programs write it.
 	zeroAlpha := append(dibHeader(1, 1, 32, 0), 0, 0, 255, 0)
 
-	// 1x1, 32 bpp bit fields after a BITMAPINFOHEADER, with a half-transparent pixel.
+	// 1x1, 32 bpp bit fields after a BITMAPINFOHEADER, without an alpha mask,
+	// so the pixel's fourth byte is ignored.
 	fields := append(dibHeader(1, -1, 32, 3), 0, 0, 0xff, 0, 0, 0xff, 0, 0, 0xff, 0, 0, 0)
 	fields = append(fields, 0, 0, 255, 128)
 

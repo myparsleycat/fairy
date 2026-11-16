@@ -216,7 +216,8 @@ func (v *viewer) view(cx *fairy.Cx) *fairy.El {
 				v.cam.yaw += v.spinYaw
 				v.spinYaw = 0
 			}
-			// The camera did not change, so the retained surface needs telling.
+			// Turning spin on leaves the camera version unchanged, so the retained
+			// surface needs telling.
 			cx.Window().InvalidateSurface("cube")
 		}), fairy.Text("Spin")).Gap(8).Align(fairy.Center),
 		fairy.Box().Grow(1),

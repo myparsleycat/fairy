@@ -47,7 +47,6 @@ func (w *Window) resetBlink() {
 	}
 }
 
-// topLayer returns the topmost visible layer, or nil.
 // topLayer returns the topmost popover or modal overlay. Pass-through
 // overlays such as toasts are skipped: they never take Escape or outside presses.
 func (w *Window) topLayer() *layer {
@@ -241,5 +240,3 @@ func (w *Window) onChar(c uint16) {
 	}
 	w.typeText(e, string(r))
 }
-
-// Text input editing.

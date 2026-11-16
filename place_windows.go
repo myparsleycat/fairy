@@ -164,7 +164,7 @@ func (w *Window) placeAll() {
 }
 
 // glideIntoView scrolls the containers around e as the accessibility
-// ScrollIntoItem does, gliding the vertical ones.
+// ScrollIntoView does, gliding the vertical ones.
 func (w *Window) glideIntoView(e *El) {
 	type start struct {
 		el *El

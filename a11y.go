@@ -51,8 +51,7 @@ const (
 	RoleColumnHeader
 )
 
-// leaf reports whether the role's subtree is presented as one element, whose
-// name comes from the text inside it.
+// leaf reports whether the role's subtree is presented as one element.
 func (r Role) leaf() bool {
 	switch r {
 	case RoleButton, RoleLink, RoleCheckBox, RoleSwitch, RoleRadio, RoleText, RoleImage, RoleEdit,

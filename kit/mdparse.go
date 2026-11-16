@@ -410,7 +410,8 @@ func isWordBefore(s string, i int) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
-// codeEnd returns the index after the code span starting at i, or -1.
+// codeEnd returns the number n of backticks opening the code span at i, and
+// the index of the closing run of n backticks, or -1.
 func codeEnd(s string, i int) (n, end int) {
 	for n = 0; i+n < len(s) && s[i+n] == '`'; n++ {
 	}
@@ -604,7 +605,7 @@ func (f *linkFinder) find(i int) (text, url string, end int, ok bool) {
 		return "", "", 0, false
 	}
 	if f.parens == nil {
-		// Destination parentheses follow linkEnd's existing raw balancing rules.
+		// Destination parentheses balance raw, as in linkEnd.
 		f.parens = delimiterPairs(f.s, '(', ')', false)
 	}
 	k, found := f.parens[j+1]

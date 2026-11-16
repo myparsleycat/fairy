@@ -31,7 +31,7 @@ func pngBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// oversizedPNG is a valid all-black PNG just over maxImagePixels, built
+// oversizedPNG is a valid all-black PNG just over imaging.MaxImagePixels, built
 // without holding its pixels.
 func oversizedPNG(t *testing.T) []byte {
 	t.Helper()

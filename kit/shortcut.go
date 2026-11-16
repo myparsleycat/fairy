@@ -13,7 +13,7 @@ import (
 type recorderState struct {
 	recording bool
 	err       string
-	refused   keyboard.Chord // the chord onChange refused, shown with err while recording
+	refused   keyboard.Chord // the chord refused, shown with err while recording
 	refusing  bool
 }
 

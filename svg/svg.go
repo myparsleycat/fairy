@@ -20,7 +20,8 @@ import (
 // Vector is a parsed SVG drawing rendered as a single-color mask, tinted with
 // the text color where it is drawn. It supports the subset icon sets use:
 // path, circle, ellipse, rect, line, polyline and polygon, with fill, stroke,
-// stroke-width, stroke-linecap and stroke-linejoin, inherited through <g>.
+// stroke-width and stroke-linecap, inherited through <g>. Stroke joins are
+// always round.
 type Vector struct {
 	vw, vh float32 // viewBox size
 	vx, vy float32 // viewBox origin
@@ -404,7 +405,9 @@ func (p *pathBuilder) close() {
 
 var pathArgs = map[byte]int{'m': 2, 'l': 2, 'h': 1, 'v': 1, 'c': 6, 's': 4, 'q': 4, 't': 2, 'a': 7, 'z': 0}
 
-// parsePath draws the path up to its first error, as SVG renderers do.
+// parsePath draws the path up to its first malformed number or flag, or up
+// to numbers that follow Z without a command, as SVG renderers do. Data that
+// does not start with a command, or uses an unsupported one, is an error.
 func (sh *vshape) parsePath(d string) error {
 	var p pathBuilder
 	t := pathTokens{s: d}

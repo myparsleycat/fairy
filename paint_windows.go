@@ -419,7 +419,7 @@ func shimmerGlyphs(prims []render.Prim, p *shimmerProps, elapsed float64, highli
 
 var pulseCurve = motion.Bezier(1, 0.4, 0, 0.6, 1)
 
-// pulseAt returns the opacity of a pulse at elapsed seconds.
+// at returns the opacity of a pulse at elapsed seconds.
 func (p *pulseProps) at(elapsed float64) float32 {
 	phase := float32(math.Mod(elapsed, float64(p.period))) / p.period
 	if phase < 0.5 {

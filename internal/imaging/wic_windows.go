@@ -52,8 +52,8 @@ func wicOpaque(f com.GUID) bool {
 // pngEnd is the IEND chunk, which a complete PNG ends with.
 var pngEnd = []byte("\x00\x00\x00\x00IEND\xaeB`\x82")
 
-// wicDecoderClass returns the built-in WIC decoder for still JPEG and PNG
-// images. Images that need a guard the Go decoders give, or a color
+// wicDecoderClass returns the built-in WIC decoder for still JPEG, PNG and
+// AVIF images. Images that need a guard the Go decoders give, or a color
 // conversion WIC does differently, are left to Go: truncated files, which
 // WIC decodes partially, and CMYK JPEGs.
 func wicDecoderClass(in Input) *com.GUID {
@@ -117,13 +117,15 @@ func wicWork(in Input, bound Bound) int64 {
 	return min(n, WorkBudget)
 }
 
-// DecodeWIC decodes a still JPEG or PNG with the Windows Imaging Component,
-// scaled within bound with high-quality cubic resampling, in premultiplied
-// alpha for translucent images, and turned as its EXIF orientation says.
-// JPEGs reduced fourfold or more first decode at a DCT scale. WIC reads the bytes in place and hands out rows on
-// request, so neither the full-size source nor a resampling buffer of
-// source height is held. It returns nil for images WIC does not take or
-// when a call fails, such as in a COM single-threaded apartment.
+// DecodeWIC decodes a still JPEG, PNG or AVIF with the Windows Imaging
+// Component, scaled within bound with high-quality cubic resampling, in
+// premultiplied alpha for translucent images, and turned as its EXIF
+// orientation says. JPEGs reduced fourfold or more first decode at a DCT
+// scale. For JPEG and PNG, WIC reads the bytes in place and hands out rows on
+// request, so neither the full-size source nor a resampling buffer of source
+// height is held; the HEIF decoder used for AVIF decodes the whole image
+// first. It returns nil for images WIC does not take or when a call fails,
+// such as in a COM single-threaded apartment.
 func DecodeWIC(in Input, bound Bound) *Bitmap {
 	img := decodeWICPixels(in, bound)
 	if img == nil {

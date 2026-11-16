@@ -14,8 +14,8 @@ var (
 
 	monitorsMu   sync.Mutex
 	monitorRects []RECT
-	// The callback is made once: Windows allows a process only a limited
-	// number of them.
+	// The callback is made once: the Go runtime allows a process only a
+	// limited number of windows.NewCallback callbacks.
 	monitorEnumProc = sync.OnceValue(func() uintptr {
 		return windows.NewCallback(func(m, hdc uintptr, rc *RECT, lp uintptr) uintptr {
 			monitorRects = append(monitorRects, *rc)

@@ -9,7 +9,7 @@ import (
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
-const stateTTL = 3 // frames an element's state survives without being built
+const stateTTL = 3 // builds an element's state survives without being built
 
 func (w *Window) renderFrame() {
 	w.needPaint = false

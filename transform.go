@@ -28,8 +28,9 @@ func (e *El) xfProps() *transformProps {
 // Origin: fills, borders, shadows, text, icons and images all scale. Layout
 // keeps the unscaled size, so siblings don't move; hit testing follows the
 // scaled box. A change springs on ScaleMotion, else the element's
-// AnimateLayout motion, else motion.Default; with ReducedMotion it lands at
-// once. Anything not finite or below zero is 1.
+// AnimateLayout motion, else motion.Snappy when PressScale is set, else
+// motion.Default; with ReducedMotion it lands at once. Anything not finite
+// or below zero is 1.
 func (e *El) Scale(k float32) *El {
 	if !finite(k) || k < 0 {
 		k = 1
@@ -40,8 +41,7 @@ func (e *El) Scale(k float32) *El {
 
 // Rotate draws the element and everything in it turned radians clockwise
 // about its Origin. Layout keeps the upright box; hit testing follows the
-// turned box. A change springs like Scale. Native surfaces (video, web views)
-// inside it stay upright.
+// turned box. A change springs like Scale. Web views inside it stay upright.
 func (e *El) Rotate(radians float32) *El {
 	if !finite(radians) {
 		radians = 0

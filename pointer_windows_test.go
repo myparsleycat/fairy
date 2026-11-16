@@ -714,7 +714,7 @@ func TestButtonDrags(t *testing.T) {
 	}
 }
 
-// Without DragButtons, only the left button drags, as before.
+// Without DragButtons, only the left button drags.
 func TestDragDefaultsToLeft(t *testing.T) {
 	var l dragLog
 	w := newPointerWindow(t, func() *El { return Col(dragTarget(&l, 0)) })

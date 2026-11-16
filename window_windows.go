@@ -245,7 +245,7 @@ type Window struct {
 
 	caretOn    bool
 	scriptMods *keyboard.Mods
-	scripted   bool // FAIRY_SCRIPT drives input; real pointer messages are ignored
+	scripted   bool // FAIRY_SCRIPT drives input; real pointer moves, wheel and touch are ignored
 	hoverMoves bool // an element on the hover path has OnPointerMove
 	moveDue    bool // the pointer moved since OnPointerMove handlers last ran
 	ncTracking bool // TrackMouseEvent is armed for the non-client maximize button

@@ -21,7 +21,7 @@ import (
 type Chord struct {
 	Mods Mods
 	Key  Key
-	ch   rune // the character the chord names, for char keys parsed from text
+	ch   rune // the character the chord names for a char key; only ParseChord sets '+', ChordOf names that key '='
 }
 
 // Virtual-key codes of keys a chord can name beyond the Key constants.

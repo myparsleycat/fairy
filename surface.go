@@ -12,12 +12,14 @@ type SurfaceFrame struct {
 	// d3d.Device{P: f.Device} and d3d.Context{P: f.Context}, or use GPU.
 	Device, Context unsafe.Pointer
 	// Texture is an ID3D11Texture2D in DXGI_FORMAT_B8G8R8A8_UNORM and Target
-	// its ID3D11RenderTargetView. The texture lives until the element leaves
-	// the tree or changes size, so keep views of it only for one frame.
+	// its ID3D11RenderTargetView. The texture is freed on the first frame the
+	// element is not painted, and replaced when its size changes or the device
+	// is made again, so keep views of it only for one frame.
 	Texture, Target unsafe.Pointer
 	Width, Height   int     // device pixels
 	Scale           float32 // device pixels per logical pixel
-	// Time is the time since the surface first appeared.
+	// Time is the time since the surface was first painted, or painted again
+	// after a frame that left it out.
 	Time time.Duration
 	// Generation numbers the shared device. It changes when the device was
 	// lost and made again; resources the app made on an older generation are
@@ -45,8 +47,8 @@ func Surface(draw func(SurfaceFrame) bool) *El {
 // composites the previous texture and calls draw only when the surface first
 // appears, when its pixel size or scale changes, after the device was
 // recreated, when version differs from the version of the last draw, after
-// Window.InvalidateSurface with the element's keyboard.Key, and on the frame after a
-// draw that returned true. Derive version from the state the picture shows,
+// Window.InvalidateSurface with the key set by El.Key, and on the frame after
+// a draw that returned true. Derive version from the state the picture shows,
 // such as a camera and model revision, so that other repaints (a hover
 // elsewhere in the window) skip the draw.
 func (e *El) Retain(version uint64) *El {

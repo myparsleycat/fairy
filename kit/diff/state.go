@@ -47,8 +47,8 @@ const (
 // ExpandStep is how many lines one expand step reveals.
 const ExpandStep = 20
 
-// Row heights in pixels: estimates for the virtual list, exact for lines
-// that don't wrap.
+// Row heights in pixels. lineH is exact for lines that don't wrap and is the
+// virtual list's estimate for any row not yet measured.
 const (
 	lineH   = 20
 	headerH = 44
@@ -485,7 +485,8 @@ func (s *State) SideLine(f int, side Side, n int) (string, bool) {
 	return file.contextLine(g.old+off, g.new+off)
 }
 
-// rowLine is row r's line number on side.
+// rowLine is row r's line number on side, or false when the row has no line
+// there, as an added line on the old side.
 func (s *State) rowLine(r row, side Side) (int, bool) {
 	var n int
 	switch r.kind {

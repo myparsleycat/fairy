@@ -652,7 +652,7 @@ type chunk struct {
 }
 
 // highlights are the syntax colors of line n of side of file f, relative
-// to the line, highlighted with the 128 lines around it.
+// to the line, highlighted with the block of 128 lines it falls in.
 func (s *State) highlights(f int, side Side, n int, colors *kit.SyntaxColors) []kit.Highlight {
 	lang := s.files[f].Language()
 	if lang == "" || !syntax.Known(lang) || n < 1 {

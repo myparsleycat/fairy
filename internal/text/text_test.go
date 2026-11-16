@@ -211,7 +211,7 @@ func TestRichTextUnicodeLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dl.Release()
-	// The reference applies byte ranges using the original full-scan semantics.
+	// The reference applies byte ranges by scanning the full text.
 	for _, r := range st.Runs {
 		if r.End <= r.Start {
 			continue
