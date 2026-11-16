@@ -5,6 +5,7 @@ package layout
 
 import (
 	"math"
+	"sync"
 	"sync/atomic"
 )
 
@@ -102,15 +103,28 @@ type Style struct {
 	Hidden     bool // takes no space and is not laid out
 }
 
-// MeasureFunc sizes leaf content. width is the content-box width to lay out in:
+// Measurer sizes leaf content. width is the content-box width to lay out in:
 // NaN means unbounded; exact means the node's width is already fixed to width.
+type Measurer interface {
+	Measure(width float32, exact bool) (w, h float32)
+}
+
+// MeasureFunc adapts a function to Measurer. A nil MeasureFunc measures as
+// empty content.
 type MeasureFunc func(width float32, exact bool) (w, h float32)
+
+func (f MeasureFunc) Measure(width float32, exact bool) (w, h float32) {
+	if f == nil {
+		return 0, 0
+	}
+	return f(width, exact)
+}
 
 // Node is one box in the layout tree.
 type Node struct {
 	Style    Style
 	Children []*Node
-	Measure  MeasureFunc
+	Measure  Measurer
 
 	// Outputs. X and Y are relative to the parent's border box.
 	X, Y, W, H float32
@@ -133,13 +147,62 @@ type cacheEntry struct {
 
 var generations atomic.Uint32
 
+// pass is one layout call: its cache generation and a stack of item buffers
+// that containers take while they lay out their children and give back, in
+// reverse order, when they return.
+type pass struct {
+	gen   uint32
+	items []item
+	top   int
+	high  int
+}
+
+var passes = sync.Pool{New: func() any { return new(pass) }}
+
+func beginPass() *pass {
+	p := passes.Get().(*pass)
+	p.gen = generations.Add(1)
+	return p
+}
+
+// maxPooledItems bounds the item array a pooled pass keeps, so one very large
+// container does not leave its buffer behind for every later layout.
+const maxPooledItems = 4096
+
+func (p *pass) end() {
+	if len(p.items) > maxPooledItems {
+		p.items = nil
+	} else {
+		// Pooled buffers must not keep the tree they laid out alive.
+		clear(p.items[:p.high])
+	}
+	p.top, p.high = 0, 0
+	passes.Put(p)
+}
+
+// take returns m items above the stack top for the caller to fill. Growing
+// the stack leaves buffers taken before on the old array, where their callers
+// keep using them.
+func (p *pass) take(m int) []item {
+	if p.top+m > len(p.items) {
+		p.items = make([]item, max(2*len(p.items), p.top+m, 64))
+	}
+	buf := p.items[p.top : p.top+m : p.top+m]
+	p.top += m
+	p.high = max(p.high, p.top)
+	return buf
+}
+
+func (p *pass) release(m int) { p.top -= m }
+
 // Compute lays out root at a fixed size.
 // Different trees may be computed concurrently, but one tree must not be
 // computed from two goroutines at once.
 func Compute(root *Node, width, height float32) {
-	gen := generations.Add(1)
+	p := beginPass()
+	defer p.end()
 	root.X, root.Y = 0, 0
-	root.compute(gen, width, height, width, height, true)
+	root.compute(p, width, height, width, height, true)
 }
 
 // ComputeFit lays out root at the width and height its own style gives, or
@@ -147,7 +210,8 @@ func Compute(root *Node, width, height float32) {
 // Different trees may be computed concurrently, but one tree must not be
 // computed from two goroutines at once.
 func ComputeFit(root *Node, maxWidth, maxHeight float32) {
-	gen := generations.Add(1)
+	p := beginPass()
+	defer p.end()
 	root.X, root.Y = 0, 0
 	kw, kh := resolve(root.Style.Width, maxWidth), resolve(root.Style.Height, maxHeight)
 	if !isNaN(kw) {
@@ -156,9 +220,9 @@ func ComputeFit(root *Node, maxWidth, maxHeight float32) {
 	if !isNaN(kh) {
 		kh = min(root.clampH(kh, maxHeight), maxHeight)
 	}
-	w, h := root.compute(gen, kw, kh, maxWidth, maxHeight, false)
+	w, h := root.compute(p, kw, kh, maxWidth, maxHeight, false)
 	w, h = min(w, maxWidth), min(h, maxHeight)
-	root.compute(gen, w, h, w, h, true)
+	root.compute(p, w, h, w, h, true)
 }
 
 // ComputeAtWidth lays out root at a fixed width and the height that its own
@@ -166,16 +230,17 @@ func ComputeFit(root *Node, maxWidth, maxHeight float32) {
 // Different trees may be computed concurrently, but one tree must not be
 // computed from two goroutines at once.
 func ComputeAtWidth(root *Node, width float32) {
-	gen := generations.Add(1)
+	p := beginPass()
+	defer p.end()
 	root.X, root.Y = 0, 0
 	h := resolve(root.Style.Height, nan)
 	if isNaN(h) {
-		_, ch := root.compute(gen, width, nan, width, nan, true)
+		_, ch := root.compute(p, width, nan, width, nan, true)
 		if h = root.clampH(ch, nan); h == ch {
 			return
 		}
 	}
-	root.compute(gen, width, h, width, h, true)
+	root.compute(p, width, h, width, h, true)
 }
 
 func isNaN(f float32) bool { return f != f }
@@ -251,16 +316,16 @@ func (it *item) outerMain() float32  { return it.main + it.mMain0 + it.mMain1 }
 func (it *item) outerCross() float32 { return it.cross + it.mCross0 + it.mCross1 }
 
 type line struct {
-	items []*item
+	items []item
 	cross float32
 }
 
 // compute returns the border-box size of n. kw/kh are definite sizes (NaN when
 // content-sized); aw/ah bound content-sized nodes (NaN when unbounded).
-func (n *Node) compute(gen uint32, kw, kh, aw, ah float32, perform bool) (float32, float32) {
+func (n *Node) compute(p *pass, kw, kh, aw, ah float32, perform bool) (float32, float32) {
 	if !perform {
-		if n.cacheGen != gen {
-			n.cacheGen, n.cacheN = gen, 0
+		if n.cacheGen != p.gen {
+			n.cacheGen, n.cacheN = p.gen, 0
 		}
 		for i := 0; i < n.cacheN; i++ {
 			c := &n.cache[i]
@@ -269,7 +334,7 @@ func (n *Node) compute(gen uint32, kw, kh, aw, ah float32, perform bool) (float3
 			}
 		}
 	}
-	w, h := n.computeUncached(gen, kw, kh, aw, ah, perform)
+	w, h := n.computeUncached(p, kw, kh, aw, ah, perform)
 	if !perform {
 		i := n.cacheN
 		if i == len(n.cache) {
@@ -283,7 +348,7 @@ func (n *Node) compute(gen uint32, kw, kh, aw, ah float32, perform bool) (float3
 	return w, h
 }
 
-func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool) (float32, float32) {
+func (n *Node) computeUncached(p *pass, kw, kh, aw, ah float32, perform bool) (float32, float32) {
 	st := &n.Style
 	pad := st.Padding
 	ph, pv := pad.Left+pad.Right, pad.Top+pad.Bottom
@@ -295,7 +360,7 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		} else if !isNaN(aw) {
 			cw = max(aw-ph, 0)
 		}
-		mw, mh := n.Measure(cw, exact)
+		mw, mh := n.Measure.Measure(cw, exact)
 		w, h := kw, kh
 		if isNaN(w) {
 			w = n.clampW(mw+ph, nan)
@@ -306,7 +371,7 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if isNaN(h) {
 			if !exact && w-ph < mw {
 				// The width was clamped below the natural width: re-measure for the height.
-				_, mh = n.Measure(max(w-ph, 0), true)
+				_, mh = n.Measure.Measure(max(w-ph, 0), true)
 			}
 			h = n.clampH(mh+pv, nan)
 		}
@@ -346,8 +411,9 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 	}
 
 	m := n.inFlow()
-	buf := make([]item, m)
-	items := make([]*item, 0, m)
+	items := p.take(m)
+	defer p.release(m)
+	k := 0
 	for _, c := range n.Children {
 		if c.Style.Hidden {
 			if perform {
@@ -358,9 +424,8 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if c.Style.Absolute {
 			continue
 		}
-		it := &buf[len(items)]
-		n.prepareItem(it, gen, c, row, innerMain, innerCross, availMain, availCross)
-		items = append(items, it)
+		n.prepareItem(&items[k], p, c, row, innerMain, innerCross, availMain, availCross)
+		k++
 	}
 
 	// Break into lines.
@@ -370,22 +435,22 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		limit = availMain
 	}
 	if st.Wrap && !isNaN(limit) {
-		cur := line{}
+		start := 0
 		used := float32(0)
-		for _, it := range items {
+		for i := range items {
+			it := &items[i]
 			add := it.hyp + it.mMain0 + it.mMain1
-			if len(cur.items) > 0 && used+st.Gap+add > limit+0.01 {
-				lines = append(lines, cur)
-				cur, used = line{}, 0
+			if i > start && used+st.Gap+add > limit+0.01 {
+				lines = append(lines, line{items: items[start:i]})
+				start, used = i, 0
 			}
-			if len(cur.items) > 0 {
+			if i > start {
 				used += st.Gap
 			}
 			used += add
-			cur.items = append(cur.items, it)
 		}
-		if len(cur.items) > 0 {
-			lines = append(lines, cur)
+		if len(items) > start {
+			lines = append(lines, line{items: items[start:]})
 		}
 	} else {
 		lines = []line{{items: items}}
@@ -399,13 +464,13 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if !isNaN(innerMain) {
 			resolveFlex(ln.items, innerMain-gaps)
 		} else {
-			for _, it := range ln.items {
-				it.main = it.hyp
+			for i := range ln.items {
+				ln.items[i].main = ln.items[i].hyp
 			}
 		}
 		total := gaps
-		for _, it := range ln.items {
-			total += it.outerMain()
+		for i := range ln.items {
+			total += ln.items[i].outerMain()
 		}
 		maxLineMain = max(maxLineMain, total)
 	}
@@ -413,7 +478,7 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if w := n.clampW(maxLineMain+ph, nan); w != maxLineMain+ph {
 			// Lay out again at the clamped width, so items shrink or grow to it
 			// before their heights are measured, as they will when placed.
-			return n.computeUncached(gen, w, kh, aw, ah, perform)
+			return n.computeUncached(p, w, kh, aw, ah, perform)
 		}
 	}
 
@@ -421,21 +486,22 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 	single := len(lines) == 1 && !st.Wrap
 	for li := range lines {
 		ln := &lines[li]
-		for _, it := range ln.items {
+		for i := range ln.items {
+			it := &ln.items[i]
 			switch {
 			case !isNaN(it.specCross):
 				it.cross = clamp(it.specCross, it.minCross, it.maxCross)
 			case it.stretch && single && !isNaN(innerCross):
 				it.cross = clamp(max(innerCross-it.mCross0-it.mCross1, 0), it.minCross, it.maxCross)
 			default:
-				it.cross = it.measureCross(gen, row, availCross)
+				it.cross = it.measureCross(p, row, availCross)
 			}
 		}
 		if single && !isNaN(innerCross) {
 			ln.cross = innerCross
 		} else {
-			for _, it := range ln.items {
-				ln.cross = max(ln.cross, it.outerCross())
+			for i := range ln.items {
+				ln.cross = max(ln.cross, ln.items[i].outerCross())
 			}
 		}
 	}
@@ -461,7 +527,7 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		}
 		if isNaN(w) {
 			if w = n.clampW(totalCross+ph, nan); w != totalCross+ph {
-				return n.computeUncached(gen, w, kh, aw, ah, perform)
+				return n.computeUncached(p, w, kh, aw, ah, perform)
 			}
 		}
 	}
@@ -475,14 +541,16 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 	}
 	if single && isNaN(innerCross) {
 		lines[0].cross = finalInnerCross
-		for _, it := range lines[0].items {
+		for i := range lines[0].items {
+			it := &lines[0].items[i]
 			if it.stretch && isNaN(it.specCross) {
 				it.cross = clamp(max(finalInnerCross-it.mCross0-it.mCross1, 0), it.minCross, it.maxCross)
 			}
 		}
 	} else if !single {
 		for li := range lines {
-			for _, it := range lines[li].items {
+			for i := range lines[li].items {
+				it := &lines[li].items[i]
 				if it.stretch && isNaN(it.specCross) {
 					it.cross = clamp(max(lines[li].cross-it.mCross0-it.mCross1, 0), it.minCross, it.maxCross)
 				}
@@ -508,12 +576,13 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 	for _, ln := range lines {
 		gaps := st.Gap * float32(max(len(ln.items)-1, 0))
 		used := gaps
-		for _, it := range ln.items {
-			used += it.outerMain()
+		for i := range ln.items {
+			used += ln.items[i].outerMain()
 		}
 		free := finalInnerMain - used
 		pos, between := justify(st.Justify, free, len(ln.items))
-		for i, it := range ln.items {
+		for i := range ln.items {
+			it := &ln.items[i]
 			if i > 0 {
 				pos += st.Gap + between
 			}
@@ -533,11 +602,11 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 			var cw, chh float32
 			if row {
 				cw, chh = it.main, it.cross
-				c.compute(gen, cw, chh, cw, chh, true)
+				c.compute(p, cw, chh, cw, chh, true)
 				c.X, c.Y = pad.Left+pos, pad.Top+cpos
 			} else {
 				cw, chh = it.cross, it.main
-				c.compute(gen, cw, chh, cw, chh, true)
+				c.compute(p, cw, chh, cw, chh, true)
 				c.X, c.Y = pad.Left+cpos, pad.Top+pos
 			}
 			contentW = max(contentW, c.X+c.W+c.Style.Margin.Right)
@@ -551,7 +620,7 @@ func (n *Node) computeUncached(gen uint32, kw, kh, aw, ah float32, perform bool)
 		if !c.Style.Absolute || c.Style.Hidden {
 			continue
 		}
-		n.placeAbsolute(gen, c, w, h)
+		n.placeAbsolute(p, c, w, h)
 	}
 
 	n.ContentW = max(w, contentW+pad.Right)
@@ -570,7 +639,7 @@ func (n *Node) inFlow() int {
 	return m
 }
 
-func (n *Node) prepareItem(it *item, gen uint32, c *Node, row bool, innerMain, innerCross, availMain, availCross float32) {
+func (n *Node) prepareItem(it *item, p *pass, c *Node, row bool, innerMain, innerCross, availMain, availCross float32) {
 	cs := &c.Style
 	*it = item{n: c}
 	var mainDim, crossDim, minMainDim, maxMainDim, minCrossDim, maxCrossDim Dim
@@ -615,7 +684,7 @@ func (n *Node) prepareItem(it *item, gen uint32, c *Node, row bool, innerMain, i
 		case !row:
 			// Vertically, items do not shrink below their content (scroll containers excepted).
 			// As in CSS, a definite size such as a percentage caps that minimum.
-			it.minMain = c.minContentHeight(gen, crossKnown, ac)
+			it.minMain = c.minContentHeight(p, crossKnown, ac)
 			if !isNaN(specMain) {
 				it.minMain = min(it.minMain, specMain)
 			}
@@ -635,33 +704,35 @@ func (n *Node) prepareItem(it *item, gen uint32, c *Node, row bool, innerMain, i
 	}
 	if isNaN(basis) {
 		if row {
-			basis, _ = c.compute(gen, nan, crossKnown, am, ac, false)
+			basis, _ = c.compute(p, nan, crossKnown, am, ac, false)
 		} else {
-			_, basis = c.compute(gen, crossKnown, nan, ac, am, false)
+			_, basis = c.compute(p, crossKnown, nan, ac, am, false)
 		}
 	}
 	it.base = basis
 	it.hyp = clamp(basis, it.minMain, it.maxMain)
 }
 
-func (it *item) measureCross(gen uint32, row bool, availCross float32) float32 {
+func (it *item) measureCross(p *pass, row bool, availCross float32) float32 {
 	ac := sub(availCross, it.mCross0+it.mCross1)
 	var v float32
 	if row {
-		_, v = it.n.compute(gen, it.main, nan, it.main, ac, false)
+		_, v = it.n.compute(p, it.main, nan, it.main, ac, false)
 	} else {
-		v, _ = it.n.compute(gen, nan, it.main, ac, it.main, false)
+		v, _ = it.n.compute(p, nan, it.main, ac, it.main, false)
 	}
 	return clamp(v, it.minCross, it.maxCross)
 }
 
-func resolveFlex(items []*item, space float32) {
+func resolveFlex(items []item, space float32) {
 	used := float32(0)
-	for _, it := range items {
+	for i := range items {
+		it := &items[i]
 		used += it.hyp + it.mMain0 + it.mMain1
 	}
 	growing := space > used
-	for _, it := range items {
+	for i := range items {
+		it := &items[i]
 		it.main = it.hyp
 		factor := it.n.Style.Shrink
 		if growing {
@@ -671,7 +742,8 @@ func resolveFlex(items []*item, space float32) {
 	}
 	for iter := 0; iter < len(items)+1; iter++ {
 		sumUsed, sumFactor := float32(0), float32(0)
-		for _, it := range items {
+		for i := range items {
+			it := &items[i]
 			if it.frozen {
 				sumUsed += it.main + it.mMain0 + it.mMain1
 			} else {
@@ -684,7 +756,8 @@ func resolveFlex(items []*item, space float32) {
 			}
 		}
 		if sumFactor == 0 {
-			for _, it := range items {
+			for i := range items {
+				it := &items[i]
 				if !it.frozen {
 					it.main = clamp(it.base, it.minMain, it.maxMain)
 				}
@@ -693,7 +766,8 @@ func resolveFlex(items []*item, space float32) {
 		}
 		free := space - sumUsed
 		total := float32(0)
-		for _, it := range items {
+		for i := range items {
+			it := &items[i]
 			if it.frozen {
 				continue
 			}
@@ -709,7 +783,8 @@ func resolveFlex(items []*item, space float32) {
 			total += it.violation
 		}
 		done := true
-		for _, it := range items {
+		for i := range items {
+			it := &items[i]
 			if it.frozen {
 				continue
 			}
@@ -757,7 +832,7 @@ func justify(j Justify, free float32, n int) (start, between float32) {
 	return 0, 0
 }
 
-func (n *Node) placeAbsolute(gen uint32, c *Node, w, h float32) {
+func (n *Node) placeAbsolute(p *pass, c *Node, w, h float32) {
 	cs := &c.Style
 	m := cs.Margin
 	in := cs.Inset
@@ -770,7 +845,7 @@ func (n *Node) placeAbsolute(gen uint32, c *Node, w, h float32) {
 		chh = max(h-in.Top-in.Bottom-m.Top-m.Bottom, 0)
 	}
 	if isNaN(cw) || isNaN(chh) {
-		mw, mh := c.compute(gen, cw, chh, w, h, false)
+		mw, mh := c.compute(p, cw, chh, w, h, false)
 		if isNaN(cw) {
 			cw = mw
 		}
@@ -779,7 +854,7 @@ func (n *Node) placeAbsolute(gen uint32, c *Node, w, h float32) {
 		}
 	}
 	cw, chh = c.clampW(cw, w), c.clampH(chh, h)
-	c.compute(gen, cw, chh, cw, chh, true)
+	c.compute(p, cw, chh, cw, chh, true)
 	switch {
 	case !isNaN(in.Left):
 		c.X = in.Left + m.Left
@@ -807,7 +882,7 @@ func abs(f float32) float32 {
 
 // minContentHeight is the smallest border-box height n can take at width without
 // overflowing its content. Scroll containers report 0 since they can scroll instead.
-func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
+func (n *Node) minContentHeight(p *pass, width, aw float32) float32 {
 	st := &n.Style
 	maxH := resolve(st.MaxHeight, nan)
 	if v := resolve(st.MinHeight, nan); !isNaN(v) {
@@ -819,14 +894,14 @@ func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
 	if st.ScrollY {
 		return 0
 	}
-	if n.mcGen == gen && same(n.mcW, width) && same(n.mcAW, aw) {
+	if n.mcGen == p.gen && same(n.mcW, width) && same(n.mcAW, aw) {
 		return n.mcH
 	}
 	var h float32
 	if n.Measure != nil && len(n.Children) == 0 {
-		_, h = n.compute(gen, width, nan, aw, nan, false)
+		_, h = n.compute(p, width, nan, aw, nan, false)
 	} else if st.Direction == Row && st.Wrap {
-		_, h = n.compute(gen, width, nan, aw, nan, false)
+		_, h = n.compute(p, width, nan, aw, nan, false)
 	} else if st.Direction == Row {
 		pad := st.Padding
 		innerW := sub(width, pad.Left+pad.Right)
@@ -838,29 +913,31 @@ func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
 			innerW, availW = nan, nan
 		}
 		m := n.inFlow()
-		buf := make([]item, m)
-		items := make([]*item, 0, m)
+		items := p.take(m)
+		k := 0
 		for _, c := range n.Children {
 			if c.Style.Hidden || c.Style.Absolute {
 				continue
 			}
-			it := &buf[len(items)]
-			n.prepareItem(it, gen, c, true, innerW, nan, availW, nan)
-			items = append(items, it)
+			n.prepareItem(&items[k], p, c, true, innerW, nan, availW, nan)
+			k++
 		}
 		if !isNaN(innerW) {
 			resolveFlex(items, innerW-st.Gap*float32(max(len(items)-1, 0)))
 		} else {
-			for _, it := range items {
+			for i := range items {
+				it := &items[i]
 				it.main = it.hyp
 			}
 		}
 		// Wrapping depends on the width left after sibling flex sizes and gaps.
 		// Keep the recursive minimum so vertical scroll areas can still shrink.
-		for _, it := range items {
-			ch := it.n.minContentHeight(gen, it.main, it.main) + it.mCross0 + it.mCross1
+		for i := range items {
+			it := &items[i]
+			ch := it.n.minContentHeight(p, it.main, it.main) + it.mCross0 + it.mCross1
 			h = max(h, ch)
 		}
+		p.release(m)
 		h = clamp(h+pad.Top+pad.Bottom, nan, maxH)
 	} else {
 		pad := st.Padding
@@ -890,7 +967,7 @@ func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
 			if !isNaN(cw) {
 				cw = c.clampW(cw, innerW)
 			}
-			ch := c.minContentHeight(gen, cw, sub(availW, mh)) + cs.Margin.Top + cs.Margin.Bottom
+			ch := c.minContentHeight(p, cw, sub(availW, mh)) + cs.Margin.Top + cs.Margin.Bottom
 			if st.Direction == Column {
 				h += ch
 			} else {
@@ -903,6 +980,6 @@ func (n *Node) minContentHeight(gen uint32, width, aw float32) float32 {
 		}
 		h = clamp(h+pad.Top+pad.Bottom, nan, maxH)
 	}
-	n.mcGen, n.mcW, n.mcAW, n.mcH = gen, width, aw, h
+	n.mcGen, n.mcW, n.mcAW, n.mcH = p.gen, width, aw, h
 	return h
 }

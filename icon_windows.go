@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/layout"
 	"github.com/myparsleycat/fairy/svg"
 )
 
@@ -14,21 +13,19 @@ type iconKey struct {
 	w, h int
 }
 
-func (w *Window) iconMeasure(e *El) layout.MeasureFunc {
-	return func(width float32, exact bool) (float32, float32) {
-		sz := float32(math.Round(float64(e.tp.size * 1.15)))
-		if e.vec == nil {
-			return sz, sz
-		}
-		vw, vh, err := e.vec.Size()
-		if err != nil {
-			return sz, sz
-		}
-		if exact && width == width {
-			return width, width * vh / vw
-		}
-		return sz * vw / max(vh, 1), sz
+func measureIcon(e *El, width float32, exact bool) (float32, float32) {
+	sz := float32(math.Round(float64(e.tp.size * 1.15)))
+	if e.vec == nil {
+		return sz, sz
 	}
+	vw, vh, err := e.vec.Size()
+	if err != nil {
+		return sz, sz
+	}
+	if exact && width == width {
+		return width, width * vh / vw
+	}
+	return sz * vw / max(vh, 1), sz
 }
 
 func (w *Window) paintIcon(e *El, box rectF, color Color, clip [4]float32, opacity float32) bool {

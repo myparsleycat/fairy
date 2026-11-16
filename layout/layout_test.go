@@ -15,7 +15,7 @@ func box(st Style, children ...*Node) *Node {
 // textLeaf wraps "words" of 10px each into lines 10px tall.
 func textLeaf(words int) *Node {
 	n := box(Style{})
-	n.Measure = func(w float32, exact bool) (float32, float32) {
+	n.Measure = MeasureFunc(func(w float32, exact bool) (float32, float32) {
 		full := float32(words * 10)
 		if isNaN(w) || w >= full {
 			return full, 10
@@ -23,7 +23,7 @@ func textLeaf(words int) *Node {
 		perLine := max(int(w/10), 1)
 		lines := (words + perLine - 1) / perLine
 		return float32(perLine * 10), float32(lines * 10)
-	}
+	})
 	return n
 }
 
@@ -108,6 +108,24 @@ func TestWrapBreaksLines(t *testing.T) {
 	Compute(root, 140, 200)
 	expect(t, kids[2], 100, 0, 40, 30)
 	expect(t, kids[3], 0, 40, 40, 30)
+}
+
+// The row takes more items than the stack holds, while the column keeps laying
+// out its own children from the buffer it took before.
+func TestLayoutBeyondInitialItemBuffer(t *testing.T) {
+	var kids []*Node
+	for range 200 {
+		kids = append(kids, box(Style{Width: PxDim(10), Height: PxDim(10)}))
+	}
+	header := box(Style{Height: PxDim(10)})
+	row := box(Style{Direction: Row, Wrap: true, AlignItems: AlignStart}, kids...)
+	footer := box(Style{Height: PxDim(10)})
+	Compute(box(Style{AlignItems: AlignStretch}, header, row, footer), 300, 200)
+	expect(t, row, 0, 10, 300, 70)
+	for i, k := range kids {
+		expect(t, k, float32(i%30*10), float32(i/30*10), 10, 10)
+	}
+	expect(t, footer, 0, 80, 300, 10)
 }
 
 func TestScrollContainerKeepsContentSize(t *testing.T) {
@@ -195,15 +213,46 @@ func TestOverflowingColumnRowWrapsBesideSibling(t *testing.T) {
 // than it, such as a portrait image filling a square, does not stretch the item.
 func TestPercentHeightCapsContentMinimum(t *testing.T) {
 	portrait := box(Style{Width: PctDim(1), Height: PctDim(1)})
-	portrait.Measure = func(w float32, exact bool) (float32, float32) {
+	portrait.Measure = MeasureFunc(func(w float32, exact bool) (float32, float32) {
 		if isNaN(w) {
 			w = 20
 		}
 		return w, w * 2
-	}
+	})
 	frame := box(Style{Width: PxDim(40), Height: PxDim(40), AlignItems: AlignCenter}, portrait)
 	Compute(box(Style{AlignItems: AlignStart}, frame), 100, 100)
 	expect(t, portrait, 0, 0, 40, 40)
+}
+
+// A pass goes back to the pool without references to the tree it laid out,
+// and without an item array larger than maxPooledItems.
+func TestPassEndReleasesItems(t *testing.T) {
+	p := &pass{}
+	buf := p.take(3)
+	for i := range buf {
+		buf[i].n = &Node{}
+	}
+	p.end()
+	for i, it := range p.items {
+		if it.n != nil {
+			t.Fatalf("pooled item %d still points to a node", i)
+		}
+	}
+
+	big := &pass{}
+	big.take(maxPooledItems + 1)
+	big.end()
+	if big.items != nil {
+		t.Fatalf("pooled pass kept %d items, want none above %d", len(big.items), maxPooledItems)
+	}
+}
+
+func TestNilMeasureFuncMeasuresEmpty(t *testing.T) {
+	var fn MeasureFunc
+	leaf := box(Style{Padding: Edges{Top: 4, Right: 3, Bottom: 4, Left: 3}})
+	leaf.Measure = fn
+	Compute(box(Style{AlignItems: AlignStart}, leaf), 100, 100)
+	expect(t, leaf, 0, 0, 6, 8)
 }
 
 func TestComputeAtWidthHonorsRootHeight(t *testing.T) {

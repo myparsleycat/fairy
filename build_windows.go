@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"fmt"
 	"slices"
 	"time"
 
@@ -227,16 +228,13 @@ func (w *Window) prepare(e, parent *El, pid uint64, index int, inh textProps) {
 	n.Style = e.style
 	n.Style.Padding = e.padding()
 	n.Children = slices.Grow(n.Children[:0], len(e.children))
-	n.Measure = nil
 	switch e.kind {
-	case kindText:
-		n.Measure = w.textMeasure(e)
-	case kindImage:
-		n.Measure = w.imageMeasure(e)
-	case kindInput:
-		n.Measure = w.inputMeasure(e)
-	case kindIcon, kindSpinner, kindArc:
-		n.Measure = w.iconMeasure(e)
+	case kindText, kindInput:
+		e.measureWin, n.Measure = w, (*elMeasurer)(e)
+	case kindImage, kindIcon, kindSpinner, kindArc:
+		e.measureWin, n.Measure = nil, (*elMeasurer)(e)
+	default:
+		e.measureWin, n.Measure = nil, nil
 	}
 	if e.virtual != nil {
 		e.virtual.inh = childInh
@@ -278,63 +276,78 @@ func (w *Window) devWidth(width float32) float32 {
 	return width * w.scale
 }
 
-func (w *Window) textMeasure(e *El) layout.MeasureFunc {
-	return func(width float32, exact bool) (float32, float32) {
-		st := w.elTextStyle(e)
-		lw := w.devWidth(width)
-		if !exact && (st.Align != text.AlignStart || st.Ellipsis) {
-			// Measure natural size without alignment slack.
-			st.Align = text.AlignStart
-		}
-		tw, th := w.ts.Measure(e.text, st, lw)
-		if exact && width == width {
-			tw = width * w.scale
-		}
-		return tw / w.scale, th / w.scale
+// elMeasurer is an El as a layout.Measurer. Converting *El to it and storing
+// it in Node.Measure allocates nothing, unlike a closure over the element.
+type elMeasurer El
+
+func (m *elMeasurer) Measure(width float32, exact bool) (float32, float32) {
+	e := (*El)(m)
+	w := e.measureWin
+	switch e.kind {
+	case kindText:
+		return w.measureText(e, width, exact)
+	case kindImage:
+		return measureImage(e, width, exact)
+	case kindInput:
+		return w.measureInput(e, width, exact)
+	case kindIcon, kindSpinner, kindArc:
+		return measureIcon(e, width, exact)
 	}
+	// prepare gave a Measure to a kind this switch does not measure.
+	panic(fmt.Sprintf("fairy: no measure for element kind %d", e.kind))
 }
 
-func (w *Window) imageMeasure(e *El) layout.MeasureFunc {
-	return func(width float32, exact bool) (float32, float32) {
-		if e.image == nil {
-			return 0, 0
-		}
-		iw, ih := float32(e.image.data.W), float32(e.image.data.H)
-		if exact && width == width && iw > 0 {
-			return width, width * ih / iw
-		}
-		if width == width && iw > width && iw > 0 {
-			return width, width * ih / iw
-		}
-		return iw, ih
+func (w *Window) measureText(e *El, width float32, exact bool) (float32, float32) {
+	st := w.elTextStyle(e)
+	lw := w.devWidth(width)
+	if !exact && (st.Align != text.AlignStart || st.Ellipsis) {
+		// Measure natural size without alignment slack.
+		st.Align = text.AlignStart
 	}
+	tw, th := w.ts.Measure(e.text, st, lw)
+	if exact && width == width {
+		tw = width * w.scale
+	}
+	return tw / w.scale, th / w.scale
 }
 
-func (w *Window) inputMeasure(e *El) layout.MeasureFunc {
-	return func(width float32, exact bool) (float32, float32) {
-		st := w.textStyle(e.tp)
-		lh := st.LineHeight
-		if lh == 0 {
-			_, lh = w.ts.Measure("Ag", st, text.Unbounded)
+func measureImage(e *El, width float32, exact bool) (float32, float32) {
+	if e.image == nil {
+		return 0, 0
+	}
+	iw, ih := float32(e.image.data.W), float32(e.image.data.H)
+	if exact && width == width && iw > 0 {
+		return width, width * ih / iw
+	}
+	if width == width && iw > width && iw > 0 {
+		return width, width * ih / iw
+	}
+	return iw, ih
+}
+
+func (w *Window) measureInput(e *El, width float32, exact bool) (float32, float32) {
+	st := w.textStyle(e.tp)
+	lh := st.LineHeight
+	if lh == 0 {
+		_, lh = w.ts.Measure("Ag", st, text.Unbounded)
+	}
+	if e.input.multiline {
+		s := e.input.value
+		if s == "" {
+			s = " "
 		}
-		if e.input.multiline {
-			s := e.input.value
-			if s == "" {
-				s = " "
-			}
-			st.NoWrap = false
-			_, h := w.ts.Measure(s+"​", st, w.devWidth(width))
-			h = max(h, lh)
-			fw := float32(160)
-			if exact && width == width {
-				fw = width
-			}
-			return fw, h / w.scale
-		}
+		st.NoWrap = false
+		_, h := w.ts.Measure(s+"​", st, w.devWidth(width))
+		h = max(h, lh)
 		fw := float32(160)
 		if exact && width == width {
 			fw = width
 		}
-		return fw, lh / w.scale
+		return fw, h / w.scale
 	}
+	fw := float32(160)
+	if exact && width == width {
+		fw = width
+	}
+	return fw, lh / w.scale
 }

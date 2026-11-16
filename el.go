@@ -180,6 +180,9 @@ type El struct {
 	// values, so a subtree that Memo reuses inherits afresh.
 	ownTP   textProps
 	tpSaved bool
+	// measureWin is the window that measures the element's text, set only
+	// for kinds whose measure reads the window.
+	measureWin *Window
 
 	hoverFill, hoverBorder, hoverText Color
 	pressFill                         Color
