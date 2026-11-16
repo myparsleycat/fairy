@@ -98,8 +98,8 @@ func (in Input) srcBound(bound Bound) Bound {
 	return bound
 }
 
-// finish turns a decode into the image as shown: rotated as its metadata
-// says and converted to sRGB.
+// finish converts a decode to sRGB. The decoders already turned it as its
+// EXIF orientation says.
 func (in Input) finish(img *Bitmap) *Bitmap {
 	if img == nil {
 		return nil
@@ -115,17 +115,15 @@ func (in Input) finish(img *Bitmap) *Bitmap {
 			t.apply(f.Pixels)
 		}
 	}
-	if len(img.FrameData) == 0 && img.Pixels != nil {
-		img.Pixels, img.W, img.H = orientPixels(img.Pixels, img.W, img.H, in.meta.orient)
-	}
 	return img
 }
 
 // DecodePixels decodes the image scaled within bound, as Decode does, or only
 // the first frame of an animation when firstOnly is set. An animation keeps
 // all its frames only when they fit keepBytes; past that it decodes them as it
-// plays, within animBytes. wic, when non-nil,
-// is tried first for the formats wicDecoderClass accepts; if it returns nil
+// plays, within animBytes. wic, when non-nil, returns the image turned as its
+// EXIF orientation says and is tried first for the formats wicDecoderClass
+// accepts; if it returns nil
 // the Go decoders run instead, and usedWIC reports which produced img. run,
 // when non-nil, runs each attempt under a memory reservation of the given
 // bytes and reports false when it did not run the attempt, in which case
@@ -138,7 +136,7 @@ func (in Input) DecodePixels(bound Bound, keepBytes, animBytes int64, firstOnly 
 		f := func() { img = in.finish(wic(in, bound)) }
 		if run == nil {
 			f()
-		} else if !run(min(WorkBudget, wicWork(in, bound)+in.finishWork(bound)), f) {
+		} else if !run(min(WorkBudget, wicWork(in, bound)+in.colorWork()), f) {
 			return nil, false, nil
 		}
 		if img != nil {
@@ -166,16 +164,28 @@ func (in Input) DecodePixels(bound Bound, keepBytes, animBytes int64, firstOnly 
 	return img, false, nil
 }
 
+// finishWork is what turning and recoloring a Go decode holds: a quarter turn
+// copies an unscaled image, while a scaled one is turned row by row as it is
+// resampled. Flips and the half turn are done in place.
 func (in Input) finishWork(bound Bound) int64 {
-	var bytes int64
-	if in.meta.orient >= 2 && in.meta.orient <= 8 {
-		w, h := bound.Size(in.Config.Width, in.Config.Height)
-		bytes += int64(w) * int64(h) * 4
-	}
-	if len(in.meta.icc) > 0 || in.meta.primaries != 0 || in.meta.transfer != 0 {
-		bytes += 8 << 10
+	bytes := in.colorWork()
+	if orientSwaps(in.meta.orient) {
+		sw, sh := in.srcSize()
+		w, h := in.srcBound(bound).Size(sw, sh)
+		if w == sw && h == sh {
+			bytes += int64(w) * int64(h) * 4
+		} else {
+			bytes += int64(w) * 4
+		}
 	}
 	return bytes
+}
+
+func (in Input) colorWork() int64 {
+	if len(in.meta.icc) > 0 || in.meta.primaries != 0 || in.meta.transfer != 0 {
+		return 8 << 10
+	}
+	return 0
 }
 
 func (in Input) decodeFirst() (*Bitmap, error) {

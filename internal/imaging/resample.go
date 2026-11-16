@@ -103,7 +103,10 @@ func (r *resampler) scale(src image.Image) *image.RGBA {
 }
 
 // scaleInto is scale writing into dst, a dw x dh image at the origin.
-func (r *resampler) scaleInto(src image.Image, dst *image.RGBA) {
+func (r *resampler) scaleInto(src image.Image, dst *image.RGBA) { r.scaleTo(src, dst, nil) }
+
+// scaleTo is scaleInto, or with t writes each output row to t instead of dst.
+func (r *resampler) scaleTo(src image.Image, dst *image.RGBA, t *orientWriter) {
 	if r.row == nil {
 		r.row = make([]uint16, r.sw*4)
 		r.row8 = image.NewRGBA(image.Rect(0, 0, r.sw, 1))
@@ -118,6 +121,10 @@ func (r *resampler) scaleInto(src image.Image, dst *image.RGBA) {
 		}
 	}
 	n := r.dw * 4
+	var out []byte
+	if t != nil {
+		out = make([]byte, n)
+	}
 	next := 0 // next source row to filter
 	for y := range r.dh {
 		first := r.y.first[y]
@@ -136,7 +143,12 @@ func (r *resampler) scaleInto(src image.Image, dst *image.RGBA) {
 				acc[i] += int64(w) * int64(v)
 			}
 		}
-		pack(dst.Pix[y*dst.Stride:][:n], acc)
+		if t == nil {
+			pack(dst.Pix[y*dst.Stride:][:n], acc)
+		} else {
+			pack(out, acc)
+			t.put(y, out)
+		}
 	}
 }
 

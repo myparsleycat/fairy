@@ -68,7 +68,7 @@ func (in Input) firstFrame(bound Bound) (*Bitmap, error) {
 		}
 		return nil, err
 	}
-	return resize(first, bound, true), nil
+	return resize(first, bound, 0), nil
 }
 
 // streamImage returns an animation that decodes its frames as it plays, or
@@ -137,7 +137,7 @@ func (s *animStream) wait() bool {
 func (s *animStream) run() {
 	var work []byte
 	var r *resampler
-	sink := frameSink{keepAll: true}
+	sink := frameSink{keepAll: true, buffers: &walkBuffers{}}
 	for {
 		i := 0
 		sink.each = func(canvas *image.NRGBA) error {

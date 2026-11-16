@@ -151,7 +151,7 @@ func skipGIFSubBlocks(b []byte) ([]byte, error) {
 }
 
 func decodeGIFFrames(data []byte, a animationInfo, s *frameSink) error {
-	canvas := image.NewNRGBA(image.Rect(0, 0, a.W, a.H))
+	canvas := s.newCanvas(a.W, a.H)
 	var saved []byte
 	_, err := walkGIF(data, func(f gifFrame) error {
 		// gif.Decode stops at the end of the first image data block. Keeping
@@ -164,7 +164,7 @@ func decodeGIFFrames(data []byte, a animationInfo, s *frameSink) error {
 		var prev image.NRGBA
 		if f.disposal == gif.DisposalPrevious && !f.rect.Empty() {
 			if saved == nil {
-				saved = make([]byte, a.maxSaved*4)
+				saved = s.savedArea(int(a.maxSaved * 4))
 			}
 			prev = image.NRGBA{Pix: saved, Stride: f.rect.Dx() * 4, Rect: f.rect}
 			draw.Draw(&prev, f.rect, canvas, f.rect.Min, draw.Src)

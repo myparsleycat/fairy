@@ -208,3 +208,89 @@ func TestWICDecodesAVIFWithItsMatrixCoefficients(t *testing.T) {
 		t.Error("truncated AVIF inspected")
 	}
 }
+
+// Decoders turn oriented images as they produce them, and flips and the half
+// turn happen in place; each must match turning the unoriented decode.
+func TestOrientedDecodesMatchTurnedPixels(t *testing.T) {
+	const w, h = 211, 137 // odd, so flips and turns have a middle row and column
+	src := image.NewNRGBA(image.Rect(0, 0, w, h))
+	seed := uint32(1)
+	for i := range src.Pix {
+		seed = seed*1664525 + 1013904223
+		src.Pix[i] = byte(seed >> 24)
+	}
+	var pb, jb bytes.Buffer
+	if err := png.Encode(&pb, src); err != nil {
+		t.Fatal(err)
+	}
+	if err := jpeg.Encode(&jb, src, nil); err != nil {
+		t.Fatal(err)
+	}
+	formats := map[string]func(o uint16) []byte{
+		"png": func(o uint16) []byte {
+			if o == 0 {
+				return pb.Bytes()
+			}
+			return withPNGChunk(pb.Bytes(), "eXIf", exifTIFF(o))
+		},
+		"jpeg": func(o uint16) []byte {
+			if o == 0 {
+				return jb.Bytes()
+			}
+			return withJPEGSegment(jb.Bytes(), 0xe1, append([]byte("Exif\x00\x00"), exifTIFF(o)...))
+		},
+	}
+	// turn is EXIF orientation o applied pixel by pixel to a w x h image.
+	turn := func(pix []byte, w, h int, o uint16) []byte {
+		out := make([]byte, len(pix))
+		ow := w
+		if o >= 5 {
+			ow = h
+		}
+		for sy := range h {
+			for sx := range w {
+				// Where the pixel at (sx, sy) is shown.
+				p := [9][2]int{
+					1: {sx, sy}, 2: {w - 1 - sx, sy}, 3: {w - 1 - sx, h - 1 - sy}, 4: {sx, h - 1 - sy},
+					5: {sy, sx}, 6: {h - 1 - sy, sx}, 7: {h - 1 - sy, w - 1 - sx}, 8: {sy, w - 1 - sx},
+				}[o]
+				copy(out[(p[1]*ow+p[0])*4:][:4], pix[(sy*w+sx)*4:][:4])
+			}
+		}
+		return out
+	}
+	for name, data := range formats {
+		plain, err := Inspect(data(0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for o := uint16(1); o <= 8; o++ {
+			in, err := Inspect(data(o))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, bound := range []Bound{{}, {W: 97, H: 61}} {
+				for _, wic := range []func(Input, Bound) *Bitmap{nil, DecodeWIC} {
+					got, gotWIC, err := in.DecodePixels(bound, 0, 0, false, wic, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want, wantWIC, err := plain.DecodePixels(in.srcBound(bound), 0, 0, false, wic, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if gotWIC != (wic != nil) || wantWIC != gotWIC {
+						t.Fatalf("%s orientation %d: decoded with WIC = %v, want %v", name, o, gotWIC, wic != nil)
+					}
+					ww, wh := want.W, want.H
+					if o >= 5 {
+						ww, wh = wh, ww
+					}
+					if got.W != ww || got.H != wh || !bytes.Equal(got.Pixels, turn(want.Pixels, want.W, want.H, o)) {
+						t.Errorf("%s orientation %d, bound %v, WIC %v: pixels differ from the turned decode", name, o, bound, gotWIC)
+					}
+				}
+			}
+		}
+	}
+}

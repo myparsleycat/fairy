@@ -93,12 +93,16 @@ func jpegDCTSize(sw, sh, dw, dh int) (int, int, bool) {
 // requests rows in bands of about 1 MiB.
 const wicScratch = 2 << 20
 
-// wicWork estimates the memory DecodeWIC holds: the output, the DCT-scaled
-// JPEG it resamples from or the HEIF decoder's full image, and WIC's scratch.
+// wicWork estimates the memory DecodeWIC holds: the output, the band of rows
+// it turns an oriented image through, the DCT-scaled JPEG it resamples from or
+// the HEIF decoder's full image, and WIC's scratch.
 func wicWork(in Input, bound Bound) int64 {
 	sw, sh := in.srcSize()
 	dw, dh := in.srcBound(bound).Size(sw, sh)
 	n := int64(dw)*int64(dh)*4 + wicScratch
+	if orientTurns(in.meta.orient) {
+		n += wicBandBytes(dw, dh)
+	}
 	switch in.Format {
 	case "jpeg":
 		if w, h, ok := jpegDCTSize(sw, sh, dw, dh); ok {
@@ -115,8 +119,8 @@ func wicWork(in Input, bound Bound) int64 {
 
 // DecodeWIC decodes a still JPEG or PNG with the Windows Imaging Component,
 // scaled within bound with high-quality cubic resampling, in premultiplied
-// alpha for translucent images. JPEGs reduced fourfold or more first decode
-// at a DCT scale. WIC reads the bytes in place and hands out rows on
+// alpha for translucent images, and turned as its EXIF orientation says.
+// JPEGs reduced fourfold or more first decode at a DCT scale. WIC reads the bytes in place and hands out rows on
 // request, so neither the full-size source nor a resampling buffer of
 // source height is held. It returns nil for images WIC does not take or
 // when a call fails, such as in a COM single-threaded apartment.
@@ -223,9 +227,27 @@ func decodeWICPixels(in Input, bound Bound) *image.RGBA {
 	if src = w.convert(src, out); src == nil {
 		return nil
 	}
-	img := image.NewRGBA(image.Rect(0, 0, dw, dh))
-	if !wicCopyRows(src, img.Pix, dw, dh, img.Stride) {
-		return nil
+	stride := dw * 4
+	var img *image.RGBA
+	if o := in.meta.orient; orientTurns(o) {
+		t, ow, oh := newOrientWriter(make([]byte, dw*dh*4), dw, dh, o)
+		buf := make([]byte, wicBandBytes(dw, dh))
+		into := func(_, n int) []byte { return buf[:n*stride] }
+		turn := func(y, n int) {
+			for i := range n {
+				t.put(y+i, buf[i*stride:][:stride])
+			}
+		}
+		if !wicCopyRows(src, dw, dh, into, turn) {
+			return nil
+		}
+		img = &image.RGBA{Pix: t.dst, Stride: ow * 4, Rect: image.Rect(0, 0, ow, oh)}
+	} else {
+		img = image.NewRGBA(image.Rect(0, 0, dw, dh))
+		into := func(y, n int) []byte { return img.Pix[y*stride : (y+n)*stride] }
+		if !wicCopyRows(src, dw, dh, into, nil) {
+			return nil
+		}
 	}
 	if !premul && !wicOpaque(format) {
 		premultiplyRGBA(img.Pix, img.Pix)
@@ -435,20 +457,32 @@ func (w *wicSession) dctScaled(frame unsafe.Pointer, sw, sh, dw, dh int) (unsafe
 	return bmp, int(rw), int(rh)
 }
 
-// wicCopyRows copies src in bands of rows. A request for the whole image
-// makes WIC decode and convert it in one piece, which holds a full-size
-// intermediate; bands keep that to a few rows.
-func wicCopyRows(src unsafe.Pointer, pix []byte, w, h, stride int) bool {
+// wicCopyRows copies the w x h image src in bands of rows, rows y to y+n
+// into the slice into returns, calling done, when set, after each band. A
+// request for the whole image makes WIC decode and convert it in one piece,
+// which holds a full-size intermediate; bands keep that to a few rows.
+func wicCopyRows(src unsafe.Pointer, w, h int, into func(y, n int) []byte, done func(y, n int)) bool {
 	const copyPixels = 7
-	band := max(1, (1<<20)/stride)
+	stride := w * 4
+	band := wicBandRows(stride)
 	for y := 0; y < h; y += band {
 		n := min(band, h-y)
 		rect := [4]int32{0, int32(y), int32(w), int32(n)}
-		chunk := pix[y*stride : (y+n)*stride]
+		chunk := into(y, n)
 		if com.HR(src, copyPixels, uintptr(unsafe.Pointer(&rect)), uintptr(stride), uintptr(len(chunk)),
 			uintptr(unsafe.Pointer(unsafe.SliceData(chunk)))).Failed() {
 			return false
 		}
+		if done != nil {
+			done(y, n)
+		}
 	}
 	return true
+}
+
+func wicBandRows(stride int) int { return max(1, (1<<20)/stride) }
+
+// wicBandBytes is the band of rows a w x h image is turned through.
+func wicBandBytes(w, h int) int64 {
+	return int64(min(wicBandRows(w*4), h)) * int64(w) * 4
 }

@@ -142,7 +142,7 @@ func TestGIFRestoresPreviousRegion(t *testing.T) {
 		for i, frame := range all.Image {
 			saved := append([]byte(nil), canvas.Pix...)
 			draw.Draw(canvas, frame.Bounds(), frame, frame.Bounds().Min, draw.Over)
-			want := resize(canvas, bound, false)
+			want := resize(&image.NRGBA{Pix: bytes.Clone(canvas.Pix), Stride: canvas.Stride, Rect: canvas.Rect}, bound, 0)
 			if !bytes.Equal(got.FrameData[i].Pixels, want.Pixels) ||
 				got.FrameData[i].Delay != frameDelay(time.Duration(all.Delay[i])*10*time.Millisecond) {
 				t.Fatalf("frame %d pixels or timing differ", i)
@@ -206,7 +206,7 @@ func TestWebPAnimatedLossyAlpha(t *testing.T) {
 	}
 	canvas := image.NewNRGBA(image.Rect(0, 0, c.Width, c.Height))
 	draw.Draw(canvas, canvas.Bounds(), frame, frame.Bounds().Min, draw.Src)
-	want := resize(canvas, bound, false)
+	want := resize(canvas, bound, 0)
 	if got.FrameCount() != 2 {
 		t.Fatalf("frames = %d, want 2", got.FrameCount())
 	}

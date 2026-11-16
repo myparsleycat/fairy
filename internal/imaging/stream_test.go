@@ -2,7 +2,9 @@ package imaging
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
+	"image/color"
 	"image/gif"
 	"testing"
 	"testing/synctest"
@@ -108,4 +110,49 @@ func TestStreamBudgetIncludesResampler(t *testing.T) {
 	if err != nil || img.Stream == nil {
 		t.Fatalf("stream did not fit with its resampler: %v", err)
 	}
+}
+
+// Each pass of a stream starts over on a clear canvas, which it keeps between
+// passes.
+func TestStreamedWebPRepeatsFromAClearCanvas(t *testing.T) {
+	vp8x := make([]byte, 10)
+	vp8x[0] = 0x12 // animation and alpha
+	vp8x[4], vp8x[7] = 5, 5
+	body := append([]byte("WEBP"), webpChunk("VP8X", vp8x)...)
+	body = append(body, webpChunk("ANIM", make([]byte, 6))...)
+	// Frames blended over the last, so the canvas fills up during a pass.
+	for i, p := range []image.Point{{0, 0}, {2, 2}, {4, 4}, {2, 0}, {0, 2}, {4, 0}, {0, 4}, {4, 2}, {2, 4}} {
+		c := color.NRGBA{uint8(30 + i*25), uint8(200 - i*20), 90, 255}
+		body = append(body, anmf(p.X, p.Y, 2, 2, 50, 0, solidVP8L(2, 2, c))...)
+	}
+	data := append([]byte("RIFF"), 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(body)))
+	data = append(data, body...)
+
+	kept, err := Decode(data, Bound{}, maxAnimBytes)
+	if err != nil || kept.FrameCount() != 9 || kept.Stream != nil {
+		t.Fatalf("kept %d frames, %v", kept.FrameCount(), err)
+	}
+	synctest.Test(t, func(t *testing.T) {
+		budget := int64(len(kept.FrameData))*int64(len(kept.Pixels)) - 1
+		streamed, err := Decode(data, Bound{}, budget)
+		if err != nil || streamed.Stream == nil {
+			t.Fatalf("not streamed within %d bytes: %v", budget, err)
+		}
+		for _, n := range []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 1} {
+			var got []byte
+			for range 3 {
+				if streamed.Stream.WithFrame(n, func(p []byte) { got = bytes.Clone(p) }) {
+					break
+				}
+				synctest.Wait()
+			}
+			if !bytes.Equal(got, kept.FrameData[n].Pixels) {
+				t.Fatalf("frame %d differs from the kept decode", n)
+			}
+		}
+		// Let the decoder stop before the bubble ends.
+		time.Sleep(2 * streamIdle)
+		synctest.Wait()
+	})
 }

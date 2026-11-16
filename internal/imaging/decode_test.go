@@ -147,12 +147,12 @@ func TestImageDecodeReservationIncludesOrientation(t *testing.T) {
 	}
 	in.meta.orient = 6
 	in.Config.Width, in.Config.Height = 1, 2
-	raw := New(image.NewRGBA(image.Rect(0, 0, 2, 1)))
+	var decoded *Bitmap
 	_, _, err = in.DecodePixels(Bound{}, 0, 0, false,
-		func(Input, Bound) *Bitmap { return raw },
+		func(in Input, bound Bound) *Bitmap { decoded = DecodeWIC(in, bound); return decoded },
 		func(_ int64, f func()) bool {
 			f()
-			if raw.W != 1 || raw.H != 2 {
+			if decoded == nil || decoded.W != 1 || decoded.H != 2 {
 				t.Error("decode reservation ended before orientation completed")
 			}
 			return true

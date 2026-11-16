@@ -185,20 +185,26 @@ func (in Input) decode(bound Bound, keepBytes, animBytes int64) (*Bitmap, error)
 		}
 		return nil, err
 	}
-	return resize(src, in.srcBound(bound), true), nil
+	return resize(src, in.srcBound(bound), in.meta.orient), nil
 }
 
-// resize scales src within bound. With owned, nothing else uses src
-// afterwards, so an unscaled *image.NRGBA is premultiplied in place.
-func resize(src image.Image, bound Bound, owned bool) *Bitmap {
+// resize scales src, which nothing else uses afterwards, within bound and
+// turns it as EXIF orientation o says. A scaled image is turned row by row
+// as it is resampled.
+func resize(src image.Image, bound Bound, o uint8) *Bitmap {
 	b := src.Bounds()
-	if w, h := bound.Size(b.Dx(), b.Dy()); w != b.Dx() || h != b.Dy() {
+	w, h := bound.Size(b.Dx(), b.Dy())
+	switch {
+	case w == b.Dx() && h == b.Dy():
+		img := newOwned(src)
+		img.Pixels, img.W, img.H = orientPixels(img.Pixels, img.W, img.H, o)
+		return img
+	case !orientTurns(o):
 		return ResizeTo(src, w, h)
 	}
-	if owned {
-		return newOwned(src)
-	}
-	return New(src)
+	t, ow, oh := newOrientWriter(make([]byte, w*h*4), w, h, o)
+	newResampler(b.Dx(), b.Dy(), w, h).scaleTo(src, nil, t)
+	return &Bitmap{W: ow, H: oh, Pixels: t.dst}
 }
 
 func ResizeTo(src image.Image, dw, dh int) *Bitmap {

@@ -120,7 +120,7 @@ func decodeWebPFrames(data []byte, s *frameSink, firstCanvas bool) error {
 				s.dw, s.dh = s.bound.Size(cw, ch)
 			}
 			if canvas == nil {
-				canvas = image.NewNRGBA(image.Rect(0, 0, cw, ch))
+				canvas = s.newCanvas(cw, ch)
 			}
 			if !dispose.Empty() {
 				draw.Draw(canvas, dispose, image.Transparent, image.Point{}, draw.Src)

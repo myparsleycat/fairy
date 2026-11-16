@@ -123,6 +123,42 @@ type frameSink struct {
 	// each, when set, is given each composited canvas instead; an error
 	// stops decoding.
 	each func(canvas *image.NRGBA) error
+	// buffers, when set, keeps the canvas of one walk for the next, as a
+	// stream walks the frames again on every pass. Canvases that escape a
+	// walk must not be kept.
+	buffers *walkBuffers
+}
+
+type walkBuffers struct {
+	canvas *image.NRGBA
+	saved  []byte
+}
+
+// newCanvas returns a transparent w x h canvas.
+func (s *frameSink) newCanvas(w, h int) *image.NRGBA {
+	b := s.buffers
+	if b == nil {
+		return image.NewNRGBA(image.Rect(0, 0, w, h))
+	}
+	if c := b.canvas; c != nil && c.Rect.Dx() == w && c.Rect.Dy() == h {
+		clear(c.Pix)
+		return c
+	}
+	b.canvas = image.NewNRGBA(image.Rect(0, 0, w, h))
+	return b.canvas
+}
+
+// savedArea returns n bytes for the area a GIF frame restores; their
+// contents are overwritten before they are read.
+func (s *frameSink) savedArea(n int) []byte {
+	b := s.buffers
+	if b == nil {
+		return make([]byte, n)
+	}
+	if len(b.saved) != n {
+		b.saved = make([]byte, n)
+	}
+	return b.saved
 }
 
 func (s *frameSink) add(canvas *image.NRGBA, delay time.Duration) error {
