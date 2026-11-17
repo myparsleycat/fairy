@@ -8,21 +8,6 @@ import (
 	"slices"
 )
 
-// DamageDebug is a diagnostic mode of damage tracking.
-type DamageDebug int
-
-const (
-	DamageDebugOff DamageDebug = iota
-	// DamageDebugShow tints the part of each frame that was redrawn.
-	DamageDebugShow
-	// DamageDebugVerify draws every frame whole into a reference target as
-	// well, and logs when a swap chain buffer, as it comes back for drawing,
-	// does not hold the frame presented from it. Present1 is documented to
-	// copy the pixels outside the dirty rects from the previous buffer; this
-	// checks that it does.
-	DamageDebugVerify
-)
-
 // damageCheck is the state of DamageDebugVerify.
 type damageCheck struct {
 	refs    [2]*Target

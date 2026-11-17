@@ -1,5 +1,3 @@
-//go:build windows
-
 package render
 
 // Kinds and flags mirror shaders.hlsl.

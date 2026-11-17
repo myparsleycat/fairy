@@ -1,12 +1,6 @@
-//go:build windows
-
 package render
 
-import (
-	"unsafe"
-
-	"github.com/myparsleycat/fairy/d3d"
-)
+import "unsafe"
 
 // damageFullRatio is the share of the target above which a frame is drawn
 // whole instead of in part.
@@ -104,10 +98,6 @@ func (a rectI) union(b rectI) rectI {
 
 func (a rectI) overlaps(b rectI) bool {
 	return !a.empty() && !b.empty() && a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
-}
-
-func (a rectI) d3d() d3d.Rect {
-	return d3d.Rect{Left: int32(a.x0), Top: int32(a.y0), Right: int32(a.x1), Bottom: int32(a.y1)}
 }
 
 // toRectI turns a whole-pixel float box into a rectI, grown by pad and

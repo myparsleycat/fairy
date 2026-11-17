@@ -11,7 +11,6 @@ import (
 	"log"
 	"math"
 	"runtime"
-	"time"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/d3d"
@@ -440,9 +439,6 @@ func (r *Renderer) HasTarget() bool { return r.rtv.P != nil }
 // errNoTarget reports a Draw while a failed Resize left no render target.
 var errNoTarget = errors.New("render: no render target")
 
-// ErrDeviceLost reports that the GPU device was removed or reset.
-var ErrDeviceLost = errors.New("render: device lost")
-
 // Draw renders the scene and presents it, or leaves it in the offscreen target.
 func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 	r.stats.GPU, r.stats.GPUFrame, r.stats.GPUValid = 0, 0, false
@@ -721,24 +717,6 @@ func (r *Renderer) backBuffer() (d3d.Texture2D, func()) {
 	return buf, func() { buf.Release() }
 }
 
-// Stats is how the last Draw went.
-type Stats struct {
-	Record   time.Duration // building and submitting the draw calls
-	Present  time.Duration // Present, which waits for a free buffer
-	Batches  int           // draw calls
-	GPU      time.Duration
-	GPUFrame uint64 // renderer submission number of the earlier sample
-	GPUValid bool
-	// Damage bounds the part of the target the frame drew, empty when nothing
-	// changed; the frame drew DamageArea pixels in DamageRects rects.
-	// DamageReason says why a frame with damage tracking was drawn whole, and
-	// is empty otherwise.
-	Damage       image.Rectangle
-	DamageArea   int
-	DamageRects  int
-	DamageReason string
-}
-
 // SetGPUTiming enables asynchronous timing of renderer commands, excluding
 // Present, readback and work submitted by the app before Draw. Call between draws.
 func (r *Renderer) SetGPUTiming(enabled bool) {
@@ -821,27 +799,7 @@ func (r *Renderer) Release() {
 	*r = Renderer{}
 }
 
-// gammaRatios ports DirectWrite's gamma correction table as used by Windows Terminal and GPUI.
-func gammaRatios(gamma float32) [4]float32 {
-	table := [13][4]float32{
-		{0.0000 / 4, 0.0000 / 4, 0.0000 / 4, 0.0000 / 4},
-		{0.0166 / 4, -0.0807 / 4, 0.2227 / 4, -0.0751 / 4},
-		{0.0350 / 4, -0.1760 / 4, 0.4325 / 4, -0.1370 / 4},
-		{0.0543 / 4, -0.2821 / 4, 0.6302 / 4, -0.1876 / 4},
-		{0.0739 / 4, -0.3963 / 4, 0.8167 / 4, -0.2287 / 4},
-		{0.0933 / 4, -0.5161 / 4, 0.9926 / 4, -0.2616 / 4},
-		{0.1121 / 4, -0.6395 / 4, 1.1588 / 4, -0.2877 / 4},
-		{0.1300 / 4, -0.7649 / 4, 1.3159 / 4, -0.3080 / 4},
-		{0.1469 / 4, -0.8911 / 4, 1.4644 / 4, -0.3234 / 4},
-		{0.1627 / 4, -1.0170 / 4, 1.6051 / 4, -0.3347 / 4},
-		{0.1773 / 4, -1.1420 / 4, 1.7385 / 4, -0.3426 / 4},
-		{0.1908 / 4, -1.2652 / 4, 1.8650 / 4, -0.3476 / 4},
-		{0.2031 / 4, -1.3864 / 4, 1.9851 / 4, -0.3501 / 4},
-	}
-	const norm13 = float32(float64(0x10000) / (255.0 * 255.0) * 4.0)
-	const norm24 = float32(float64(0x100) / 255.0 * 4.0)
-	idx := int(math.Round(float64(gamma*10))) - 10
-	idx = min(max(idx, 0), 12)
-	t := table[idx]
-	return [4]float32{t[0] * norm13, t[1] * norm24, t[2] * norm13, t[3] * norm24}
+// d3d returns a as a Direct3D rect.
+func (a rectI) d3d() d3d.Rect {
+	return d3d.Rect{Left: int32(a.x0), Top: int32(a.y0), Right: int32(a.x1), Bottom: int32(a.y1)}
 }
