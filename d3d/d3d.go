@@ -39,6 +39,7 @@ var (
 var (
 	iidIDXGIDevice       = com.MustGUID("54ec77fa-1377-44e6-8c32-88fd5f44c84c")
 	iidIDXGIAdapter1     = com.MustGUID("29038f61-3839-4626-91fd-086879011a05")
+	iidIDXGIAdapter3     = com.MustGUID("645967a4-1392-4310-a798-8053ce3e93fd")
 	iidID3D10Multithread = com.MustGUID("9b7e4e00-342c-4106-a19f-4f2704f689f0")
 	iidID3D11Context1    = com.MustGUID("bb2c6faa-b5fb-4082-8e6b-388b8cfa90e1")
 )

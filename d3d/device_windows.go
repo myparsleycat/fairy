@@ -32,6 +32,11 @@ type DeviceInfo struct {
 	// Software reports a WARP device or a software adapter. AdapterKnown
 	// reports whether the adapter description could be read.
 	Software, AdapterKnown bool
+	// DedicatedVideoMemory, DedicatedSystemMemory and SharedSystemMemory are
+	// the adapter's memory sizes in bytes, from DXGI_ADAPTER_DESC1, when
+	// AdapterKnown is set. An integrated GPU has little or no dedicated video
+	// memory and uses shared system memory instead.
+	DedicatedVideoMemory, DedicatedSystemMemory, SharedSystemMemory uint64
 	// FallbackReason lists why the hardware attempts failed when the device
 	// is WARP.
 	FallbackReason string
@@ -156,5 +161,41 @@ func readAdapterInfo(d Device, info *DeviceInfo) {
 	info.AdapterName = windows.UTF16ToString(desc.Description[:])
 	info.VendorID, info.DeviceID, info.AdapterLUID = desc.VendorID, desc.DeviceID, desc.LUID
 	info.Software = info.Software || desc.Flags&dxgiAdapterFlagSoftware != 0
+	info.DedicatedVideoMemory = uint64(desc.DedicatedVideoMemory)
+	info.DedicatedSystemMemory = uint64(desc.DedicatedSystemMemory)
+	info.SharedSystemMemory = uint64(desc.SharedSystemMemory)
 	info.AdapterKnown = true
+}
+
+// VideoMemoryInfo is DXGI_QUERY_VIDEO_MEMORY_INFO for one memory segment
+// group, in bytes. Budget is how much the operating system lets the process
+// use before it may start evicting the process's resources; CurrentUsage is
+// how much the process uses now.
+type VideoMemoryInfo struct {
+	Budget, CurrentUsage, AvailableForReservation, CurrentReservation uint64
+}
+
+// VideoMemory queries the local memory segment group of the device's adapter:
+// dedicated video memory on a discrete GPU, or the memory an integrated GPU
+// uses. It needs IDXGIAdapter3 (Windows 10 and later).
+func (d Device) VideoMemory() (VideoMemoryInfo, error) {
+	var info VideoMemoryInfo
+	dxgi, err := com.QueryInterface(d.P, &iidIDXGIDevice)
+	if err != nil {
+		return info, err
+	}
+	defer com.Release(dxgi)
+	var adapter unsafe.Pointer
+	if err := com.HR(dxgi, 7, uintptr(unsafe.Pointer(&adapter))).Err("IDXGIDevice.GetAdapter"); err != nil {
+		return info, err
+	}
+	defer com.Release(adapter)
+	a, err := com.QueryInterface(adapter, &iidIDXGIAdapter3)
+	if err != nil {
+		return info, err
+	}
+	defer com.Release(a)
+	const localSegmentGroup = 0 // DXGI_MEMORY_SEGMENT_GROUP_LOCAL
+	err = com.HR(a, 14, 0, localSegmentGroup, uintptr(unsafe.Pointer(&info))).Err("IDXGIAdapter3.QueryVideoMemoryInfo")
+	return info, err
 }

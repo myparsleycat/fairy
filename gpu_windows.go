@@ -147,6 +147,32 @@ func TrimDevice() error {
 // device exists or it was lost and not yet made again.
 func DeviceGeneration() uint64 { return render.CurrentGen() }
 
+// GPUMemory describes the memory of the shared device's adapter, for sizing
+// caches of GPU resources. Info holds the adapter's memory sizes (see
+// d3d.DeviceInfo); Video is the local segment group's budget and usage, valid
+// when VideoKnown is set.
+type GPUMemory struct {
+	Info       d3d.DeviceInfo
+	Video      d3d.VideoMemoryInfo
+	VideoKnown bool
+}
+
+// QueryGPUMemory returns the memory of the shared device's adapter, making
+// the device when there is none. It may be called from any goroutine and does
+// not take the device lock.
+func QueryGPUMemory() (GPUMemory, error) {
+	dev, err := acquireGPU()
+	if err != nil {
+		return GPUMemory{}, err
+	}
+	defer dev.Release()
+	memory := GPUMemory{Info: dev.Info}
+	if video, err := dev.Dev.VideoMemory(); err == nil {
+		memory.Video, memory.VideoKnown = video, true
+	}
+	return memory, nil
+}
+
 // gpuImage is an Image whose pixels live in a texture.
 type gpuImage struct {
 	mu      sync.Mutex
