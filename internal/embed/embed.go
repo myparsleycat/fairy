@@ -7,7 +7,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // NewEl returns a *fairy.El that shows e, or nothing for a nil e. fairy
@@ -35,8 +34,8 @@ type Native interface {
 
 // Context is what Element.Paint draws with. Positions are in DIPs.
 type Context struct {
-	Window  any // the *fairy.Window being painted
-	HWND    win.HWND
+	Window  any     // the *fairy.Window being painted
+	HWND    uintptr // the host window's native handle
 	Scale   float32
 	Now     time.Time
 	Scene   *render.Scene

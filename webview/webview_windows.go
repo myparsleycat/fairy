@@ -265,7 +265,7 @@ func (e *element) Paint(c *embed.Context) {
 		if v.ctl != nil {
 			com.HR(v.ctl, 22, uintptr(c.HWND)) // put_ParentWindow
 		}
-		v.host, v.hwnd = host, c.HWND
+		v.host, v.hwnd = host, win.HWND(c.HWND)
 	}
 	if v.ctl == nil && !v.creating && v.err == nil {
 		v.create()

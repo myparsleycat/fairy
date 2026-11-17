@@ -37,7 +37,7 @@ func (w *Window) paintEmbed(e *El, box geom.Rect, radii, clip [4]float32, opacit
 		c.Animate = func() { w.animating = true }
 		c.WakeAt = w.frameAt
 	}
-	c.HWND, c.Scale, c.Now, c.Scene = w.hwnd, w.scale, w.now(), &w.scene
+	c.HWND, c.Scale, c.Now, c.Scene = uintptr(w.hwnd), w.scale, w.now(), &w.scene
 	c.Box, c.Radii, c.Clip, c.Opacity, c.Fit = box, radii, clip, opacity, geom.Fit(e.fit)
 	e.embed.Paint(c)
 }
