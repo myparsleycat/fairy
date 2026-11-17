@@ -305,7 +305,7 @@ func (w *Window) setHoverPath(path []*El) bool {
 				if delay == 0 {
 					w.showTooltip()
 				} else {
-					win.SetTimer(w.hwnd, timerTip, delay)
+					w.setTimer(timerTip, delay)
 				}
 				break
 			}
@@ -608,7 +608,7 @@ func (w *Window) onTouchDown(id uint32, x, y float32, at time.Time) {
 		}
 		return
 	}
-	win.SetTimer(w.hwnd, timerTouch, uint32(gesture.LongPress.Milliseconds()))
+	w.setTimer(timerTouch, uint32(gesture.LongPress.Milliseconds()))
 }
 
 // touchPresses reports whether a touch at (x, y) goes straight to the mouse
@@ -644,7 +644,7 @@ func (w *Window) onTouchMove(id uint32, x, y float32, at time.Time) {
 		if !t.PastSlop(x, y) {
 			return
 		}
-		win.KillTimer(w.hwnd, timerTouch)
+		w.killTimer(timerTouch)
 		if !w.startTouchPan(t, x-t.X0, y-t.Y0) {
 			t.Phase = gesture.Done
 			return
@@ -697,7 +697,7 @@ func (w *Window) onTouchUp(id uint32, x, y float32, at time.Time) {
 		w.onTouchMove(id, x, y, at)
 	}
 	w.touch = nil
-	win.KillTimer(w.hwnd, timerTouch)
+	w.killTimer(timerTouch)
 	switch t.Phase {
 	case gesture.Pressed:
 		w.onButtonUp(x, y, 0)
@@ -723,7 +723,7 @@ func (w *Window) onTouchCancel(id uint32) {
 		return
 	}
 	w.touch = nil
-	win.KillTimer(w.hwnd, timerTouch)
+	w.killTimer(timerTouch)
 	if t.Phase == gesture.Pressed && w.press != nil {
 		w.cancelPress()
 		w.releaseCapture()

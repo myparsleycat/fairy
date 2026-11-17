@@ -540,3 +540,111 @@ func newWindowState(opts Options) (*Window, error) {
 	}
 	return w, nil
 }
+
+// onResize handles a new client size in device pixels.
+func (w *Window) onResize(width, height int) {
+	if width == w.width && height == w.height {
+		return
+	}
+	w.width, w.height = width, height
+	if w.r != nil {
+		w.resizeRenderer()
+	}
+	w.markDirty(frameprof.CauseResize)
+	// Draw now so a live resize shows the new size immediately.
+	w.renderFrame()
+}
+
+// onFocusChange handles the window gaining or losing keyboard focus.
+func (w *Window) onFocusChange(focused bool) {
+	if w.opts.OnFocus != nil {
+		w.opts.OnFocus(focused)
+		w.Update()
+	}
+	w.osFocus = focused
+	if focused {
+		w.resetBlink()
+	} else {
+		if w.acc != nil {
+			w.acc.focus = 0
+		}
+		w.commitComposition()
+		w.cancelPress()
+		w.stopAutoScroll()
+	}
+	w.invalidate()
+}
+
+// onTimer handles the window timer id set with setTimer.
+func (w *Window) onTimer(id uintptr) {
+	switch id {
+	case timerCaret:
+		w.caretOn = !w.caretOn || w.clock != nil
+		w.invalidate()
+	case timerTip:
+		w.killTimer(timerTip)
+		w.showTooltip()
+	case timerAnim:
+		w.killTimer(timerAnim)
+		w.invalidate()
+	case timerFrame:
+		w.killTimer(timerFrame)
+		switch {
+		case w.needPaint:
+			w.renderFrame()
+		case w.hl != nil && w.hl.copyPending && w.r != nil:
+			w.publishFrame()
+		}
+	case timerTouch:
+		w.killTimer(timerTouch)
+		w.onTouchLongPress()
+	case timerRecover:
+		w.killTimer(timerRecover)
+		if w.r == nil {
+			w.recreateRenderer()
+		} else {
+			w.invalidate() // renderFrame retries a failed resize
+		}
+	}
+}
+
+// release frees what the closed window holds and lets its trees and
+// element state go.
+func (w *Window) release() {
+	liveMu.Lock()
+	delete(live, w)
+	liveMu.Unlock()
+	w.releaseTextures()
+	w.textures = nil
+	w.releaseShared()
+	for _, se := range w.surfaces {
+		se.target.Release()
+	}
+	w.surfaces = nil
+	if w.ts != nil {
+		w.ts.Release()
+		w.ts = nil
+	}
+	if w.r != nil {
+		w.r.Release()
+		w.r = nil
+	}
+	w.closed.Store(true)
+	// The app or a Live may still hold w; let the trees and element state go.
+	// Maps are emptied rather than dropped, as methods called on the closed
+	// window may still write to them.
+	w.root, w.sel, w.press = nil, nil, nil
+	w.layers, w.hits, w.focusables, w.hoverPath, w.hoverScratch = nil, nil, nil, nil, nil
+	w.ghosts, w.flights = nil, nil
+	w.scene = render.Scene{}
+	clear(w.states)
+	clear(w.byID)
+	clear(w.prevByID)
+	clear(w.memos)
+	clear(w.locals)
+	clear(w.matched)
+	clear(w.hoverIDs)
+	clear(w.ghostIn)
+	clear(w.matchClaims)
+	clear(w.iconTiles)
+}

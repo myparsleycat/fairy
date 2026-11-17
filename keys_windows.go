@@ -4,7 +4,6 @@ import (
 	"unicode/utf16"
 
 	"github.com/myparsleycat/fairy/internal/scroll"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -44,7 +43,7 @@ func (w *Window) focusedEl() *El {
 func (w *Window) resetBlink() {
 	w.caretOn = true
 	if w.focusedEl() != nil {
-		win.SetTimer(w.hwnd, timerCaret, caretBlinkMs)
+		w.setTimer(timerCaret, caretBlinkMs)
 	}
 }
 

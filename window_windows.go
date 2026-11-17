@@ -10,7 +10,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/gesture"
-	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/internal/uia"
 	"github.com/myparsleycat/fairy/internal/win"
@@ -68,6 +67,13 @@ func (w *Window) keyMods() keyboard.Mods {
 	}
 	return m
 }
+
+// setTimer starts or resets the window timer id, which calls onTimer every
+// ms milliseconds until killTimer.
+func (w *Window) setTimer(id uintptr, ms uint32) { win.SetTimer(w.hwnd, id, ms) }
+
+// killTimer stops the window timer id.
+func (w *Window) killTimer(id uintptr) { win.KillTimer(w.hwnd, id) }
 
 // setDarkFrame switches the system title bar and frame between light and dark.
 func (w *Window) setDarkFrame(dark bool) {
@@ -359,7 +365,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		w.sizeMove = true
 	case win.WM_EXITSIZEMOVE:
 		w.sizeMove = false
-		win.KillTimer(w.hwnd, timerAnim)
+		w.killTimer(timerAnim)
 		if w.animating || !w.wakeAt.IsZero() {
 			w.invalidate()
 		}
@@ -376,16 +382,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			w.redrawWhole()
 			return 0
 		}
-		nw, nh := int(win.LOWORD(lp)), int(win.HIWORD(lp))
-		if nw != w.width || nh != w.height {
-			w.width, w.height = nw, nh
-			if w.r != nil {
-				w.resizeRenderer()
-			}
-			w.markDirty(frameprof.CauseResize)
-			// Draw now so the modal resize loop shows the new size immediately.
-			w.renderFrame()
-		}
+		w.onResize(int(win.LOWORD(lp)), int(win.HIWORD(lp)))
 		return 0
 	case win.WM_DPICHANGED:
 		w.scale = float32(win.HIWORD(wp)) / 96
@@ -619,27 +616,10 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		w.onIMEEnd()
 		return 0
 	case win.WM_SETFOCUS:
-		if w.opts.OnFocus != nil {
-			w.opts.OnFocus(true)
-			w.Update()
-		}
-		w.osFocus = true
-		w.resetBlink()
-		w.invalidate()
+		w.onFocusChange(true)
 		return 0
 	case win.WM_KILLFOCUS:
-		if w.opts.OnFocus != nil {
-			w.opts.OnFocus(false)
-			w.Update()
-		}
-		w.osFocus = false
-		if w.acc != nil {
-			w.acc.focus = 0
-		}
-		w.commitComposition()
-		w.cancelPress()
-		w.stopAutoScroll()
-		w.invalidate()
+		w.onFocusChange(false)
 		return 0
 	case win.WM_SETTINGCHANGE:
 		if wp == win.SPI_SETCLIENTAREAANIMATION {
@@ -655,35 +635,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			w.Update()
 		}
 	case win.WM_TIMER:
-		switch wp {
-		case timerCaret:
-			w.caretOn = !w.caretOn || w.clock != nil
-			w.invalidate()
-		case timerTip:
-			win.KillTimer(w.hwnd, timerTip)
-			w.showTooltip()
-		case timerAnim:
-			win.KillTimer(w.hwnd, timerAnim)
-			w.invalidate()
-		case timerFrame:
-			win.KillTimer(w.hwnd, timerFrame)
-			switch {
-			case w.needPaint:
-				w.renderFrame()
-			case w.hl != nil && w.hl.copyPending && w.r != nil:
-				w.publishFrame()
-			}
-		case timerTouch:
-			win.KillTimer(w.hwnd, timerTouch)
-			w.onTouchLongPress()
-		case timerRecover:
-			win.KillTimer(w.hwnd, timerRecover)
-			if w.r == nil {
-				w.recreateRenderer()
-			} else {
-				w.invalidate() // renderFrame retries a failed resize
-			}
-		}
+		w.onTimer(wp)
 		return 0
 	case msgWake:
 		w.runPosted()
@@ -744,43 +696,8 @@ func (w *Window) destroy() {
 	w.a11yShutdown()
 	w.revokeDrop()
 	w.closeNatives()
-	liveMu.Lock()
-	delete(live, w)
-	liveMu.Unlock()
-	w.releaseTextures()
-	w.textures = nil
-	w.releaseShared()
-	for _, se := range w.surfaces {
-		se.target.Release()
-	}
-	w.surfaces = nil
-	if w.ts != nil {
-		w.ts.Release()
-		w.ts = nil
-	}
-	if w.r != nil {
-		w.r.Release()
-		w.r = nil
-	}
+	w.release()
 	delete(windows, w.hwnd)
-	w.closed.Store(true)
-	// The app or a Live may still hold w; let the trees and element state go.
-	// Maps are emptied rather than dropped, as methods called on the closed
-	// window may still write to them.
-	w.root, w.sel, w.press = nil, nil, nil
-	w.layers, w.hits, w.focusables, w.hoverPath, w.hoverScratch = nil, nil, nil, nil, nil
-	w.ghosts, w.flights = nil, nil
-	w.scene = render.Scene{}
-	clear(w.states)
-	clear(w.byID)
-	clear(w.prevByID)
-	clear(w.memos)
-	clear(w.locals)
-	clear(w.matched)
-	clear(w.hoverIDs)
-	clear(w.ghostIn)
-	clear(w.matchClaims)
-	clear(w.iconTiles)
 }
 
 func (w *Window) ncHitTest(lp uintptr) uintptr {

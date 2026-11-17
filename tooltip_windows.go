@@ -7,7 +7,6 @@ import (
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/internal/tooltip"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/motion"
 )
 
@@ -190,7 +189,7 @@ func (w *Window) showTooltip() {
 }
 
 func (w *Window) hideTooltip() {
-	win.KillTimer(w.hwnd, timerTip)
+	w.killTimer(timerTip)
 	ts := tooltipStyle.Load()
 	fades := ts != nil && !ts.Motion.IsInstant() && ts.Motion.Duration() > 0
 	if w.tip.Hide(time.Now(), tipTiming(), fades) {

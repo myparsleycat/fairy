@@ -89,17 +89,17 @@ func (w *Window) renderFrame() {
 	case w.hl == nil && !win.IsWindowVisible(w.hwnd):
 		// Hidden windows wait for the WM_PAINT that showing them sends.
 	case w.animating && occluded:
-		win.SetTimer(w.hwnd, timerAnim, hiddenFrameMs)
+		w.setTimer(timerAnim, hiddenFrameMs)
 	case w.animating && w.sizeMove:
-		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
+		w.setTimer(timerAnim, sizeMoveFrameMs)
 	case w.animating && w.hl == nil && w.r != nil && !w.r.Presented() && !win.DwmFlush():
 		// A frame that changed nothing did not wait for the display in
 		// Present, so it waits for the next composition instead.
-		win.SetTimer(w.hwnd, timerAnim, sizeMoveFrameMs)
+		w.setTimer(timerAnim, sizeMoveFrameMs)
 	case w.animating:
 		w.invalidate()
 	case !w.wakeAt.IsZero():
-		win.SetTimer(w.hwnd, timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
+		w.setTimer(timerAnim, uint32(max(time.Until(w.wakeAt).Milliseconds(), 1)))
 	}
 	if !w.animating {
 		w.lastFrame = time.Time{}
@@ -156,7 +156,7 @@ func (w *Window) resizeRenderer() bool {
 			log.Printf("fairy: resize swap chain: %v", err)
 		}
 		w.resizeErr = true
-		win.SetTimer(w.hwnd, timerRecover, resizeRetryMs)
+		w.setTimer(timerRecover, resizeRetryMs)
 		return false
 	}
 	w.resizeErr = false
@@ -216,7 +216,7 @@ func (w *Window) recreateRenderer() {
 	if err != nil {
 		w.recoverMs = min(max(w.recoverMs*2, 100), 2000)
 		log.Printf("fairy: cannot recreate renderer, retrying in %dms: %v", w.recoverMs, err)
-		win.SetTimer(w.hwnd, timerRecover, uint32(w.recoverMs))
+		w.setTimer(timerRecover, uint32(w.recoverMs))
 		return
 	}
 	w.recoverMs = 0

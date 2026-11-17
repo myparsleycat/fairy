@@ -150,7 +150,7 @@ func (w *Window) initHeadless() error {
 // headlessFrameInterval. There is no WM_PAINT or vblank wait to pace it.
 func (w *Window) scheduleFrame() {
 	if wait := headlessFrameInterval - time.Since(w.hl.drawnAt); wait > 0 {
-		win.SetTimer(w.hwnd, timerFrame, uint32(max(wait.Milliseconds(), 1)))
+		w.setTimer(timerFrame, uint32(max(wait.Milliseconds(), 1)))
 		return
 	}
 	win.PostMessage(w.hwnd, msgPaint, 0, 0)
@@ -194,7 +194,7 @@ func (w *Window) publishFrame() {
 			hl.copyPending = true
 			if !w.needPaint {
 				// A frame already scheduled publishes anyway, at its pace.
-				win.SetTimer(w.hwnd, timerFrame, 1)
+				w.setTimer(timerFrame, 1)
 			}
 			return
 		case errors.Is(err, render.ErrDeviceLost):
