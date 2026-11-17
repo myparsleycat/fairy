@@ -7,7 +7,7 @@ import (
 )
 
 // MarkdownHTML converts Markdown as Markdown renders it to an HTML fragment,
-// for copying a message with its formatting (fairy.Window.SetClipboardRich).
+// for copying a message with its formatting (clipboard.SetRich).
 func MarkdownHTML(src string) string {
 	var b strings.Builder
 	mdHTMLBlocks(&b, parseDoc(src).blocks)

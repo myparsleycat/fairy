@@ -11,8 +11,14 @@ import (
 	"unsafe"
 	"weak"
 
+	"github.com/myparsleycat/fairy/internal/embed"
+	"github.com/myparsleycat/fairy/internal/frameprof"
+	"github.com/myparsleycat/fairy/internal/geom"
+	"github.com/myparsleycat/fairy/internal/gesture"
 	"github.com/myparsleycat/fairy/internal/render"
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/text"
+	"github.com/myparsleycat/fairy/internal/tooltip"
 	"github.com/myparsleycat/fairy/internal/uia"
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
@@ -139,9 +145,9 @@ var (
 // Window is a top-level native window.
 type Window struct {
 	opts          Options
-	dirtyBy       dirtyCause
+	dirtyBy       frameprof.Cause
 	growing       bool // an element in the view has AnimateHeight
-	ft            frameTimes
+	ft            frameprof.Times
 	clock         *scriptClock
 	hwnd          win.HWND
 	r             *render.Renderer
@@ -183,7 +189,7 @@ type Window struct {
 	exits, prevExits int
 
 	preciseWheelAt time.Time // last wheel message with a fraction of a notch
-	wheelLatch     wheelLatch
+	wheelLatch     scroll.Latch
 	// scriptWheelLines replaces the system's wheel scroll lines setting, so
 	// tests scroll the same distance on every machine.
 	scriptWheelLines *uint32
@@ -211,10 +217,10 @@ type Window struct {
 	tracking       bool
 
 	press      *pressState
-	autoScroll *autoScroll // middle-button autoscroll in progress
-	touch      *touchState // the touch contact being followed
-	touchPress bool        // onButtonDown is handling a touch
-	charHigh   uint16      // high surrogate of a WM_CHAR pair awaiting its low half
+	autoScroll *autoScroll    // middle-button autoscroll in progress
+	touch      *gesture.Touch // the touch contact being followed
+	touchPress bool           // onButtonDown is handling a touch
+	charHigh   uint16         // high surrogate of a WM_CHAR pair awaiting its low half
 	focused    uint64
 	focusKey   string
 	focusWant  string        // key Focus asked for before its element was built
@@ -260,14 +266,7 @@ type Window struct {
 	ncTracking bool // TrackMouseEvent is armed for the non-client maximize button
 	ncHover    bool // the pointer is over a MaximizeButton, which Windows treats as non-client
 	osFocus    bool
-	tipShown   bool
-	tipText    string
-	tipAnchor  rectF     // the element a styled tooltip points at
-	tipSide    Side      // where TooltipSide placed the tooltip
-	tipSideSet bool      // the element set TooltipSide
-	tipAt      time.Time // when the styled tooltip showed
-	tipLeft    time.Time // when it began to leave; zero while shown or gone
-	tipFrom    float32   // its progress when it began to leave
+	tip        tooltip.State
 
 	textures        map[uint64]*texEntry
 	uploaded        int64 // image upload, update and mip writes in this frame
@@ -276,8 +275,9 @@ type Window struct {
 	imageWork       map[imageWorkKey]imageWorkPending
 	capture         *offscreenCapture
 	surfaces        map[uint64]*surfaceEntry
-	invalidSurfaces map[string]bool   // InvalidateSurface keys waiting for the next paint
-	webviews        map[*WebView]bool // hosted webviews placed this frame
+	invalidSurfaces map[string]bool       // InvalidateSurface keys waiting for the next paint
+	natives         map[embed.Native]bool // child windows of embedded elements, and whether this frame placed them
+	embedCtx        embed.Context
 	iconTiles       map[iconKey]render.Tile
 	iconGen         int
 
@@ -314,7 +314,7 @@ type texEntry struct {
 type hit struct {
 	el         *El
 	x, y, w, h float32
-	clip       rectF
+	clip       geom.Rect
 	radii      [4]float32
 	inv        xform // window to layout space, when turned
 	turned     bool
@@ -403,7 +403,7 @@ func NewWindow(opts Options) (*Window, error) {
 		hoverIDs:  map[uint64]bool{},
 		textures:  map[uint64]*texEntry{},
 		surfaces:  map[uint64]*surfaceEntry{},
-		webviews:  map[*WebView]bool{},
+		natives:   map[embed.Native]bool{},
 		iconTiles: map[iconKey]render.Tile{},
 		byID:      map[uint64]*El{},
 		prevByID:  map[uint64]*El{},
@@ -635,13 +635,18 @@ func (w *Window) SetColors(dark bool, background, text Color) {
 // Scale returns the device pixels per logical pixel.
 func (w *Window) Scale() float32 { return w.scale }
 
-// HWND returns the native window handle.
-func (w *Window) HWND() uintptr { return uintptr(w.hwnd) }
+// HWND returns the native window handle, or 0 once the window is closed.
+func (w *Window) HWND() uintptr {
+	if w.closed.Load() {
+		return 0
+	}
+	return uintptr(w.hwnd)
+}
 
 // Update marks the view as stale so View runs again before the next frame.
 // Call it on the UI thread; from other goroutines use Post.
 func (w *Window) Update() {
-	w.markDirty(dirtyUpdate)
+	w.markDirty(frameprof.CauseUpdate)
 	w.invalidate()
 }
 
@@ -659,25 +664,6 @@ func (w *Window) Post(f func()) {
 		w.posted = nil
 		w.mu.Unlock()
 	}
-}
-
-// ClipboardText returns the clipboard's text.
-func (w *Window) ClipboardText() string {
-	if w.fakeClip != nil {
-		return *w.fakeClip
-	}
-	s, _ := win.ClipboardText(w.hwnd)
-	return s
-}
-
-// SetClipboardText puts s on the clipboard and reports whether it got there;
-// another program holding the clipboard open makes it fail.
-func (w *Window) SetClipboardText(s string) bool {
-	if w.fakeClip != nil {
-		*w.fakeClip = s
-		return true
-	}
-	return win.SetClipboardText(w.hwnd, s)
 }
 
 // Focus moves keyboard focus to the first element with key, or clears it for "".
@@ -772,12 +758,12 @@ func (w *Window) runPosted() {
 	for _, f := range fs {
 		t := time.Now()
 		f()
-		if debugSlow > 0 {
-			slow("posted function", t)
+		if frameprof.Slow > 0 {
+			frameprof.LogSlow("posted function", t)
 		}
 	}
 	if len(fs) > 0 {
-		w.markDirty(dirtyPost)
+		w.markDirty(frameprof.CausePost)
 		w.invalidate()
 	}
 }
@@ -825,8 +811,8 @@ func wndProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 	if w == nil {
 		return win.DefWindowProc(hwnd, msg, wp, lp)
 	}
-	if debugSlow > 0 && msg != win.WM_PAINT {
-		defer slow(fmt.Sprintf("message 0x%04x", msg), time.Now())
+	if frameprof.Slow > 0 && msg != win.WM_PAINT {
+		defer frameprof.LogSlow(fmt.Sprintf("message 0x%04x", msg), time.Now())
 	}
 	return w.handle(msg, wp, lp)
 }
@@ -837,7 +823,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 	// the mouse is ignored too: the drag shares the mouse press, and the
 	// cursor's position would make it jump.
 	if msg >= win.WM_MOUSEMOVE && msg <= win.WM_MBUTTONUP &&
-		(w.touch != nil && w.touch.phase == touchPressed || win.IsMouseFromTouch()) {
+		(w.touch != nil && w.touch.Phase == gesture.Pressed || win.IsMouseFromTouch()) {
 		return 0
 	}
 	switch msg {
@@ -861,7 +847,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			w.invalidate()
 		}
 	case win.WM_MOVE:
-		w.notifyWebViewsMoved()
+		w.notifyNativesMoved()
 	case win.WM_SIZE:
 		if w.hl != nil {
 			// Only SetHeadlessSize sizes a headless window.
@@ -879,7 +865,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			if w.r != nil {
 				w.resizeRenderer()
 			}
-			w.markDirty(dirtyResize)
+			w.markDirty(frameprof.CauseResize)
 			// Draw now so the modal resize loop shows the new size immediately.
 			w.renderFrame()
 		}
@@ -897,7 +883,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 			rc.Bottom-rc.Top,
 			win.SWP_NOZORDER|win.SWP_NOACTIVATE,
 		)
-		w.markDirty(dirtyResize)
+		w.markDirty(frameprof.CauseResize)
 		w.redrawWhole()
 		w.invalidate()
 		return 0
@@ -1240,7 +1226,7 @@ func (w *Window) dropTranslatedChars() {
 func (w *Window) destroy() {
 	w.a11yShutdown()
 	w.revokeDrop()
-	w.closeWebViews()
+	w.closeNatives()
 	liveMu.Lock()
 	delete(live, w)
 	liveMu.Unlock()

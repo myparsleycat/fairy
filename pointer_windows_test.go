@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
@@ -345,7 +346,7 @@ func TestWindowChromePrecedesScrollbar(t *testing.T) {
 		t.Fatalf("scrollbars = %d, want 1", len(w.bars))
 	}
 	bar := w.bars[0]
-	x, y := bar.thumb.x+bar.thumb.w/2, bar.thumb.y+bar.thumb.h/2
+	x, y := bar.thumb.X+bar.thumb.W/2, bar.thumb.Y+bar.thumb.H/2
 	w.onButtonDown(x, y, 0)
 	if w.press == nil || w.press.bar != nil {
 		t.Fatal("scrollbar took the chrome press")
@@ -373,7 +374,7 @@ func TestCoveredScrollbarTakesNoPress(t *testing.T) {
 		t.Fatalf("scrollbars = %d, want 1", len(w.bars))
 	}
 	bar, button := w.bars[0], w.findKey("button")
-	x, y := bar.track.x+bar.track.w/2, button.absY+button.h/2
+	x, y := bar.track.X+bar.track.W/2, button.absY+button.h/2
 	w.onButtonDown(x, y, 0)
 	if w.press == nil || w.press.bar != nil {
 		t.Fatal("the scroll bar under the dialog took the press")
@@ -394,13 +395,13 @@ func TestUncoveredScrollbarTakesPress(t *testing.T) {
 		at       func(bar scrollBar) (float32, float32)
 	}{
 		{"over content", 200, func(e *El) *El { return e }, func(b scrollBar) (float32, float32) {
-			return b.track.x - 2, b.track.y + b.track.h/2
+			return b.track.X - 2, b.track.Y + b.track.H/2
 		}},
 		{"rounded corner", 100, func(e *El) *El { return e.Radius(20) }, func(b scrollBar) (float32, float32) {
-			return b.track.x + b.track.w, b.track.y - 1
+			return b.track.X + b.track.W, b.track.Y - 1
 		}},
 		{"pass-through container", 100, func(e *El) *El { return e.PassThrough() }, func(b scrollBar) (float32, float32) {
-			return b.track.x + b.track.w/2, b.track.y + b.track.h/2
+			return b.track.X + b.track.W/2, b.track.Y + b.track.H/2
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -563,13 +564,13 @@ func TestWheelHandler(t *testing.T) {
 		!ev.Precise {
 		t.Fatalf("event = %+v", ev)
 	}
-	if scroller.state.scrollY != 0 {
-		t.Fatalf("scrolled to %v although the handler took the wheel", scroller.state.scrollY)
+	if scroller.state.ScrollY != 0 {
+		t.Fatalf("scrolled to %v although the handler took the wheel", scroller.state.ScrollY)
 	}
 
 	handled = false
 	w.onWheel(30, 20, -1, false, true)
-	if scroller.state.scrollY <= 0 {
+	if scroller.state.ScrollY <= 0 {
 		t.Fatal("a declined wheel did not reach the scroll container")
 	}
 
@@ -612,29 +613,29 @@ func TestWheelLatchesNestedScroll(t *testing.T) {
 		t.Fatal("the list did not scroll under the pointer")
 	}
 	wheel(30, 20, -0.125)
-	if page.scrollY != 50 || list.scrollY != 0 {
-		t.Fatalf("page at %v, list at %v: the list took over the page's gesture", page.scrollY, list.scrollY)
+	if page.ScrollY != 50 || list.ScrollY != 0 {
+		t.Fatalf("page at %v, list at %v: the list took over the page's gesture", page.ScrollY, list.ScrollY)
 	}
 
 	wheel(30, 30, -1)
 	wheel(30, 30, -1)
-	if page.scrollY != 50 || list.scrollY != 60 {
-		t.Fatalf("after moving onto the list: page at %v, list at %v", page.scrollY, list.scrollY)
+	if page.ScrollY != 50 || list.ScrollY != 60 {
+		t.Fatalf("after moving onto the list: page at %v, list at %v", page.ScrollY, list.ScrollY)
 	}
 
 	before := pageWheels
-	w.clock.now = w.clock.now.Add(wheelLatchTimeout / 2)
+	w.clock.now = w.clock.now.Add(scroll.LatchTimeout / 2)
 	wheel(30, 30, -1)
-	if page.scrollY != 50 {
-		t.Fatalf("the page scrolled to %v within the list's gesture", page.scrollY)
+	if page.ScrollY != 50 {
+		t.Fatalf("the page scrolled to %v within the list's gesture", page.ScrollY)
 	}
 	if pageWheels != before+1 {
 		t.Fatal("the page's OnWheel did not see the step the list could not take")
 	}
 
-	w.clock.now = w.clock.now.Add(wheelLatchTimeout)
+	w.clock.now = w.clock.now.Add(scroll.LatchTimeout)
 	wheel(30, 30, -1)
-	if page.scrollY <= 50 {
+	if page.ScrollY <= 50 {
 		t.Fatal("a new gesture after a pause did not reach the page")
 	}
 }
@@ -761,12 +762,12 @@ func TestMiddleAutoScroll(t *testing.T) {
 	w.onButtonDown(10, 30, 2)
 	w.onMouseMove(10, 40)
 	w.onButtonUp(10, 40, 2)
-	if w.autoScroll != nil || len(l.drags) != 2 || scroller.state.scrollY != 0 {
+	if w.autoScroll != nil || len(l.drags) != 2 || scroller.state.ScrollY != 0 {
 		t.Fatalf(
 			"middle drag target: autoscroll %v, drags %+v, scrollY %v",
 			w.autoScroll != nil,
 			l.drags,
-			scroller.state.scrollY,
+			scroller.state.ScrollY,
 		)
 	}
 
@@ -774,18 +775,18 @@ func TestMiddleAutoScroll(t *testing.T) {
 	w.onMouseMove(150, 50)
 	w.onButtonDown(150, 50, 2)
 	frames(10)
-	if scroller.state.scrollY != 0 {
-		t.Fatalf("scrolled to %v with the pointer on the press point", scroller.state.scrollY)
+	if scroller.state.ScrollY != 0 {
+		t.Fatalf("scrolled to %v with the pointer on the press point", scroller.state.ScrollY)
 	}
 	w.onMouseMove(150, 90)
 	frames(10)
-	down := scroller.state.scrollY
+	down := scroller.state.ScrollY
 	if down <= 0 {
 		t.Fatal("pointer below the press point did not scroll down")
 	}
 	w.onMouseMove(150, 10)
 	frames(5)
-	if scroller.state.scrollY >= down {
+	if scroller.state.ScrollY >= down {
 		t.Fatal("pointer above the press point did not scroll up")
 	}
 	w.onButtonUp(150, 10, 2)
@@ -802,9 +803,9 @@ func TestMiddleAutoScroll(t *testing.T) {
 		t.Fatal("middle click in place did not keep autoscroll on")
 	}
 	w.onMouseMove(150, 90)
-	from := scroller.state.scrollY
+	from := scroller.state.ScrollY
 	frames(5)
-	if scroller.state.scrollY <= from {
+	if scroller.state.ScrollY <= from {
 		t.Fatal("autoscroll after the release did not scroll")
 	}
 	w.onButtonDown(150, 90, 0)
@@ -888,5 +889,187 @@ func TestHitTestRoundedCorner(t *testing.T) {
 		if got := w.hitTest(x+tc.dx, y+tc.dy) == round; got != tc.hit {
 			t.Errorf("%s: hit = %v, want %v", tc.name, got, tc.hit)
 		}
+	}
+}
+
+// touchPath runs one touch contact through the points, 10 ms apart, and
+// lifts it at the last one.
+func touchPath(w *Window, path ...[2]float32) {
+	at := time.Unix(0, 0)
+	w.onTouchDown(1, path[0][0], path[0][1], at)
+	for _, p := range path[1:] {
+		at = at.Add(10 * time.Millisecond)
+		w.onTouchMove(1, p[0], p[1], at)
+	}
+	last := path[len(path)-1]
+	w.onTouchUp(1, last[0], last[1], at)
+	w.placeAll()
+}
+
+// A touch lifted within the slop is a click; one that moves further pans the
+// view under it instead, without clicking, and leaves no hover behind. Two
+// taps a finger's width apart are a double click.
+func TestTouchTapAndPan(t *testing.T) {
+	clicks, doubles := 0, 0
+	w := newPointerWindow(t, func() *El {
+		return Col(
+			Box().Size(100, 40).OnClick(func() { clicks++ }).OnDoubleClick(func() { doubles++ }).Tooltip("tip"),
+			Box().Size(100, 400),
+		).Size(200, 100).ScrollY()
+	})
+	s := w.root.state
+
+	touchPath(w, [2]float32{10, 10}, [2]float32{14, 13})
+	if clicks != 1 || s.ScrollY != 0 {
+		t.Fatalf("tap: clicks %d, scrollY %v", clicks, s.ScrollY)
+	}
+	if len(w.hoverPath) != 0 || w.mouseIn {
+		t.Fatal("a tap left the element hovered")
+	}
+
+	// The view follows from where the slop was crossed, so it does not jump.
+	at := time.Unix(0, 0)
+	w.onTouchDown(1, 10, 30, at)
+	w.onTouchMove(1, 10, 10, at.Add(10*time.Millisecond))
+	w.onTouchMove(1, 10, -20, at.Add(20*time.Millisecond))
+	if s.ScrollY != 30 {
+		t.Fatalf("pan scrolled to %v, want 30", s.ScrollY)
+	}
+	// Lifted after holding still: no fling.
+	w.onTouchUp(1, 10, -20, at.Add(200*time.Millisecond))
+	if clicks != 1 || s.Fling {
+		t.Fatalf("pan: clicks %d, fling %v", clicks, s.Fling)
+	}
+
+	s.ScrollY = 0
+	w.placeAll()
+	touchPath(w, [2]float32{60, 20})
+	touchPath(w, [2]float32{68, 24})
+	if clicks != 3 || doubles != 1 {
+		t.Fatalf("double tap: clicks %d, double clicks %d", clicks, doubles)
+	}
+}
+
+// A pan drives the innermost container that can move its way and keeps it:
+// a vertical pan over a horizontal scroller moves the page, and a list at its
+// end leaves the next pan to the page.
+func TestTouchPanPicksScroller(t *testing.T) {
+	w := newPointerWindow(t, func() *El {
+		return Col(
+			Row(Box().Size(400, 40)).Size(200, 40).ScrollX().Key("row"),
+			Col(Box().Size(100, 200)).Size(200, 50).ScrollY().Key("list"),
+			Box().Size(100, 400),
+		).Size(200, 100).ScrollY()
+	})
+	page, row, list := w.root.state, w.findKey("row").state, w.findKey("list").state
+
+	touchPath(w, [2]float32{150, 20}, [2]float32{120, 22}, [2]float32{100, 22})
+	if row.ScrollX != 20 || page.ScrollY != 0 {
+		t.Fatalf("horizontal pan: row %v, page %v", row.ScrollX, page.ScrollY)
+	}
+
+	touchPath(w, [2]float32{100, 25}, [2]float32{102, 5}, [2]float32{102, -5})
+	if row.ScrollX != 20 || page.ScrollY != 10 {
+		t.Fatalf("vertical pan over the row: row %v, page %v", row.ScrollX, page.ScrollY)
+	}
+	page.ScrollY = 0
+	w.placeAll()
+
+	touchPath(w, [2]float32{100, 85}, [2]float32{100, 65}, [2]float32{100, 45})
+	if list.ScrollY != 20 || page.ScrollY != 0 {
+		t.Fatalf("pan over the list: list %v, page %v", list.ScrollY, page.ScrollY)
+	}
+
+	list.ScrollY = 150
+	w.placeAll()
+	touchPath(w, [2]float32{100, 85}, [2]float32{100, 65}, [2]float32{100, 45})
+	if list.ScrollY != 150 || page.ScrollY != 20 {
+		t.Fatalf("pan over the list at its end: list %v, page %v", list.ScrollY, page.ScrollY)
+	}
+}
+
+// An element that drags with the left button takes the touch instead of the
+// scroll container around it. A tap that wobbles is still a click, the mouse
+// cursor does not move the drag, and a canceled contact cancels it.
+func TestTouchDragTarget(t *testing.T) {
+	var l dragLog
+	clicks := 0
+	w := newPointerWindow(t, func() *El {
+		return Col(dragTarget(&l, 0).OnClick(func() { clicks++ }), Box().Size(100, 400)).Size(200, 100).ScrollY()
+	})
+
+	touchPath(w, [2]float32{10, 10}, [2]float32{15, 13}, [2]float32{16, 12})
+	if clicks != 1 || len(l.drags) != 0 {
+		t.Fatalf("wobbly tap: clicks %d, drag events %+v", clicks, l.drags)
+	}
+
+	at := time.Unix(0, 0)
+	w.onTouchDown(1, 10, 10, at)
+	w.onTouchMove(1, 10, 30, at.Add(10*time.Millisecond))
+	w.handle(win.WM_MOUSEMOVE, 0, 150|10<<16) // the cursor, elsewhere
+	w.onTouchMove(1, 10, 50, at.Add(20*time.Millisecond))
+	w.onTouchUp(1, 10, 50, at.Add(20*time.Millisecond))
+	w.placeAll()
+	if len(l.drags) != 3 || l.drags[0].Phase != DragStart || l.drags[2].Phase != DragEnd || l.drags[1].DY != 40 ||
+		l.drags[1].DX != 0 {
+		t.Fatalf("drag events = %+v", l.drags)
+	}
+	if w.root.state.ScrollY != 0 {
+		t.Fatal("dragging also scrolled the container")
+	}
+
+	l.drags = nil
+	w.onTouchDown(1, 10, 10, time.Unix(0, 0))
+	w.onTouchMove(1, 10, 40, time.Unix(0, 0))
+	w.onTouchCancel(1)
+	if w.press != nil || w.touch != nil {
+		t.Fatal("a canceled contact left its press active")
+	}
+	if len(l.drags) != 2 || !l.drags[1].Canceled {
+		t.Fatalf("canceled drag events = %+v", l.drags)
+	}
+}
+
+// A pan let go while moving coasts on, slowing down, and stops at the end of
+// the content.
+func TestTouchFling(t *testing.T) {
+	w := newPointerWindow(t, func() *El {
+		return Col(Box().Size(100, 600)).Size(200, 100).ScrollY()
+	})
+	s := w.root.state
+
+	touchPath(w, [2]float32{10, 90}, [2]float32{10, 70}, [2]float32{10, 50}, [2]float32{10, 30}, [2]float32{10, 10})
+	if s.ScrollY != 60 || !s.Fling {
+		t.Fatalf("after a 2000 px/s pan: scrollY %v, fling %v", s.ScrollY, s.Fling)
+	}
+	var steps []float32
+	for range 600 {
+		w.dt = 1.0 / 60
+		w.placeAll()
+		steps = append(steps, s.ScrollY)
+		if !s.Fling {
+			break
+		}
+	}
+	if s.Fling || s.ScrollY != 500 {
+		t.Fatalf("fling ended at %v (still moving %v), want the end at 500", s.ScrollY, s.Fling)
+	}
+	if len(steps) < 3 || steps[1]-steps[0] >= steps[0]-60 {
+		t.Fatalf("fling did not slow down: %v", steps)
+	}
+}
+
+// A contact held in place is a right click, and lifting it does not click.
+func TestTouchLongPress(t *testing.T) {
+	clicks, rights := 0, 0
+	w := newPointerWindow(t, func() *El {
+		return Col(Box().Size(100, 40).OnClick(func() { clicks++ }).OnRightClick(func(PointerEvent) { rights++ }))
+	})
+
+	w.onTouchDown(1, 10, 10, time.Unix(0, 0))
+	w.onTouchLongPress()
+	w.onTouchUp(1, 10, 10, time.Unix(1, 0))
+	if rights != 1 || clicks != 0 {
+		t.Fatalf("long press: %d right clicks, %d clicks", rights, clicks)
 	}
 }

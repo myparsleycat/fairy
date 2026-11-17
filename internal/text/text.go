@@ -926,3 +926,19 @@ func NextWord(s string, b int) int {
 }
 
 func isSpace(r rune) bool { return strings.ContainsRune(" \t\n\r.,;:/\\()[]{}\"'", r) }
+
+// AlignSlack is how far a single-line value of width tw moves right inside a
+// field of width viewW for its alignment. A value wider than the field
+// scrolls from the start, as a browser input does.
+func AlignSlack(align Align, viewW, tw float32) float32 {
+	if tw >= viewW {
+		return 0
+	}
+	switch align {
+	case AlignCenter:
+		return (viewW - tw) / 2
+	case AlignEnd:
+		return viewW - tw
+	}
+	return 0
+}

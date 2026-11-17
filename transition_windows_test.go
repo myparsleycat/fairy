@@ -250,8 +250,8 @@ func TestAnimateHeight(t *testing.T) {
 			t.Errorf("%s: next element at %.2f, want right below the shown height at %.2f", when, after.absY, section.absY+section.h)
 		}
 		s := w.root.state
-		if end := max(60+section.h+10-100, 0); s.scrollY < end-0.01 || s.scrollY > end+0.01 {
-			t.Errorf("%s: scrolled to %.2f, want the end at %.2f", when, s.scrollY, end)
+		if end := max(60+section.h+10-100, 0); s.ScrollY < end-0.01 || s.ScrollY > end+0.01 {
+			t.Errorf("%s: scrolled to %.2f, want the end at %.2f", when, s.ScrollY, end)
 		}
 	}
 	frame(0)

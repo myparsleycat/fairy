@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/layout"
 	"github.com/myparsleycat/fairy/motion"
@@ -37,13 +38,13 @@ func (w *Window) build() {
 	w.collecting = true
 	focusBefore := w.focused
 	w.building = true
-	w.mark()
+	w.ft.Mark()
 	viewStart := time.Now()
 	root := w.withBuildWindow(func() *El { return w.opts.View(&Cx{w: w}) })
-	if debugSlow > 0 {
-		slow("View", viewStart)
+	if frameprof.Slow > 0 {
+		frameprof.LogSlow("View", viewStart)
 	}
-	w.lap(&w.ft.view)
+	w.ft.Lap(&w.ft.View)
 	w.building = false
 	for k, l := range w.locals {
 		if w.gen-l.gen > stateTTL {
@@ -57,14 +58,14 @@ func (w *Window) build() {
 	w.root = root
 	base := w.baseText()
 	w.autoFocused = false
-	w.mark()
+	w.ft.Mark()
 	w.prepare(root, nil, 0, 0, base)
-	w.lap(&w.ft.prepare)
+	w.ft.Lap(&w.ft.Prepare)
 	lw, lh := float32(w.width)/w.scale, float32(w.height)/w.scale
 	layout.Compute(&root.node, lw, lh)
-	w.lap(&w.ft.layout)
+	w.ft.Lap(&w.ft.Layout)
 	w.buildRows(root)
-	w.lap(&w.ft.rows)
+	w.ft.Lap(&w.ft.Rows)
 
 	// Popovers are collected while preparing, overlays while running the view.
 	for i := 0; i < len(w.layers); i++ {
@@ -74,17 +75,17 @@ func (w *Window) build() {
 			pid = 0x6c61796572
 		}
 		w.autoFocused = false
-		w.mark()
+		w.ft.Mark()
 		w.prepare(l.root, nil, pid, i, base)
-		w.lap(&w.ft.prepare)
+		w.ft.Lap(&w.ft.Prepare)
 		if l.pop != nil {
 			layout.ComputeFit(&l.root.node, lw, lh)
 		} else {
 			layout.Compute(&l.root.node, lw, lh)
 		}
-		w.lap(&w.ft.layout)
+		w.ft.Lap(&w.ft.Layout)
 		w.buildRows(l.root)
-		w.lap(&w.ft.rows)
+		w.ft.Lap(&w.ft.Rows)
 	}
 	w.collecting = false
 
@@ -140,6 +141,7 @@ func (w *Window) state(id uint64) *elState {
 		// easing from how it was drawn before.
 		s.born = w.gen
 		s.anims = [animCount]*motion.Track{}
+		s.ResetMotion()
 	}
 	s.frame = w.gen
 	return s
@@ -333,7 +335,7 @@ func measureImage(e *El, width float32, exact bool) (float32, float32) {
 	if e.image == nil {
 		return 0, 0
 	}
-	iw, ih := float32(e.image.data.W), float32(e.image.data.H)
+	iw, ih := float32(e.image.core().Data.W), float32(e.image.core().Data.H)
 	if exact && width == width && iw > 0 {
 		return width, width * ih / iw
 	}

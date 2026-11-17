@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy"
+	"github.com/myparsleycat/fairy/clipboard"
 	"github.com/myparsleycat/fairy/i18n"
 	"github.com/myparsleycat/fairy/icons/lucide"
 	"github.com/myparsleycat/fairy/keyboard"
@@ -501,10 +502,10 @@ func (a *app) composer(w *fairy.Window) *fairy.El {
 	}
 	paste := func() bool {
 		// Text on the clipboard wins, as with a picture copied from a web page.
-		if w.ClipboardText() != "" {
+		if clipboard.Text() != "" {
 			return false
 		}
-		img, ok := w.ClipboardImage()
+		img, ok := clipboard.Image()
 		if ok {
 			a.attached = append(a.attached, fairy.NewImage(img))
 		}
@@ -663,11 +664,10 @@ func (a *app) table() *fairy.El {
 }
 
 func (a *app) markdown(cx *fairy.Cx) *fairy.El {
-	w := cx.Window()
 	return section(a.t("markdown"), kit.Markdown(sample, kit.MarkdownOptions{
 		Selectable: true,
 		OnLink:     func(url string) { a.toaster.Info(url) },
-		OnCopy:     func(code string) { w.SetClipboardText(code); a.toaster.Success(kit.Messages.Copied) },
+		OnCopy:     func(code string) { clipboard.SetText(code); a.toaster.Success(kit.Messages.Copied) },
 		Images: func(src string) *fairy.Image {
 			if src == "kit:gradient" {
 				return gradient()

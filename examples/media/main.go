@@ -16,6 +16,8 @@ import (
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
 	"github.com/myparsleycat/fairy/kit"
+	"github.com/myparsleycat/fairy/video"
+	"github.com/myparsleycat/fairy/webview"
 )
 
 // clearView fills the surface target, standing in for an app's own Direct3D
@@ -46,9 +48,9 @@ func main() {
 	}))
 	url := "http://" + ln.Addr().String() + "/"
 
-	var video *fairy.Video
+	var clip *video.Video
 	var status, lastMsg string
-	web := fairy.NewWebView(fairy.WebViewOptions{
+	web := webview.New(webview.Options{
 		URL:       url,
 		OnMessage: func(m string) { lastMsg = m },
 		OnError:   func(err error) { status = err.Error() },
@@ -56,7 +58,7 @@ func main() {
 
 	err = fairy.Main(func() error {
 		if len(os.Args) > 1 {
-			video, err = fairy.OpenVideo(os.Args[1], fairy.VideoOptions{AutoPlay: true, Loop: true, Muted: true,
+			clip, err = video.Open(os.Args[1], video.Options{AutoPlay: true, Loop: true, Muted: true,
 				OnError: func(err error) { status = err.Error(); log.Print(err) }})
 			if err != nil {
 				return err
@@ -74,21 +76,21 @@ func main() {
 			}).Grow(1).Radius(12)
 
 			var player *fairy.El
-			if video != nil {
-				pos, dur := video.Position().Truncate(time.Second/10), video.Duration().Truncate(time.Second/10)
+			if clip != nil {
+				pos, dur := clip.Position().Truncate(time.Second/10), clip.Duration().Truncate(time.Second/10)
 				icon := lucide.Play
-				if video.Playing() {
+				if clip.Playing() {
 					icon = lucide.Pause
 				}
-				w, h := video.Size()
+				w, h := clip.Size()
 				player = fairy.Col(
-					fairy.VideoView(video).Grow(1).Radius(12).Fill(fairy.Hex(0x000000)),
+					video.View(clip).Grow(1).Radius(12).Fill(fairy.Hex(0x000000)),
 					fairy.Row(
 						kit.IconButton(icon, func() {
-							if video.Playing() {
-								video.Pause()
+							if clip.Playing() {
+								clip.Pause()
 							} else {
-								video.Play()
+								clip.Play()
 							}
 						}, kit.Outline),
 						fairy.Text(fmt.Sprintf("%v / %v  ·  %dx%d", pos, dur, w, h)).Color(t.MutedForeground),
@@ -111,7 +113,7 @@ func main() {
 					kit.Button("Reload", web.Reload, kit.Outline, kit.Small),
 				).Gap(10).Align(fairy.Center),
 				fairy.Text(status).Color(t.Destructive),
-				fairy.Box(fairy.WebViewHost(web).Grow(1)).Grow(1).Border(1, t.Border).Radius(8).Pad(1),
+				fairy.Box(webview.Host(web).Grow(1)).Grow(1).Border(1, t.Border).Radius(8).Pad(1),
 			).Gap(12).Pad(20).Fill(t.Background).Color(t.Foreground)
 		}})
 		return err

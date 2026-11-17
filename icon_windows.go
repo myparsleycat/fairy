@@ -4,9 +4,64 @@ import (
 	"math"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/svg"
 )
+
+// Icon draws v as a mask tinted with the text color. Without an explicit size
+// it is a square a little larger than the inherited font size.
+func Icon(v *svg.Vector) *El {
+	e := newEl(kindIcon)
+	e.vec = v
+	return e
+}
+
+// Spinner is a busy indicator: an open ring in the text color, drawn like the
+// Lucide loader-circle icon, that turns once a second while it is on screen.
+// Size it with Size; it defaults to the icon size.
+func Spinner() *El { return newEl(kindSpinner) }
+
+type arcProps struct {
+	start, sweep, stroke float32
+	round                bool
+}
+
+// Arc strokes part of a circle in the text color, centered in the element:
+// sweep radians clockwise from start, where 0 is 12 o'clock. A sweep of 2π
+// or more is the whole circle. Size it with Size; it defaults to the icon
+// size. With Animate, changes of start and sweep move with its motion.
+func Arc(start, sweep float32) *El {
+	e := newEl(kindArc)
+	if !finite(start) {
+		start = 0
+	}
+	if !finite(sweep) {
+		sweep = 0
+	}
+	if sweep < 0 {
+		start, sweep = start+sweep, -sweep
+	}
+	e.arc = &arcProps{start: start, sweep: sweep}
+	return e
+}
+
+// Stroke sets an Arc's line width in pixels. It defaults to an eighth of
+// the arc's size.
+func (e *El) Stroke(px float32) *El {
+	if e.arc != nil {
+		e.arc.stroke = max(px, 0)
+	}
+	return e
+}
+
+// RoundCaps rounds the ends of an Arc.
+func (e *El) RoundCaps() *El {
+	if e.arc != nil {
+		e.arc.round = true
+	}
+	return e
+}
 
 type iconKey struct {
 	vec  *svg.Vector
@@ -28,8 +83,8 @@ func measureIcon(e *El, width float32, exact bool) (float32, float32) {
 	return sz * vw / max(vh, 1), sz
 }
 
-func (w *Window) paintIcon(e *El, box rectF, color Color, clip [4]float32, opacity float32) bool {
-	if e.vec == nil || box.empty() {
+func (w *Window) paintIcon(e *El, box geom.Rect, color Color, clip [4]float32, opacity float32) bool {
+	if e.vec == nil || box.Empty() {
 		return true
 	}
 	dst := w.snap(box)
@@ -65,14 +120,14 @@ func (w *Window) paintIcon(e *El, box rectF, color Color, clip [4]float32, opaci
 	return true
 }
 
-func (w *Window) paintArc(e *El, box rectF, color Color, clip [4]float32, opacity float32) {
+func (w *Window) paintArc(e *El, box geom.Rect, color Color, clip [4]float32, opacity float32) {
 	a := e.arc
 	start, sweep := a.start, a.sweep
 	if m := e.motion; m != nil && e.state != nil {
 		v := w.animate(e.state, animArc, 2, 0.0005, [4]float32{start, sweep}, *m)
 		start, sweep = v[0], max(v[1], 0)
 	}
-	size := min(box.w, box.h)
+	size := min(box.W, box.H)
 	if sweep <= 0 || size <= 0 {
 		return
 	}
@@ -86,7 +141,7 @@ func (w *Window) paintArc(e *El, box rectF, color Color, clip [4]float32, opacit
 		round = 1
 	}
 	w.scene.Add(render.Prim{
-		Bounds: [4]float32{(box.x + (box.w-size)/2) * s, (box.y + (box.h-size)/2) * s, size * s, size * s},
+		Bounds: [4]float32{(box.X + (box.W-size)/2) * s, (box.Y + (box.H-size)/2) * s, size * s, size * s},
 		Clip:   clip,
 		Color:  color.arr(opacity),
 		Params: [4]float32{start, min(sweep, 2*math.Pi), min(stroke, size/2) * s, round},
@@ -99,8 +154,8 @@ func (w *Window) paintArc(e *El, box rectF, color Color, clip [4]float32, opacit
 // to 0.1π, turned once per second like CSS animate-spin. It asks for frames at
 // up to 60 per second rather than animating, so a spinner left on screen does
 // not repaint the window at the full refresh rate.
-func (w *Window) paintSpinner(box rectF, color Color, clip [4]float32, opacity float32) {
-	size := min(box.w, box.h)
+func (w *Window) paintSpinner(box geom.Rect, color Color, clip [4]float32, opacity float32) {
+	size := min(box.W, box.H)
 	if size <= 0 {
 		return
 	}
@@ -116,7 +171,7 @@ func (w *Window) paintSpinner(box rectF, color Color, clip [4]float32, opacity f
 	turn := float64(since%time.Second) / float64(time.Second)
 	s, d := w.scale, size*extent
 	w.scene.Add(render.Prim{
-		Bounds: [4]float32{(box.x + (box.w-d)/2) * s, (box.y + (box.h-d)/2) * s, d * s, d * s},
+		Bounds: [4]float32{(box.X + (box.W-d)/2) * s, (box.Y + (box.H-d)/2) * s, d * s, d * s},
 		Clip:   clip,
 		Color:  color.arr(opacity),
 		Params: [4]float32{float32(start + 2*math.Pi*turn), sweep, size * stroke * s, 1},

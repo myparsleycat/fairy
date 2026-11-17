@@ -8,6 +8,8 @@ import (
 	"math"
 	"sync/atomic"
 
+	"github.com/myparsleycat/fairy/internal/embed"
+	"github.com/myparsleycat/fairy/internal/imagecache"
 	"github.com/myparsleycat/fairy/internal/imaging"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
@@ -173,7 +175,7 @@ type offscreenCapture struct {
 type captureImage struct {
 	img        *Image
 	bound      imaging.Bound
-	load       *imageLoad
+	load       *imagecache.Pending
 	bounds, uv [4]float32 // where the prim draws, to decide on mipmaps
 	xs         float32    // the element's transform scale
 }
@@ -186,19 +188,22 @@ func (c *offscreenCapture) addImage(prim render.Prim, img *Image, bound imaging.
 func (c *offscreenCapture) imagesReady() (pending bool, err error) {
 	c.w.scene.DeferredImages(func(slot int) bool {
 		ref := &c.images[slot]
-		if ref.img.lazy == nil {
+		if ref.img.core().Lazy == nil {
 			return true
 		}
-		img, load, loadErr := ref.img.lazy.requestVariant(ref.img.data.W, ref.img.data.H, ref.bound)
+		core := ref.img.core()
+		img, load, loadErr := core.Lazy.RequestVariant(core.Data.W, core.Data.H, ref.bound)
 		if loadErr != nil {
 			err = loadErr
 			return false
 		}
-		ref.img, ref.load = img, load
+		ref.img, ref.load = wrapCore(img), load
 		if load != nil {
 			select {
-			case <-load.done:
-				ref.img, ref.load, err = load.img, nil, load.err
+			case <-load.Done():
+				var done *imagecache.Image
+				done, err = load.Result()
+				ref.img, ref.load = wrapCore(done), nil
 			default:
 				pending = true
 			}
@@ -209,19 +214,19 @@ func (c *offscreenCapture) imagesReady() (pending bool, err error) {
 }
 
 func (c *offscreenCapture) waitImages(ctx context.Context, session <-chan struct{}) error {
-	loads := make(map[*imageLoad]struct{})
+	loads := make(map[*imagecache.Pending]struct{})
 	for _, ref := range c.images {
 		if ref.load != nil {
 			loads[ref.load] = struct{}{}
 		}
 	}
-	ready := make(chan *imageLoad, len(loads))
+	ready := make(chan *imagecache.Pending, len(loads))
 	for load := range loads {
-		load.watch(ready)
+		load.Watch(ready)
 	}
 	defer func() {
 		for load := range loads {
-			load.unwatch(ready)
+			load.Unwatch(ready)
 		}
 	}()
 	for range len(loads) {
@@ -234,7 +239,7 @@ func (c *offscreenCapture) waitImages(ctx context.Context, session <-chan struct
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if err := load.err; err != nil {
+			if _, err := load.Result(); err != nil {
 				return err
 			}
 		}
@@ -242,7 +247,8 @@ func (c *offscreenCapture) waitImages(ctx context.Context, session <-chan struct
 	for i := range c.images {
 		ref := &c.images[i]
 		if ref.load != nil {
-			ref.img, ref.load = ref.load.img, nil
+			done, _ := ref.load.Result()
+			ref.img, ref.load = wrapCore(done), nil
 		}
 	}
 	return nil
@@ -275,7 +281,7 @@ func (c *offscreenCapture) prepare(view func(*Cx) *El, pw, ph int, scale float32
 		textures:  map[uint64]*texEntry{},
 		capture:   c,
 		surfaces:  map[uint64]*surfaceEntry{},
-		webviews:  map[*WebView]bool{},
+		natives:   map[embed.Native]bool{},
 		iconTiles: map[iconKey]render.Tile{},
 		byID:      map[uint64]*El{},
 		prevByID:  map[uint64]*El{},

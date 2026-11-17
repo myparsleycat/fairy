@@ -338,8 +338,8 @@ func TestTabReachesScrolledOutField(t *testing.T) {
 	if !w.Focused("f3") {
 		t.Fatalf("Tab from f2 focused %q, want f3", w.focusKey)
 	}
-	if f3.culled || form.state.scrollY < 60 {
-		t.Fatalf("f3 not scrolled into view: culled=%v scrollY=%.1f", f3.culled, form.state.scrollY)
+	if f3.culled || form.state.ScrollY < 60 {
+		t.Fatalf("f3 not scrolled into view: culled=%v scrollY=%.1f", f3.culled, form.state.ScrollY)
 	}
 }
 

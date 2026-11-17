@@ -2,11 +2,11 @@ package fairy
 
 import (
 	"math"
-	"slices"
-	"strings"
 
 	"github.com/myparsleycat/fairy/internal/edit"
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
+	"github.com/myparsleycat/fairy/internal/spell"
 	"github.com/myparsleycat/fairy/internal/text"
 )
 
@@ -15,8 +15,8 @@ type inputGeom struct {
 	text             string
 	style            text.Style
 	width            float32
-	originX, originY float32 // device pixels
-	caret            rectF   // logical
+	originX, originY float32   // device pixels
+	caret            geom.Rect // logical
 	password         bool
 	multiline        bool
 	value            string // the unmasked text being shown
@@ -35,7 +35,7 @@ func (s *editState) shownGeom() *inputGeom {
 	c.value, c.text = s.Value, s.Value
 	if c.password {
 		c.bounds = s.clusters(s.Value)
-		c.text = maskText(c.bounds)
+		c.text = edit.Mask(c.bounds)
 	}
 	if c.multiline {
 		c.text += "​"
@@ -59,21 +59,21 @@ func (s *editState) withZWSP(v string) string {
 
 func (g *inputGeom) toDisplay(b int) int {
 	if g.password {
-		return maskedOffset(g.bounds, edit.ClampOffset(g.value, b))
+		return edit.MaskedOffset(g.bounds, edit.ClampOffset(g.value, b))
 	}
 	return b
 }
 
 func (g *inputGeom) fromDisplay(d int) int {
 	if g.password {
-		d = unmaskedOffset(g.bounds, d)
+		d = edit.UnmaskedOffset(g.bounds, d)
 	}
 	return edit.ClampOffset(g.value, d)
 }
 
 var defaultSelection = HexA(0x3b82f659)
 
-func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, opacity float32) bool {
+func (w *Window) paintInput(e *El, content geom.Rect, clip geom.Rect, textColor Color, opacity float32) bool {
 	st := w.editOf(e)
 	st.Sync(e.input.value)
 	props := e.input
@@ -99,12 +99,12 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	shown := disp
 	if props.password {
 		g.bounds = st.clusters(disp)
-		shown = maskText(g.bounds)
-		caret = maskedOffset(g.bounds, caret)
-		selA, selB = maskedOffset(g.bounds, selA), maskedOffset(g.bounds, selB)
+		shown = edit.Mask(g.bounds)
+		caret = edit.MaskedOffset(g.bounds, caret)
+		selA, selB = edit.MaskedOffset(g.bounds, selA), edit.MaskedOffset(g.bounds, selB)
 		if compLen > 0 {
-			compLen = maskedOffset(g.bounds, compStart+compLen) - maskedOffset(g.bounds, compStart)
-			compStart = maskedOffset(g.bounds, compStart)
+			compLen = edit.MaskedOffset(g.bounds, compStart+compLen) - edit.MaskedOffset(g.bounds, compStart)
+			compStart = edit.MaskedOffset(g.bounds, compStart)
 		}
 	}
 
@@ -114,7 +114,7 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	layoutW := text.Unbounded
 	if props.multiline {
 		style.NoWrap = false
-		layoutW = content.w * s
+		layoutW = content.W * s
 	} else {
 		style.NoWrap = true
 		style.Align = text.AlignStart
@@ -126,7 +126,7 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	l := w.ts.Layout(measureText, style, layoutW)
 	tw, th := l.Size()
 
-	viewW, viewH := content.w*s, content.h*s
+	viewW, viewH := content.W*s, content.H*s
 	cx, cy, ch := l.CaretAt(min(caret, len(shown)), st.upstream && compLen == 0)
 	if ch == 0 {
 		ch = th
@@ -151,20 +151,20 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 	}
 	slack := float32(0)
 	if !props.multiline {
-		slack = alignSlack(align, viewW, tw)
+		slack = text.AlignSlack(align, viewW, tw)
 	}
-	ox := float32(math.Round(float64(content.x*s - st.scrollX + slack)))
-	oy := content.y*s - st.scrollY
+	ox := float32(math.Round(float64(content.X*s - st.scrollX + slack)))
+	oy := content.Y*s - st.scrollY
 	if !props.multiline {
 		oy += (viewH - th) / 2
 	}
 	oy = float32(math.Round(float64(oy)))
 
 	g.text, g.style, g.width, g.originX, g.originY = measureText, style, layoutW, ox, oy
-	g.caret = rectF{(ox + cx) / s, (oy + cy) / s, 1, ch / s}
+	g.caret = geom.Rect{X: (ox + cx) / s, Y: (oy + cy) / s, W: 1, H: ch / s}
 	st.geom = g
 
-	inner := clip.intersect(rectF{content.x - 1, content.y, content.w + 2, content.h})
+	inner := clip.Intersect(geom.Rect{X: content.X - 1, Y: content.Y, W: content.W + 2, H: content.H})
 	devClip := w.snap(inner)
 	ok := true
 
@@ -192,7 +192,7 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 		px := ox
 		if !props.multiline {
 			pw, _ := pl.Size()
-			px = float32(math.Round(float64(content.x*s + alignSlack(align, viewW, pw))))
+			px = float32(math.Round(float64(content.X*s + text.AlignSlack(align, viewW, pw))))
 		}
 		ok = pl.Draw(&w.scene, px, oy, ph.arr(opacity), devClip) && ok
 	} else {
@@ -206,10 +206,10 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 		lw := max(1, float32(math.Round(float64(s))))
 		h := float32(math.Round(float64(4 * s)))
 		for _, r := range errs {
-			if !validSpellRange(st.Value, r) || typing && st.Caret >= r.start && st.Caret <= r.end {
+			if !spell.Valid(st.Value, r) || typing && st.Caret >= r.Start && st.Caret <= r.End {
 				continue
 			}
-			for _, rr := range l.RangeRects(r.start, r.end) {
+			for _, rr := range l.RangeRects(r.Start, r.End) {
 				w.scene.Add(render.Prim{
 					Bounds: [4]float32{ox + rr.X, oy + rr.Y + rr.H - h, rr.W, h},
 					Clip:   devClip,
@@ -246,41 +246,4 @@ func (w *Window) paintInput(e *El, content rectF, clip rectF, textColor Color, o
 		})
 	}
 	return ok
-}
-
-// alignSlack is how far a single-line value of width tw moves right inside a field of width viewW for its text
-// alignment. A value wider than the field scrolls from the start, as a browser input does.
-func alignSlack(align text.Align, viewW, tw float32) float32 {
-	if tw >= viewW {
-		return 0
-	}
-	switch align {
-	case text.AlignCenter:
-		return (viewW - tw) / 2
-	case text.AlignEnd:
-		return viewW - tw
-	}
-	return 0
-}
-
-// A password shows one dot per grapheme cluster, so the caret, which moves
-// by clusters, steps over one dot at a time.
-func maskText(bounds []int) string {
-	return strings.Repeat("•", len(bounds)-1)
-}
-
-// maskedOffset maps a byte offset in a text with the given cluster bounds to
-// the start of its cluster's dot in maskText(bounds).
-func maskedOffset(bounds []int, b int) int {
-	i, found := slices.BinarySearch(bounds, b)
-	if !found {
-		i--
-	}
-	return i * len("•")
-}
-
-// unmaskedOffset maps a byte offset in the masked text back to the text with
-// the given cluster bounds.
-func unmaskedOffset(bounds []int, mb int) int {
-	return bounds[min(max(mb/len("•"), 0), len(bounds)-1)]
 }

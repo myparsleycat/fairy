@@ -57,7 +57,7 @@ func (w *Window) insertKind(e *El, s string, kind edit.Kind) {
 func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 	st := w.editOf(e)
 	props := e.input
-	if props.onKey != nil && inputHookSees(ev, st.comp != "") {
+	if props.onKey != nil && edit.HookSees(ev, st.comp != "") {
 		if props.onKey(ev) {
 			st.HandlerRan = true
 			st.BreakUndo()
@@ -206,7 +206,7 @@ func (w *Window) inputKey(e *El, ev keyboard.KeyEvent) bool {
 		w.runEdit(e, st, EditPaste)
 		return true
 	}
-	if !ctrl && !alt && isTypingKey(ev.Key) {
+	if !ctrl && !alt && edit.IsTypingKey(ev.Key) {
 		w.wantChar = true
 		return true // the character arrives through WM_CHAR
 	}
@@ -237,11 +237,6 @@ func (w *Window) paste(e *El, st *editState) bool {
 	return true
 }
 
-func isTypingKey(k keyboard.Key) bool {
-	return k == keyboard.KeySpace || (k >= '0' && k <= '9') || (k >= 'A' && k <= 'Z') ||
-		(k >= 0x60 && k <= 0x6F) || (k >= 0xBA && k <= 0xE2) || k == win.VK_PROCESSKEY
-}
-
 func (w *Window) undo(e *El, st *editState) {
 	if e.input.onChange == nil || !st.UndoStep() {
 		return
@@ -256,27 +251,13 @@ func (w *Window) redo(e *El, st *editState) {
 	w.commitEdit(e, st, st.Value)
 }
 
-func lineStart(s string, i int) int {
-	for i > 0 && s[i-1] != '\n' {
-		i--
-	}
-	return i
-}
-
-func lineEnd(s string, i int) int {
-	for i < len(s) && s[i] != '\n' {
-		i++
-	}
-	return i
-}
-
 // visualLine returns the byte range of the displayed line holding the caret,
 // and whether its end is drawn upstream (see text.Layout.LineRange). Without a
 // drawn layout it falls back to the newline-delimited line.
 func (w *Window) visualLine(st *editState) (start, end int, upstream bool) {
 	g := st.shownGeom()
 	if g == nil {
-		return lineStart(st.Value, st.Caret), lineEnd(st.Value, st.Caret), false
+		return edit.LineStart(st.Value, st.Caret), edit.LineEnd(st.Value, st.Caret), false
 	}
 	l := w.ts.Layout(g.text, g.style, g.width)
 	at := g.toDisplay(st.Caret)
@@ -346,4 +327,118 @@ func (w *Window) moveCaretTo(e *El, x, y float32, extend bool) {
 	st.upstream = false
 	w.resetBlink()
 	w.invalidate()
+}
+
+func (w *Window) updateIME() {
+	if w.hwnd == 0 {
+		return
+	}
+	e := w.focusedEl()
+	editing := e != nil && e.kind == kindInput
+	on := w.takesIME(e) && w.hl == nil
+	if on != w.imeOn {
+		win.ImmEnable(w.hwnd, on)
+		w.imeOn = on
+		if !on && editing {
+			w.editOf(e).comp = ""
+		}
+	}
+	if editing {
+		w.caretOn = true
+		win.SetTimer(w.hwnd, timerCaret, caretBlinkMs)
+	} else {
+		win.KillTimer(w.hwnd, timerCaret)
+	}
+}
+
+func (w *Window) imeInput() (*El, *editState) {
+	e := w.focusedEl()
+	if !w.takesIME(e) {
+		return nil, nil
+	}
+	return e, w.editOf(e)
+}
+
+func (w *Window) onIMEComposition(lp uintptr) {
+	e, st := w.imeInput()
+	if e == nil {
+		return
+	}
+	himc := win.ImmGetContext(w.hwnd)
+	if himc == 0 {
+		return
+	}
+	defer win.ImmReleaseContext(w.hwnd, himc)
+	if lp&win.GCS_RESULTSTR != 0 {
+		res := win.ImmGetCompositionString(himc, win.GCS_RESULTSTR)
+		st.comp = ""
+		if res != "" {
+			w.typeText(e, res)
+		}
+	}
+	if lp&win.GCS_COMPSTR != 0 {
+		st.comp = win.ImmGetCompositionString(himc, win.GCS_COMPSTR)
+		cur := win.ImmGetCompositionCursor(himc)
+		st.compCursor = edit.UTF16ToByteOffset(st.comp, cur)
+	} else if lp&win.GCS_RESULTSTR == 0 {
+		st.comp = ""
+	}
+	w.resetBlink()
+	w.updateIMEPosition()
+	w.invalidate()
+}
+
+func (w *Window) onIMEEnd() {
+	if _, st := w.imeInput(); st != nil && st.comp != "" {
+		st.comp = ""
+		w.invalidate()
+	}
+}
+
+func (w *Window) commitComposition() {
+	_, st := w.imeInput()
+	if st == nil || st.comp == "" {
+		return
+	}
+	himc := win.ImmGetContext(w.hwnd)
+	if himc == 0 {
+		return
+	}
+	win.ImmNotifyIME(himc, win.NI_COMPOSITIONSTR, win.CPS_COMPLETE, 0)
+	win.ImmReleaseContext(w.hwnd, himc)
+}
+
+// commitCompositionOutside commits the focused input's composition when a
+// press at (x, y) lands outside that input.
+func (w *Window) commitCompositionOutside(x, y float32) {
+	e, st := w.imeInput()
+	if st == nil || st.comp == "" {
+		return
+	}
+	for t := w.hitTest(x, y); t != nil; t = t.parent {
+		if t == e {
+			return
+		}
+	}
+	w.commitComposition()
+}
+
+func (w *Window) updateIMEPosition() {
+	_, st := w.imeInput()
+	if st == nil || st.geom == nil {
+		return
+	}
+	himc := win.ImmGetContext(w.hwnd)
+	if himc == 0 {
+		return
+	}
+	defer win.ImmReleaseContext(w.hwnd, himc)
+	c := st.geom.caret
+	x, y, h := int32(c.X*w.scale), int32(c.Y*w.scale), int32(c.H*w.scale)
+	win.ImmSetCompositionWindow(himc, &win.COMPOSITIONFORM{Style: win.CFS_POINT, CurrPos: win.POINT{X: x, Y: y}})
+	win.ImmSetCandidateWindow(himc, &win.CANDIDATEFORM{
+		Style:   win.CFS_EXCLUDE,
+		CurrPos: win.POINT{X: x, Y: y + h},
+		Area:    win.RECT{Left: x, Top: y, Right: x + 1, Bottom: y + h},
+	})
 }

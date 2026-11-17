@@ -3,6 +3,7 @@ package fairy
 import (
 	"unicode/utf16"
 
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
@@ -142,7 +143,7 @@ func (w *Window) focusNext(back bool) {
 }
 
 func (w *Window) onKeyDown(k keyboard.Key, repeat bool, text string) bool {
-	w.wheelLatch = wheelLatch{}
+	w.wheelLatch = scroll.Latch{}
 	if w.autoScroll != nil {
 		// Any key ends autoscroll and does nothing else.
 		w.stopAutoScroll()

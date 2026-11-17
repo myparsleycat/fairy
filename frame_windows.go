@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/myparsleycat/fairy/d3d"
+	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/win"
 )
@@ -37,7 +38,7 @@ func (w *Window) renderFrame() {
 	ticks := win.Ticks()
 	dt := w.frameDT(start)
 	w.lastFrame = start
-	w.ft = frameTimes{}
+	w.ft = frameprof.Times{}
 	w.animating = false
 	w.flushPointerMove()
 	w.stepAutoScroll(dt)
@@ -46,9 +47,9 @@ func (w *Window) renderFrame() {
 	w.uploaded = 0
 	w.imageWorkEpoch++
 	for {
-		w.mark()
+		w.ft.Mark()
 		ok := w.paintScene()
-		w.lap(&w.ft.paint)
+		w.ft.Lap(&w.ft.Paint)
 		w.dt = 0
 		if ok || w.r.Atlas.Grow() != nil {
 			break
@@ -75,10 +76,13 @@ func (w *Window) renderFrame() {
 	if w.hl != nil {
 		w.reportCursor()
 	}
-	if debugFrames && w.r != nil {
+	if frameprof.Frames && w.r != nil {
 		st := w.r.Stats()
-		w.ft.record, w.ft.present = st.Record, st.Present
-		w.logFrame(win.Ticks()-ticks, st.Batches)
+		w.ft.Record, w.ft.Present = st.Record, st.Present
+		w.ft.Log(frameprof.Frame{
+			N: w.frame, Total: win.Ticks() - ticks, Prims: len(w.scene.Prims), Batches: st.Batches, Hits: len(w.hits),
+			Animating: w.animating, Width: w.width, Height: w.height,
+		}, w.r)
 	}
 	w.frame++
 	switch {
@@ -106,8 +110,8 @@ func (w *Window) renderFrame() {
 func (w *Window) layout(dt float32) {
 	for i := 0; i < 3; i++ {
 		if w.dirty {
-			w.ft.causes |= w.dirtyBy
-			w.ft.builds++
+			w.ft.Causes |= w.dirtyBy
+			w.ft.Builds++
 			w.ts.BeginBuild()
 			w.build()
 			w.ts.EndBuild()
@@ -117,9 +121,9 @@ func (w *Window) layout(dt float32) {
 		if i == 0 {
 			w.dt = dt
 		}
-		w.mark()
+		w.ft.Mark()
 		w.placeAll()
-		w.lap(&w.ft.place)
+		w.ft.Lap(&w.ft.Place)
 		if w.mouseIn {
 			w.updateHover(w.mouseX, w.mouseY)
 		}
@@ -171,10 +175,10 @@ func (w *Window) newRenderer() (r *render.Renderer, err error) {
 		if err != nil {
 			return
 		}
-		if debugGPU {
+		if frameprof.GPU {
 			r.SetGPUTiming(true)
 		}
-		setDamageTracking(r)
+		frameprof.SetDamageTracking(r)
 	}()
 	if w.hl != nil {
 		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
@@ -219,7 +223,7 @@ func (w *Window) recreateRenderer() {
 	w.r = r
 	w.ts.ResetAtlas(r.Atlas)
 	clear(w.iconTiles)
-	w.markDirty(dirtyDevice)
+	w.markDirty(frameprof.CauseDevice)
 	w.invalidate()
 }
 
@@ -231,7 +235,7 @@ func (w *Window) redrawWhole() {
 	}
 }
 
-func (w *Window) markDirty(c dirtyCause) {
+func (w *Window) markDirty(c frameprof.Cause) {
 	w.dirty = true
 	w.dirtyBy |= c
 }

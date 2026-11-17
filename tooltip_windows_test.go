@@ -3,8 +3,10 @@ package fairy
 import (
 	"testing"
 
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
+	"github.com/myparsleycat/fairy/internal/tooltip"
 )
 
 func TestTooltipArrowSharesBackgroundOpacity(t *testing.T) {
@@ -20,7 +22,7 @@ func TestTooltipArrowSharesBackgroundOpacity(t *testing.T) {
 	defer ts.Release()
 	w := Window{
 		opts: Options{Font: "Segoe UI"}, ts: ts, scale: 1, width: 96, height: 96,
-		tipShown: true, tipText: "X",
+		tip: tooltip.State{Shown: true, Text: "X"},
 	}
 	style := TooltipStyle{Fill: Hex(0xffffff).Alpha(0.5), Radius: 4, PadX: 16, PadY: 8, Gap: 4, Arrow: true}
 	for _, tc := range []struct {
@@ -33,7 +35,7 @@ func TestTooltipArrowSharesBackgroundOpacity(t *testing.T) {
 		{name: "below", anchorY: 8, body: 30, join: 21, arrow: 17, outside: 12},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w.tipAnchor = rectF{40, tc.anchorY, 16, 8}
+			w.tip.Anchor = geom.Rect{X: 40, Y: tc.anchorY, W: 16, H: 8}
 			w.scene.Reset()
 			if !w.paintStyledTooltip(&style) {
 				t.Fatal("could not paint tooltip")
@@ -52,32 +54,6 @@ func TestTooltipArrowSharesBackgroundOpacity(t *testing.T) {
 			}
 			if a := img.NRGBAAt(48, tc.outside).A; a != 0 {
 				t.Errorf("alpha outside tooltip = %d, want 0", a)
-			}
-		})
-	}
-}
-
-func TestTipPlaceBesideAnchor(t *testing.T) {
-	const bw, bh, gap, lw, lh, top = 40, 20, 6, 200, 100, 0
-	for _, tc := range []struct {
-		name   string
-		anchor rectF
-		side   Side
-		x, y   float32
-		used   Side
-	}{
-		{name: "right", anchor: rectF{0, 40, 20, 20}, side: SideRight, x: 26, y: 40, used: SideRight},
-		{name: "right flips left", anchor: rectF{170, 40, 20, 20}, side: SideRight, x: 124, y: 40, used: SideLeft},
-		{name: "right clamped to top", anchor: rectF{0, 0, 20, 10}, side: SideRight, x: 26, y: 4, used: SideRight},
-		{name: "right clamped to bottom", anchor: rectF{0, 90, 20, 10}, side: SideRight, x: 26, y: 76, used: SideRight},
-		{name: "top flips below", anchor: rectF{80, 10, 40, 10}, side: SideTop, x: 80, y: 26, used: SideBottom},
-		{name: "right without room stays inside", anchor: rectF{0, 40, 200, 20}, side: SideRight, x: 156, y: 40,
-			used: SideRight},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			x, y, used := tipPlace(tc.anchor, tc.side, bw, bh, gap, lw, lh, top)
-			if x != tc.x || y != tc.y || used != tc.used {
-				t.Errorf("tipPlace = (%v, %v, %v), want (%v, %v, %v)", x, y, used, tc.x, tc.y, tc.used)
 			}
 		})
 	}

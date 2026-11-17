@@ -10,9 +10,11 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/imagecache"
 	"github.com/myparsleycat/fairy/internal/render"
 )
 
@@ -267,13 +269,13 @@ func TestSweepTexturesReleasesUnusedImages(t *testing.T) {
 	w.texture(kept, 0)
 	w.texture(retired, 0)
 	w.texture(collected, 0)
-	collectedID := collected.id
+	collectedID := collected.core().ID
 	collected = nil
 	runtime.GC()
 	w.frame = 2
 	w.texture(drawnRetired, 0)
-	retired.retired.Store(true)
-	drawnRetired.retired.Store(true)
+	retired.core().Retired.Store(true)
+	drawnRetired.core().Retired.Store(true)
 
 	w.sweepTextures(2, 64*64*4)
 	for _, tc := range []struct {
@@ -281,11 +283,11 @@ func TestSweepTexturesReleasesUnusedImages(t *testing.T) {
 		id   uint64
 		want bool
 	}{
-		{"least recently drawn beyond the budget", oldest.id, false},
-		{"recently drawn within the budget", kept.id, true},
-		{"dropped from its cache", retired.id, false},
+		{"least recently drawn beyond the budget", oldest.core().ID, false},
+		{"recently drawn within the budget", kept.core().ID, true},
+		{"dropped from its cache", retired.core().ID, false},
 		{"garbage collected", collectedID, false},
-		{"dropped but drawn this frame", drawnRetired.id, true},
+		{"dropped but drawn this frame", drawnRetired.core().ID, true},
 	} {
 		if _, ok := w.textures[tc.id]; ok != tc.want {
 			t.Errorf("texture %s: kept = %v, want %v", tc.name, ok, tc.want)
@@ -336,16 +338,27 @@ func TestRenderImageDecodesLazyImageAfterTransform(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewImageCache(4<<20, 1)
-			img := waitImage(t, c, "transformed", 0, 0, pngBytes(t, 400, 400))
+			data := pngBytes(t, 400, 400)
+			var reads atomic.Int32
+			read := func() ([]byte, error) { reads.Add(1); return data, nil }
+			var img *Image
+			for deadline := time.Now().Add(5 * time.Second); img == nil && time.Now().Before(deadline); {
+				if img = c.Load("transformed", 0, 0, read); img == nil {
+					time.Sleep(time.Millisecond)
+				}
+			}
+			if img == nil {
+				t.Fatal("transformed did not load")
+			}
 			el := Box(Box(ImageEl(img).Size(50, 50).Fit(FitContain)).Size(50, 50).Scale(tc.scale).Rotate(tc.angle).Origin(0, 0))
 			if _, err := RenderImageContext(t.Context(), el, 200, 200, 1); err != nil {
 				t.Fatal(err)
 			}
 			if tc.want == 0 {
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				if len(c.entries) != 1 || len(c.loading) != 0 {
-					t.Fatal("zero scale requested pixels")
+				// The lazy image read its source once for its header; a decode
+				// for drawing would read it again.
+				if n := reads.Load(); n != 1 {
+					t.Fatalf("zero scale read the source %d times, want 1", n)
 				}
 				return
 			}
@@ -419,7 +432,7 @@ func TestRenderImageContextInterruptedWhileDecoding(t *testing.T) {
 			cache, img, started, release := gatedCaptureImage(t)
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
-			want := errImageLoadInvalidated
+			want := imagecache.ErrInvalidated
 			interrupt := func() { cache.Forget("capture") }
 			if name == "cancel" {
 				want, interrupt = context.Canceled, cancel
@@ -494,7 +507,7 @@ func TestRenderImageContextStopsOnLaterInvalidatedImage(t *testing.T) {
 		}
 	}()
 	el := Row(ImageEl(first).Size(8, 8), ImageEl(second).Size(8, 8))
-	if pix, err := RenderImageContext(ctx, el, 16, 8, 1); pix != nil || !errors.Is(err, errImageLoadInvalidated) {
+	if pix, err := RenderImageContext(ctx, el, 16, 8, 1); pix != nil || !errors.Is(err, imagecache.ErrInvalidated) {
 		t.Fatalf("capture with later invalidated image = %v, %v; want invalidation", pix, err)
 	}
 }

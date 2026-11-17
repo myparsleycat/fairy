@@ -8,11 +8,12 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/script"
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
@@ -92,7 +93,7 @@ func (w *Window) runScriptFromEnv() {
 			done := make(chan struct{})
 			w.Post(func() {
 				defer close(done)
-				if err := w.scriptStep(f, line); err != nil {
+				if err := w.scriptStep(line); err != nil {
 					log.Printf("fairy: script %q: %v", line, err)
 				}
 			})
@@ -109,56 +110,47 @@ func (w *Window) runScriptFromEnv() {
 
 const scriptTouchID = 1
 
-func (w *Window) scriptStep(f []string, line string) error {
-	if len(f) > 1 && strings.HasPrefix(f[1], "@") {
-		x, y, err := w.scriptPoint(f[1][1:])
+func (w *Window) scriptStep(line string) error {
+	c := script.Parse(line)
+	if c.Key != "" {
+		x, y, err := w.keyPoint(c.Key, c.DX, c.DY)
 		if err != nil {
 			return err
 		}
-		xs, ys := strconv.FormatFloat(float64(x), 'f', 2, 32), strconv.FormatFloat(float64(y), 'f', 2, 32)
-		f = append([]string{f[0], xs, ys}, f[2:]...)
+		c.At(x, y)
 	}
-	args := scriptArgs[f[0]]
-	if len(f)-1 < args.min {
-		return fmt.Errorf("%s needs %d arguments", f[0], args.min)
+	if err := c.Check(); err != nil {
+		return err
 	}
-	var a [3]float32
-	for i := range args.nums {
-		v, err := strconv.ParseFloat(f[i+1], 32)
-		if err != nil {
-			return err
-		}
-		a[i] = float32(v)
-	}
-	num := func(i int) float32 { return a[i-1] }
+	num := c.Num
 	// Modifier keys that down holds stay held through other commands until up.
 	held := w.scriptMods
 	var heldMods keyboard.Mods
 	if held != nil {
 		heldMods = *held
 	}
-	switch f[0] {
+	switch c.Name {
 	case "move":
 		w.onMouseMove(num(1), num(2))
 	case "down":
-		b, rest := scriptButton(f[3:])
+		b, rest := script.Button(c.From(3))
 		if len(rest) > 0 {
-			m := scriptMods(rest)
+			m := script.Mods(rest)
 			w.scriptMods = &m
 		}
 		w.onMouseMove(num(1), num(2))
 		w.onButtonDown(num(1), num(2), b)
 	case "up":
-		b, _ := scriptButton(f[3:])
+		b, _ := script.Button(c.From(3))
 		w.onMouseMove(num(1), num(2))
 		w.onButtonUp(num(1), num(2), b)
 		w.scriptMods = nil
 	case "click", "rclick":
 		b := 0
-		if f[0] == "rclick" {
+		if c.Name == "rclick" {
 			b = 1
 		}
-		m := scriptMods(f[3:]) | heldMods
+		m := script.Mods(c.From(3)) | heldMods
 		w.scriptMods = &m
 		w.onMouseMove(num(1), num(2))
 		w.onButtonDown(num(1), num(2), b)
@@ -171,15 +163,15 @@ func (w *Window) scriptStep(f []string, line string) error {
 			w.onButtonUp(num(1), num(2), 0)
 		}
 	case "wheel", "hwheel":
-		m := scriptMods(f[4:]) | heldMods
+		m := script.Mods(c.From(4)) | heldMods
 		w.scriptMods = &m
 		// A fraction of a notch is a touchpad step. Each command is a gesture
 		// of its own: script steps come milliseconds apart, or with a fixed
 		// clock at no time apart, so they would all latch to one container.
 		n := num(3)
 		precise := n != float32(int(n))
-		w.wheelLatch = wheelLatch{}
-		if f[0] == "hwheel" {
+		w.wheelLatch = scroll.Latch{}
+		if c.Name == "hwheel" {
 			w.onWheel(num(1), num(2), -n, true, precise)
 		} else {
 			w.onWheel(num(1), num(2), n, false, precise)
@@ -203,17 +195,15 @@ func (w *Window) scriptStep(f []string, line string) error {
 			}
 		}
 	case "key":
-		k, ok := keyNames[strings.ToLower(f[1])]
-		if !ok && len(f[1]) == 1 {
-			k, ok = keyboard.Key(strings.ToUpper(f[1])[0]), true
-		}
+		name := c.Args[0]
+		k, ok := script.Key(name)
 		if !ok {
-			return fmt.Errorf("unknown key %s", f[1])
+			return fmt.Errorf("unknown key %s", name)
 		}
-		m := scriptMods(f[2:]) | heldMods
+		m := script.Mods(c.From(2)) | heldMods
 		text := ""
-		if len(f[1]) == 1 {
-			text = f[1]
+		if len(name) == 1 {
+			text = name
 			if m&keyboard.ModShift != 0 {
 				text = strings.ToUpper(text)
 			}
@@ -225,7 +215,7 @@ func (w *Window) scriptStep(f []string, line string) error {
 		w.scriptMods = held
 	case "dragfiles":
 		if w.drag == nil {
-			w.fileDragEnter(f[3:], num(1), num(2))
+			w.fileDragEnter(c.From(3), num(1), num(2))
 		} else {
 			w.fileDragOver(num(1), num(2))
 		}
@@ -246,23 +236,23 @@ func (w *Window) scriptStep(f []string, line string) error {
 	case "maximize":
 		w.ToggleMaximize()
 	case "snap":
-		w.SaveSnapshot(f[1], nil)
+		w.SaveSnapshot(c.Args[0], nil)
 	case "quit":
 		w.Close()
 	case "tree":
-		return w.writeTree(f[1])
+		return w.writeTree(c.Args[0])
 	case "clock":
-		if len(f) < 2 || f[1] == "off" {
+		if len(c.Args) < 1 || c.Args[0] == "off" {
 			w.setClock(0)
 			return nil
 		}
-		d, err := time.ParseDuration(f[1])
+		d, err := time.ParseDuration(c.Args[0])
 		if err != nil {
 			return err
 		}
 		w.setClock(d)
 	case "step":
-		n, err := strconv.Atoi(f[1])
+		n, err := strconv.Atoi(c.Args[0])
 		if err != nil {
 			return err
 		}
@@ -271,70 +261,6 @@ func (w *Window) scriptStep(f []string, line string) error {
 		return fmt.Errorf("unknown command")
 	}
 	return nil
-}
-
-// scriptArgs gives the least number of arguments of each command and how
-// many of the first ones are numbers.
-var scriptArgs = map[string]struct{ min, nums int }{
-	"move": {2, 2}, "down": {2, 2}, "up": {2, 2}, "click": {2, 2}, "rclick": {2, 2}, "dblclick": {2, 2},
-	"wheel": {3, 3}, "hwheel": {3, 3}, "tdown": {2, 2}, "tmove": {2, 2}, "tup": {2, 2}, "key": {1, 0}, "dragfiles": {2, 2}, "dropfiles": {2, 2},
-	"resize": {2, 2}, "snap": {1, 0}, "tree": {1, 0}, "step": {1, 0},
-}
-
-var reOffset = regexp.MustCompile(`\+(-?[0-9.]+),(-?[0-9.]+)$`)
-
-// scriptPoint resolves "KEY" or "KEY+DX,DY" to a point in the window.
-func (w *Window) scriptPoint(s string) (float32, float32, error) {
-	var dx, dy float64
-	if m := reOffset.FindStringSubmatchIndex(s); m != nil {
-		dx, _ = strconv.ParseFloat(s[m[2]:m[3]], 32)
-		dy, _ = strconv.ParseFloat(s[m[4]:m[5]], 32)
-		s = s[:m[0]]
-	}
-	return w.keyPoint(s, float32(dx), float32(dy))
-}
-
-var keyNames = map[string]keyboard.Key{
-	"backspace": keyboard.KeyBackspace, "tab": keyboard.KeyTab, "enter": keyboard.KeyEnter, "escape": keyboard.KeyEscape,
-	"space": keyboard.KeySpace, "pageup": keyboard.KeyPageUp, "pagedown": keyboard.KeyPageDown, "end": keyboard.KeyEnd,
-	"home": keyboard.KeyHome, "left": keyboard.KeyLeft, "up": keyboard.KeyUp, "right": keyboard.KeyRight, "down": keyboard.KeyDown,
-	"delete": keyboard.KeyDelete, "insert": keyboard.KeyInsert,
-}
-
-func init() {
-	for i := range 24 {
-		keyNames["f"+strconv.Itoa(i+1)] = keyboard.KeyF1 + keyboard.Key(i)
-	}
-}
-
-// scriptButton reads an optional button name and returns the rest.
-func scriptButton(f []string) (int, []string) {
-	if len(f) > 0 {
-		switch f[0] {
-		case "left":
-			return 0, f[1:]
-		case "right":
-			return 1, f[1:]
-		case "middle":
-			return 2, f[1:]
-		}
-	}
-	return 0, f
-}
-
-func scriptMods(names []string) keyboard.Mods {
-	var m keyboard.Mods
-	for _, name := range names {
-		switch name {
-		case "shift":
-			m |= keyboard.ModShift
-		case "ctrl":
-			m |= keyboard.ModCtrl
-		case "alt":
-			m |= keyboard.ModAlt
-		}
-	}
-	return m
 }
 
 // snapshotFromEnv supports FAIRY_SNAPSHOT=out.png: render, save the frame, then close.
@@ -393,7 +319,7 @@ type treeNode struct {
 	Children []*treeNode `json:"children,omitempty"`
 }
 
-var kindNames = [...]string{"box", "text", "image", "input", "icon", "spinner", "surface", "video", "webview", "arc"}
+var kindNames = [...]string{"box", "text", "image", "input", "icon", "spinner", "surface", "embed", "arc"}
 
 var roleNames = map[Role]string{
 	RoleNone: "none", RoleHidden: "hidden", RoleGroup: "group", RoleButton: "button", RoleLink: "link",

@@ -1,52 +1,10 @@
 package fairy
 
 import (
+	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/layout"
 	"github.com/myparsleycat/fairy/motion"
 )
-
-// stepScroll clamps the scroll offset and advances smooth wheel scrolling.
-func (w *Window) stepScroll(e *El) {
-	s, n := e.state, &e.node
-	maxX, maxY := max(n.ContentW-n.W, 0), max(n.ContentH-n.H, 0)
-	if e.stickBottom && maxY != s.endY {
-		if _, by := scrollBase(s); by >= s.endY-0.5 {
-			shiftScrollY(s, maxY-s.endY)
-		}
-	}
-	if s.smooth {
-		s.fling = false // the wheel or a glide took over
-	}
-	if s.fling {
-		w.stepFling(e, maxX, maxY)
-		return
-	}
-	if s.smooth {
-		if s.bottomGlide {
-			s.scrollTY = maxY // content that grows on the way extends the glide
-		}
-		s.scrollTX = min(max(s.scrollTX, 0), maxX)
-		s.scrollTY = min(max(s.scrollTY, 0), maxY)
-		m := motion.Snappy
-		if s.glide {
-			m = motionGlide
-		}
-		v := w.animate(s, animScroll, 2, 0.1, [4]float32{s.scrollTX, s.scrollTY}, m)
-		s.scrollX, s.scrollY = min(max(v[0], 0), maxX), min(max(v[1], 0), maxY)
-		if !s.anims[animScroll].Moving() {
-			s.smooth = false
-			stopGlide(s)
-		}
-		if e.onScroll != nil {
-			e.onScroll(s.scrollX, s.scrollY)
-		}
-		return
-	}
-	s.scrollX = min(max(s.scrollX, 0), maxX)
-	s.scrollY = min(max(s.scrollY, 0), maxY)
-	s.scrollTX, s.scrollTY = s.scrollX, s.scrollY
-	s.track(animScroll, 2, 0.1).Set([4]float32{s.scrollX, s.scrollY})
-}
 
 // virtualContent sets the scrollable size of a virtual list from its width.
 func (w *Window) virtualContent(e *El) {
@@ -84,17 +42,17 @@ func (w *Window) virtualRows(e *El) {
 	pad := e.padding()
 	innerW := max(n.W-pad.Left-pad.Right, 0)
 	lineH := v.lineHeight()
-	if s := e.state; s.revealing {
-		s.revealing = false
+	if s := e.state; s.Revealing {
+		s.Revealing = false
 		if v.count > 0 {
-			from := s.scrollY
-			i := min(max(s.reveal, 0), v.count-1)
+			from := s.ScrollY
+			i := min(max(s.Reveal, 0), v.count-1)
 			w.revealSpan(e, pad.Top+float32(i/v.cols)*lineH, v.rowH)
-			w.startGlide(e, from, s.revealInstant)
+			w.startGlide(e, from, s.RevealInstant)
 		}
 	}
 	lines := v.lines(v.cols)
-	view := e.state.scrollY - pad.Top
+	view := e.state.ScrollY - pad.Top
 	// Rows built with overscan stay until the view reaches past them, so a
 	// scroll of a few pixels does not build the whole range again.
 	if v.built && innerW == v.builtW && v.last <= lines &&
@@ -103,7 +61,7 @@ func (w *Window) virtualRows(e *El) {
 	}
 	overscan := n.H / 2
 	top := view - overscan
-	bottom := e.state.scrollY + n.H + overscan
+	bottom := e.state.ScrollY + n.H + overscan
 	first := max(int(top/lineH), 0)
 	last := min(int(bottom/lineH)+1, lines)
 	v.built, v.first, v.last, v.builtW = true, first, last, innerW
@@ -203,30 +161,30 @@ func (w *Window) buildRow(e *El, i int) *El {
 func (w *Window) measuredRows(e *El) {
 	v, s := e.virtual, e.state
 	if v.count == 0 {
-		s.revealing, s.revealGlide = false, false
+		s.Revealing, s.RevealGlide = false, false
 		if !v.built || len(e.children) > 0 {
 			v.built = true
 			w.clearRows(e)
 		}
 		return
 	}
-	if s.revealing {
-		s.revealing = false
-		s.reveal = min(max(s.reveal, 0), v.count-1)
-		from := s.scrollY
+	if s.Revealing {
+		s.Revealing = false
+		s.Reveal = min(max(s.Reveal, 0), v.count-1)
+		from := s.ScrollY
 		for range 8 {
 			w.revealMeasured(e)
 			if !w.layoutMeasured(e, false) {
 				break
 			}
 		}
-		w.startGlide(e, from, s.revealInstant)
-		s.revealGlide = s.glide
+		w.startGlide(e, from, s.RevealInstant)
+		s.RevealGlide = s.Glide
 	}
-	if s.toBottom {
+	if s.ToBottom {
 		// Stand at the bottom so the last rows are measured; place() glides
 		// there from where the view was.
-		from := s.scrollY
+		from := s.ScrollY
 		for range 3 {
 			w.moveScrollY(e, max(e.node.ContentH-e.node.H, 0))
 			if !w.layoutMeasured(e, false) {
@@ -239,9 +197,9 @@ func (w *Window) measuredRows(e *El) {
 	if v.motion != nil {
 		w.placeShownRows(e)
 	}
-	if s.revealGlide {
-		s.reveal = min(s.reveal, v.count-1) // rows may have gone since the request
-		s.scrollTY = w.revealTarget(e, s.rowTop(e), s.rowHeight(e))
+	if s.RevealGlide {
+		s.Reveal = min(s.Reveal, v.count-1) // rows may have gone since the request
+		s.ScrollTY = w.revealTarget(e, s.rowTop(e), s.rowHeight(e))
 	}
 }
 
@@ -265,7 +223,7 @@ func (w *Window) stepRowHeights(e *El) {
 	if len(r.tracks) == 0 {
 		return
 	}
-	view := s.scrollY - e.padding().Top
+	view := s.ScrollY - e.padding().Top
 	est := e.virtual.estimate
 	first, last := r.rowAt(view, est), r.rowAt(view+n.H, est)
 	if r.top(last, est) < view+n.H {
@@ -321,10 +279,10 @@ func (w *Window) layoutMeasured(e *El, keep bool) bool {
 	r := s.rows
 	pad := e.padding()
 	innerW := max(n.W-pad.Left-pad.Right, 0)
-	_, by := scrollBase(s)
+	_, by := s.Base()
 	atEnd := e.stickBottom && by >= max(n.ContentH-n.H, 0)-0.5
 	overscan := n.H / 2
-	view := s.scrollY - pad.Top
+	view := s.ScrollY - pad.Top
 	first := r.rowAt(view-overscan, v.estimate)
 	bottom := view + n.H + overscan
 	if v.built && innerW == v.builtW && r.top(v.first, v.estimate) <= max(view, 0) &&
@@ -376,9 +334,9 @@ func (w *Window) layoutMeasured(e *El, keep bool) bool {
 	n.ContentH = max(n.H, pad.Top+r.top(len(r.h), v.estimate)+pad.Bottom)
 	if keep {
 		if atEnd {
-			shiftScrollY(s, max(n.ContentH-n.H, 0)-oldMax)
+			s.ShiftY(max(n.ContentH-n.H, 0) - oldMax)
 		} else if d := r.top(anchor, v.estimate) - anchorTop; d != 0 {
-			shiftScrollY(s, d)
+			s.ShiftY(d)
 		}
 	}
 	// The rows built may no longer cover the view, which the next frame fixes.
@@ -389,11 +347,11 @@ func (w *Window) layoutMeasured(e *El, keep bool) bool {
 // rowTop and rowHeight return where the row being revealed lies in a
 // VirtualListMeasured, by its estimated height until it has been measured.
 func (s *elState) rowTop(e *El) float32 {
-	return e.padding().Top + s.rows.top(s.reveal, e.virtual.estimate)
+	return e.padding().Top + s.rows.top(s.Reveal, e.virtual.estimate)
 }
 
 func (s *elState) rowHeight(e *El) float32 {
-	if h := s.rows.h[s.reveal]; h >= 0 {
+	if h := s.rows.h[s.Reveal]; h >= 0 {
 		return h
 	}
 	return e.virtual.estimate
@@ -404,35 +362,6 @@ func (s *elState) rowHeight(e *El) float32 {
 func (w *Window) revealMeasured(e *El) {
 	s := e.state
 	w.revealSpan(e, s.rowTop(e), s.rowHeight(e))
-}
-
-// revealTarget returns the scroll offset that shows content from top to
-// top+h. The first call for a ScrollToRow request picks the least distance,
-// lining the span up with the top or bottom edge of e, or leaving it where it
-// is; later calls, made as the rows around it are measured, keep that.
-func (w *Window) revealTarget(e *El, top, h float32) float32 {
-	s, n := e.state, &e.node
-	if s.revealEdge == revealUndecided {
-		_, y := scrollBase(s)
-		switch {
-		case top < y || h > n.H:
-			s.revealEdge = revealTop
-		case top+h > y+n.H:
-			s.revealEdge = revealBottom
-		default:
-			s.revealEdge, s.revealOff = revealKeep, top-y
-		}
-	}
-	var y float32
-	switch s.revealEdge {
-	case revealTop:
-		y = top
-	case revealBottom:
-		y = top + h - n.H
-	default:
-		y = top - s.revealOff
-	}
-	return min(max(y, 0), max(n.ContentH-n.H, 0))
 }
 
 // revealSpan moves e's vertical scroll offset at once to show content from
@@ -448,60 +377,48 @@ func (w *Window) jumpScrollY(e *El, y float32) {
 	}
 	s := e.state
 	if e.onScroll != nil {
-		e.onScroll(s.scrollX, y)
-		w.markDirty(dirtyScroll)
+		e.onScroll(s.ScrollX, y)
+		w.markDirty(frameprof.CauseScroll)
 	}
+}
+
+// stepScroll clamps the scroll offset and advances smooth wheel scrolling or a fling.
+func (w *Window) stepScroll(e *El) {
+	s, n := e.state, &e.node
+	moved, moving := s.Step(n.ContentW-n.W, n.ContentH-n.H, w.dt, e.stickBottom, reducedMotion.Load())
+	if moving {
+		w.animating = true
+	}
+	if moved && e.onScroll != nil {
+		e.onScroll(s.ScrollX, s.ScrollY)
+	}
+}
+
+// revealTarget returns the scroll offset that shows content from top to
+// top+h in e; see scroll.State.RevealTarget.
+func (w *Window) revealTarget(e *El, top, h float32) float32 {
+	n := &e.node
+	return e.state.RevealTarget(top, h, n.H, n.ContentH-n.H)
 }
 
 // moveScrollY is jumpScrollY without OnScroll, for offsets the view passes
 // through within a frame. It reports whether the offset changed.
 func (w *Window) moveScrollY(e *El, y float32) bool {
-	s := e.state
-	if y == s.scrollY && !s.smooth {
+	if !e.state.MoveY(y) {
 		return false
 	}
-	s.scrollY, s.scrollTX, s.scrollTY, s.smooth = y, s.scrollX, y, false
-	stopGlide(s)
-	s.track(animScroll, 2, 0.1).Set([4]float32{s.scrollX, y})
 	w.invalidate()
 	return true
 }
 
-// motionGlide carries the view to a row or the bottom; it is gentler than
-// the wheel's motion.Snappy.
-var motionGlide = motion.Spring(0.5, 0)
-
-// glideReach is how many views away from its end a glide starts at most, so a
-// jump across a long list glides only the last stretch.
-const glideReach = 2
-
 // startGlide turns a jump of e's vertical scroll offset, from from to where
-// it is now, into a glide that starts at most glideReach views away.
+// it is now, into a glide.
 func (w *Window) startGlide(e *El, from float32, instant bool) {
-	s, n := e.state, &e.node
-	to := s.scrollY
-	if instant || reducedMotion.Load() || abs32(to-from) < 1 {
+	if !e.state.StartGlide(from, e.node.H, instant || reducedMotion.Load()) {
 		return
 	}
-	reach := glideReach * n.H
-	start := min(max(from, to-reach), to+reach)
-	s.scrollY, s.scrollTY, s.smooth, s.glide = start, to, true, true
-	s.track(animScroll, 2, 0.1).Set([4]float32{s.scrollX, start})
 	if e.virtual != nil && e.virtual.estimate > 0 {
 		w.layoutMeasured(e, true)
 	}
 	w.invalidate()
-}
-
-func stopGlide(s *elState) {
-	s.glide, s.revealGlide, s.bottomGlide, s.fling = false, false, false, false
-}
-
-// shiftScrollY moves a scroll offset, and any wheel scrolling toward a target, by d.
-func shiftScrollY(s *elState, d float32) {
-	s.scrollY += d
-	s.scrollTY += d
-	if t := s.anims[animScroll]; t != nil && t.Initialized() {
-		t.Shift([4]float32{0, d})
-	}
 }

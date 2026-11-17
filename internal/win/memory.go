@@ -4,6 +4,7 @@ package win
 
 import (
 	"sync"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -43,4 +44,33 @@ const LowMemoryResourceNotification = 0
 func CreateMemoryResourceNotification(kind uint32) windows.Handle {
 	r, _, _ := pCreateMemoryResourceNotification.Call(uintptr(kind))
 	return windows.Handle(r)
+}
+
+// ScreenPixels returns the area of all attached monitors in device pixels.
+func ScreenPixels() int64 {
+	var n int64
+	for _, r := range MonitorRects() {
+		n += int64(r.Right-r.Left) * int64(r.Bottom-r.Top)
+	}
+	return n
+}
+
+// WatchLowMemory calls onLow, on a goroutine of its own, whenever Windows
+// reports that physical memory is low, and then waits interval before
+// looking again: the notification stays signaled for as long as memory is
+// low. Each call starts another watcher.
+func WatchLowMemory(interval time.Duration, onLow func()) {
+	h := CreateMemoryResourceNotification(LowMemoryResourceNotification)
+	if h == 0 {
+		return
+	}
+	go func() {
+		for {
+			if ev, err := windows.WaitForSingleObject(h, windows.INFINITE); err != nil || ev != windows.WAIT_OBJECT_0 {
+				return
+			}
+			onLow()
+			time.Sleep(interval)
+		}
+	}()
 }

@@ -4,22 +4,25 @@ import (
 	"maps"
 	"math"
 
+	"github.com/myparsleycat/fairy/internal/frameprof"
+	"github.com/myparsleycat/fairy/internal/geom"
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/layout"
 	"github.com/myparsleycat/fairy/motion"
 )
 
-func (w *Window) snap(r rectF) [4]float32 {
+func (w *Window) snap(r geom.Rect) [4]float32 {
 	s := w.scale
-	x0 := float32(math.Round(float64(r.x * s)))
-	y0 := float32(math.Round(float64(r.y * s)))
-	x1 := float32(math.Round(float64((r.x + r.w) * s)))
-	y1 := float32(math.Round(float64((r.y + r.h) * s)))
+	x0 := float32(math.Round(float64(r.X * s)))
+	y0 := float32(math.Round(float64(r.Y * s)))
+	x1 := float32(math.Round(float64((r.X + r.W) * s)))
+	y1 := float32(math.Round(float64((r.Y + r.H) * s)))
 	return [4]float32{x0, y0, x1 - x0, y1 - y0}
 }
 
-func (w *Window) devRect(r rectF) [4]float32 {
+func (w *Window) devRect(r geom.Rect) [4]float32 {
 	s := w.scale
-	return [4]float32{r.x * s, r.y * s, r.w * s, r.h * s}
+	return [4]float32{r.X * s, r.Y * s, r.W * s, r.H * s}
 }
 
 func (w *Window) hovered(e *El) bool { return w.hoverIDs[e.id] }
@@ -63,8 +66,8 @@ func hasAbsoluteChild(e *El) bool {
 	return false
 }
 
-func (w *Window) windowRect() rectF {
-	return rectF{0, 0, float32(w.width) / w.scale, float32(w.height) / w.scale}
+func (w *Window) windowRect() geom.Rect {
+	return geom.Rect{X: 0, Y: 0, W: float32(w.width) / w.scale, H: float32(w.height) / w.scale}
 }
 
 // placeAll computes absolute positions, clips, hit-test boxes, focus order and
@@ -105,7 +108,7 @@ func (w *Window) placeAll() {
 	w.place(w.root, 0, 0, wr)
 	rootChrome := len(w.chromeHits)
 	w.chromeTop = max(w.topChromeBottom(w.chromeHits, wr), w.layerChromeTop)
-	area := rectF{0, w.chromeTop, wr.w, wr.h - w.chromeTop}
+	area := geom.Rect{X: 0, Y: w.chromeTop, W: wr.W, H: wr.H - w.chromeTop}
 	for _, l := range w.layers {
 		l.hidden = false
 		n := &l.root.node
@@ -115,17 +118,18 @@ func (w *Window) placeAll() {
 				l.hidden = true
 				continue
 			}
-			ar := rectF{a.absX, a.absY, a.w, a.h}
+			ar := geom.Rect{X: a.absX, Y: a.absY, W: a.w, H: a.h}
 			if o := l.pop.opts; o.AtPoint {
-				ar = rectF{a.absX + o.X, a.absY + o.Y, 0, 0}
+				ar = geom.Rect{X: a.absX + o.X, Y: a.absY + o.Y, W: 0, H: 0}
 			}
 			// A scrolling popover is cut to the room on its roomier side, as
 			// Floating UI's size middleware sets --available-height.
-			if room := popoverRoom(ar, l.pop.opts, area); l.root.style.ScrollY && n.H > room {
-				layout.ComputeFit(n, wr.w, room)
+			if room := l.pop.opts.geom().Room(ar, area); l.root.style.ScrollY && n.H > room {
+				layout.ComputeFit(n, wr.W, room)
 			}
-			var side Side
-			n.X, n.Y, side = popoverPosition(ar, n.W, n.H, l.pop.opts, area)
+			x, y, gs := l.pop.opts.geom().Position(ar, n.W, n.H, area)
+			n.X, n.Y = x, y
+			side := Side(gs)
 			root := l.root
 			root.popSide = uint8(side) + 1
 			frac := func(v, start, size float32) float32 {
@@ -136,13 +140,13 @@ func (w *Window) placeAll() {
 			}
 			switch side {
 			case SideBottom:
-				root.popOX, root.popOY = frac(ar.x+ar.w/2, n.X, n.W), 0
+				root.popOX, root.popOY = frac(ar.X+ar.W/2, n.X, n.W), 0
 			case SideTop:
-				root.popOX, root.popOY = frac(ar.x+ar.w/2, n.X, n.W), 1
+				root.popOX, root.popOY = frac(ar.X+ar.W/2, n.X, n.W), 1
 			case SideRight:
-				root.popOX, root.popOY = 0, frac(ar.y+ar.h/2, n.Y, n.H)
+				root.popOX, root.popOY = 0, frac(ar.Y+ar.H/2, n.Y, n.H)
 			case SideLeft:
-				root.popOX, root.popOY = 1, frac(ar.y+ar.h/2, n.Y, n.H)
+				root.popOX, root.popOY = 1, frac(ar.Y+ar.H/2, n.Y, n.H)
 			}
 		} else {
 			n.X, n.Y = 0, 0
@@ -174,7 +178,7 @@ func (w *Window) glideIntoView(e *El) {
 	var from []start
 	for a := e.parent; a != nil; a = a.parent {
 		if a.state != nil && a.style.ScrollY {
-			from = append(from, start{a, a.state.scrollY})
+			from = append(from, start{a, a.state.ScrollY})
 		}
 	}
 	w.scrollIntoView(e)
@@ -283,81 +287,24 @@ func (w *Window) growPass(e *El) float32 {
 // topChromeBottom returns the bottom of the WindowChrome boxes among hits placed
 // against the top edge of wr. Exclusions and boxes taller than half the window,
 // which mark more than a title bar, do not count.
-func (w *Window) topChromeBottom(hits []int, wr rectF) float32 {
+func (w *Window) topChromeBottom(hits []int, wr geom.Rect) float32 {
 	var bottom float32
 	for _, i := range hits {
 		h := &w.hits[i]
-		if h.el.excludeChrome || h.y > wr.y+0.5 || h.h > wr.h/2 {
+		if h.el.excludeChrome || h.y > wr.Y+0.5 || h.h > wr.H/2 {
 			continue
 		}
-		r := rectF{h.x, h.y, h.w, h.h}.intersect(h.clip)
-		if !r.empty() {
-			bottom = max(bottom, r.y+r.h)
+		r := geom.Rect{X: h.x, Y: h.y, W: h.w, H: h.h}.Intersect(h.clip)
+		if !r.Empty() {
+			bottom = max(bottom, r.Y+r.H)
 		}
 	}
 	return bottom
 }
 
-// popoverRoom returns the height a popover next to a can take inside wr, keeping
-// the 4 pixel margin popoverPosition keeps: below or above a, whichever is
-// taller, for SideBottom and SideTop.
-func popoverRoom(a rectF, o PopoverOptions, wr rectF) float32 {
-	if o.Side == SideLeft || o.Side == SideRight {
-		return max(wr.h-8, 0)
-	}
-	below := wr.y + wr.h - (a.y + a.h + o.Gap) - 4
-	above := a.y - o.Gap - 4 - wr.y
-	return max(below, above, 0)
-}
-
-// popoverPosition places a popover of size cw×ch next to a, and returns the
-// side it ended up on after flipping to fit.
-func popoverPosition(a rectF, cw, ch float32, o PopoverOptions, wr rectF) (float32, float32, Side) {
-	along := func(start, length, size float32) float32 {
-		switch o.Align {
-		case AlignCenter:
-			return start + (length-size)/2 + o.AlignOffset
-		case AlignEnd:
-			return start + length - size - o.AlignOffset
-		}
-		return start + o.AlignOffset
-	}
-	var x, y float32
-	side := o.Side
-	switch o.Side {
-	case SideTop, SideBottom:
-		x = along(a.x, a.w, cw)
-		below, above := a.y+a.h+o.Gap, a.y-o.Gap-ch
-		y = below
-		if o.Side == SideTop {
-			y = above
-		}
-		if o.Side == SideBottom && below+ch > wr.y+wr.h && above >= wr.y {
-			y, side = above, SideTop
-		} else if o.Side == SideTop && above < wr.y && below+ch <= wr.y+wr.h {
-			y, side = below, SideBottom
-		}
-	default:
-		y = along(a.y, a.h, ch)
-		right, left := a.x+a.w+o.Gap, a.x-o.Gap-cw
-		x = right
-		if o.Side == SideLeft {
-			x = left
-		}
-		if o.Side == SideRight && right+cw > wr.w && left >= 0 {
-			x, side = left, SideLeft
-		} else if o.Side == SideLeft && left < 0 && right+cw <= wr.w {
-			x, side = right, SideRight
-		}
-	}
-	x = min(max(x, 4), max(wr.w-cw-4, 4))
-	y = min(max(y, wr.y+4), max(wr.y+wr.h-ch-4, wr.y+4))
-	return x, y, side
-}
-
 // animate advances an element's track toward target and returns its value.
 func (w *Window) animate(s *elState, p animProp, n int, eps float32, target [4]float32, m motion.Spec) [4]float32 {
-	if (p == animRect || p == animScroll || p == animXform || p == animHeight) && reducedMotion.Load() {
+	if (p == animRect || p == animXform || p == animHeight) && reducedMotion.Load() {
 		m = motion.Instant
 	}
 	tr := s.track(p, n, eps)
@@ -368,7 +315,7 @@ func (w *Window) animate(s *elState, p animProp, n int, eps float32, target [4]f
 	return v
 }
 
-func (w *Window) place(e *El, ox, oy float32, clip rectF) {
+func (w *Window) place(e *El, ox, oy float32, clip geom.Rect) {
 	e.culled = true
 	e.inChrome, e.excludeChrome = e.windowChrome, e.chromeExclude
 	if p := e.parent; p != nil {
@@ -414,12 +361,12 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if e.matchID != "" {
 		w.placeFlight(e)
 	}
-	r := rectF{e.absX, e.absY, ew, eh}
-	vis := r.intersect(clip)
+	r := geom.Rect{X: e.absX, Y: e.absY, W: ew, H: eh}
+	vis := r.Intersect(clip)
 	// Exiting children are drawn where they were, so a box that shrank to
 	// nothing as its last child left still has to draw them.
 	keep := !e.clip && (hasAbsoluteChild(e) || (ew <= 0 || eh <= 0) && w.ghostIn[e.id])
-	if vis.empty() && !keep {
+	if vis.Empty() && !keep {
 		w.placeCulled(e)
 		return
 	}
@@ -428,10 +375,10 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if e.onLayout != nil && (n.W != s.layoutW || n.H != s.layoutH || !s.laidOut) {
 		s.layoutW, s.layoutH, s.laidOut = n.W, n.H, true
 		if e.onLayout(n.W, n.H) {
-			w.markDirty(dirtyLayout)
+			w.markDirty(frameprof.CauseLayout)
 		}
 	}
-	h := hit{el: e, x: r.x, y: r.y, w: r.w, h: r.h, clip: clip, radii: e.radii}
+	h := hit{el: e, x: r.X, y: r.Y, w: r.W, h: r.H, clip: clip, radii: e.radii}
 	if !e.xf.identity() {
 		h.inv, h.turned = e.xf.inverse(), true
 	}
@@ -451,12 +398,12 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 	if e.clip || e.grow.clip {
 		in := w.innerBox(e, w.snap(r))
 		s := w.scale
-		box := rectF{in[0] / s, in[1] / s, in[2] / s, in[3] / s}
-		childClip = vis.intersect(box)
+		box := geom.Rect{X: in[0] / s, Y: in[1] / s, W: in[2] / s, H: in[3] / s}
+		childClip = vis.Intersect(box)
 		pinClip = childClip
 		if ci := e.clipInset; ci != [4]float32{} {
-			childClip = childClip.intersect(rectF{
-				box.x + ci[3], box.y + ci[0], max(box.w-ci[1]-ci[3], 0), max(box.h-ci[0]-ci[2], 0),
+			childClip = childClip.Intersect(geom.Rect{
+				X: box.X + ci[3], Y: box.Y + ci[0], W: max(box.W-ci[1]-ci[3], 0), H: max(box.H-ci[0]-ci[2], 0),
 			})
 		}
 	}
@@ -469,16 +416,16 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 			w.virtualContent(e)
 		}
 		if w.revealKey != "" && e.key == w.revealKey {
-			s.reveal, s.revealing, s.revealEdge = w.revealRow, true, revealUndecided
+			s.Reveal, s.Revealing, s.RevealEdge = w.revealRow, true, scroll.EdgeUndecided
 			if w.revealTop {
-				s.revealEdge = revealTop
+				s.RevealEdge = scroll.EdgeTop
 			}
-			s.revealInstant = w.revealInstant
+			s.RevealInstant = w.revealInstant
 			w.revealKey = ""
 		}
 	}
 	if w.bottomKey != "" && e.key == w.bottomKey && s != nil && e.style.ScrollY {
-		s.toBottom = true
+		s.ToBottom = true
 		w.bottomKey = ""
 	}
 	if s != nil && e.kind != kindInput {
@@ -488,36 +435,36 @@ func (w *Window) place(e *El, ox, oy float32, clip rectF) {
 		// A measured list may move the scroll offset to keep its rows in place.
 		w.virtualRows(e)
 	}
-	if s != nil && s.toBottom {
+	if s != nil && s.ToBottom {
 		// A measured list has measured its last rows by now.
-		s.toBottom = false
-		from := s.scrollY
+		s.ToBottom = false
+		from := s.ScrollY
 		w.moveScrollY(e, max(n.ContentH-n.H, 0))
 		w.startGlide(e, from, false)
-		s.bottomGlide = s.glide
+		s.BottomGlide = s.Glide
 		if e.virtual != nil && e.virtual.estimate == 0 {
 			w.virtualRows(e)
 		}
-		if e.onScroll != nil && s.scrollY != from {
-			e.onScroll(s.scrollX, s.scrollY)
-			w.markDirty(dirtyScroll)
+		if e.onScroll != nil && s.ScrollY != from {
+			e.onScroll(s.ScrollX, s.ScrollY)
+			w.markDirty(frameprof.CauseScroll)
 		}
 	}
 	if e.stickBottom && s != nil {
-		s.endY = max(n.ContentH-n.H, 0)
+		s.EndY = max(n.ContentH-n.H, 0)
 	}
 	if e.onScrollEdges != nil && s != nil {
-		top, bottom := s.scrollY <= 0.5, s.scrollY >= n.ContentH-n.H-0.5
+		top, bottom := s.ScrollY <= 0.5, s.ScrollY >= n.ContentH-n.H-0.5
 		if !s.edgesSeen || top != s.atTop || bottom != s.atBottom {
 			s.edgesSeen, s.atTop, s.atBottom = true, top, bottom
 			e.onScrollEdges(top, bottom)
-			w.markDirty(dirtyScroll)
+			w.markDirty(frameprof.CauseScroll)
 		}
 	}
 	cx, cy := e.absX, e.absY
 	if s != nil && e.kind != kindInput {
-		cx -= s.scrollX
-		cy -= s.scrollY
+		cx -= s.ScrollX
+		cy -= s.ScrollY
 	}
 	for _, c := range e.children {
 		if c.pinToView {
@@ -547,8 +494,8 @@ func (w *Window) placeCulled(e *El) {
 	}
 	cx, cy := e.absX, e.absY
 	if s := e.state; s != nil && e.kind != kindInput {
-		cx -= s.scrollX
-		cy -= s.scrollY
+		cx -= s.ScrollX
+		cy -= s.ScrollY
 	}
 	for _, c := range e.children {
 		c.culled = true
@@ -572,7 +519,6 @@ const (
 	animText
 	animOpacity
 	animRect
-	animScroll
 	animEnter
 	animXform
 	animThumb

@@ -16,7 +16,7 @@ type MarkdownOptions struct {
 	// OnLink runs when a link is clicked. Links are plain text without it.
 	OnLink func(url string)
 	// OnCopy adds a copy button to code blocks; it receives the code, for
-	// example to pass to Window.SetClipboardText.
+	// example to pass to clipboard.SetText.
 	OnCopy func(code string)
 	// Highlighter colors code blocks by their fence language. Nil uses the
 	// built-in scanners.

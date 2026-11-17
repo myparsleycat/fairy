@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package fairy is a native GUI framework for Windows, written in Go without
 // cgo. It renders with Direct3D 11, lays text out with DirectWrite and lays
 // elements out with a flexbox engine.

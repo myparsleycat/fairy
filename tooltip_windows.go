@@ -3,71 +3,25 @@ package fairy
 import (
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
+	"github.com/myparsleycat/fairy/internal/tooltip"
 	"github.com/myparsleycat/fairy/internal/win"
+	"github.com/myparsleycat/fairy/motion"
 )
-
-func (w *Window) tipDuration() time.Duration {
-	ts := tooltipStyle.Load()
-	if ts == nil || ts.Motion.IsInstant() || ts.Motion.Duration() <= 0 || reducedMotion.Load() {
-		return 0
-	}
-	return time.Duration(float64(ts.Motion.Duration()) * float64(time.Second))
-}
-
-// tipCurve returns how far a styled tooltip's motion has come after elapsed.
-func (w *Window) tipCurve(elapsed time.Duration) float32 {
-	d := w.tipDuration()
-	if d <= 0 || elapsed >= d {
-		return 1
-	}
-	x := float32(max(elapsed, 0)) / float32(d)
-	if m := tooltipStyle.Load().Motion; m.IsBezier() {
-		y, _ := m.BezierAt(x)
-		return y
-	}
-	u := 1 - x
-	return 1 - u*u*u
-}
-
-// tipElapsedAt returns how long the tooltip's motion takes to reach
-// progress p, the inverse of tipCurve.
-func (w *Window) tipElapsedAt(p float32) time.Duration {
-	d := w.tipDuration()
-	lo, hi := time.Duration(0), d
-	for range 24 {
-		mid := (lo + hi) / 2
-		if w.tipCurve(mid) < p {
-			lo = mid
-		} else {
-			hi = mid
-		}
-	}
-	return hi
-}
-
-// tipProgress returns how much of a styled tooltip shows at now, from 0 to 1.
-func (w *Window) tipProgress(now time.Time) float32 {
-	if !w.tipShown {
-		if w.tipLeft.IsZero() {
-			return 0
-		}
-		return w.tipFrom * (1 - w.tipCurve(now.Sub(w.tipLeft)))
-	}
-	return w.tipCurve(now.Sub(w.tipAt))
-}
 
 // paintStyledTooltip draws the tooltip next to the element it belongs to,
 // as SetTooltipStyle describes.
 func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	now := time.Now()
-	p := w.tipProgress(now)
+	tm := tipTiming()
+	p := w.tip.Progress(now, tm)
 	switch {
-	case !w.tipShown && (p <= 0 || now.Sub(w.tipLeft) >= w.tipDuration()):
-		w.tipLeft = time.Time{}
+	case !w.tip.Shown && (p <= 0 || now.Sub(w.tip.Left) >= tm.Duration()):
+		w.tip.Left = time.Time{}
 		return true
-	case !w.tipShown || p < 1:
+	case !w.tip.Shown || p < 1:
 		w.animating = true
 	}
 	s := w.scale
@@ -76,19 +30,20 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 		size = 12
 	}
 	st := w.textStyle(textProps{size: size, weight: 400, family: w.opts.Font, italic: -1})
-	l := w.ts.Layout(w.tipText, st, ts.MaxW*s)
+	l := w.ts.Layout(w.tip.Text, st, ts.MaxW*s)
 	tw, th := l.Size()
 	bw, bh := tw/s+2*ts.PadX, th/s+2*ts.PadY
 	lw, lh := float32(w.width)/s, float32(w.height)/s
-	a := w.tipAnchor
+	a := w.tip.Anchor
 	side := SideTop
-	if w.tipSideSet {
-		side = w.tipSide
+	if w.tip.SideSet {
+		side = Side(w.tip.Side)
 	}
-	x, y, side := tipPlace(a, side, bw, bh, ts.Gap, lw, lh, w.chromeTop)
-	cx, cy := a.x+a.w/2, a.y+a.h/2
-	r := rectF{x, y, bw, bh}
-	full := w.devRect(rectF{0, 0, lw, lh})
+	x, y, used := geom.Tip(a, geom.Side(side), bw, bh, ts.Gap, lw, lh, w.chromeTop)
+	side = Side(used)
+	cx, cy := a.X+a.W/2, a.Y+a.H/2
+	r := geom.Rect{X: x, Y: y, W: bw, H: bh}
+	full := w.devRect(geom.Rect{X: 0, Y: 0, W: lw, H: lh})
 	rad := ts.Radius * s
 	start := len(w.scene.Prims)
 
@@ -134,7 +89,7 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	case SideLeft:
 		ox, oy, dx, dy = x+bw, min(max(cy, y), y+bh), dy, 0
 	}
-	if !w.tipShown {
+	if !w.tip.Shown {
 		dx, dy = 0, 0
 	}
 	m := turnAbout(ox*s, oy*s, 0.95+0.05*p, 0)
@@ -155,100 +110,37 @@ func (w *Window) paintStyledTooltip(ts *TooltipStyle) bool {
 	return ok
 }
 
-// tipPlace puts a bw by bh tooltip gap away from side of anchor a, or on the
-// opposite side when it does not fit there and the opposite side does. It is
-// centered on a and kept inside the window, below top. It returns the side used.
-func tipPlace(a rectF, side Side, bw, bh, gap, lw, lh, top float32) (x, y float32, used Side) {
-	minY, maxY := top+4, lh-4
-	switch side {
-	case SideTop:
-		if a.y-gap-bh < minY && a.y+a.h+gap+bh <= maxY {
-			side = SideBottom
-		}
-	case SideBottom:
-		if a.y+a.h+gap+bh > maxY && a.y-gap-bh >= minY {
-			side = SideTop
-		}
-	case SideRight:
-		if a.x+a.w+gap+bw > lw-4 && a.x-gap-bw >= 4 {
-			side = SideLeft
-		}
-	case SideLeft:
-		if a.x-gap-bw < 4 && a.x+a.w+gap+bw <= lw-4 {
-			side = SideRight
-		}
-	}
-
-	// When neither side has room, the tooltip covers part of the anchor rather
-	// than leaving the window.
-	clampX := func(x float32) float32 { return min(max(x, 4), max(lw-bw-4, 4)) }
-	clampY := func(y float32) float32 { return min(max(y, minY), max(maxY-bh, minY)) }
-	cx, cy := clampX(a.x+a.w/2-bw/2), clampY(a.y+a.h/2-bh/2)
-	switch side {
-	case SideTop:
-		return cx, clampY(a.y - gap - bh), side
-	case SideBottom:
-		return cx, clampY(a.y + a.h + gap), side
-	case SideRight:
-		return clampX(a.x + a.w + gap), cy, side
-	default:
-		return clampX(a.x - gap - bw), cy, side
-	}
-}
-
 func (w *Window) paintTooltip() bool {
 	if ts := tooltipStyle.Load(); ts != nil {
 		return w.paintStyledTooltip(ts)
 	}
-	if !w.tipShown {
+	if !w.tip.Shown {
 		return true
 	}
 	s := w.scale
 	st := w.textStyle(textProps{size: 12, weight: 400, family: w.opts.Font, italic: -1})
-	l := w.ts.Layout(w.tipText, st, 320*s)
+	l := w.ts.Layout(w.tip.Text, st, 320*s)
 	tw, th := l.Size()
 	bw, bh := tw/s+16, th/s+10
 	lw, lh := float32(w.width)/s, float32(w.height)/s
 	x := min(w.mouseX+12, lw-bw-4)
 	y := w.mouseY + 22
-	if w.tipSideSet {
-		x, y, _ = tipPlace(w.tipAnchor, w.tipSide, bw, bh, 6, lw, lh, w.chromeTop)
+	if w.tip.SideSet {
+		x, y, _ = geom.Tip(w.tip.Anchor, w.tip.Side, bw, bh, 6, lw, lh, w.chromeTop)
 	} else if y+bh > lh-4 && w.mouseY-bh-8 >= w.chromeTop+4 {
 		y = w.mouseY - bh - 8
 	}
-	full := w.devRect(rectF{0, 0, lw, lh})
+	full := w.devRect(geom.Rect{X: 0, Y: 0, W: lw, H: lh})
 	bg, fg := Hex(0x2b2b2b), Hex(0xf2f2f2)
 	if w.opts.Dark {
 		bg, fg = Hex(0x3a3a3a), Hex(0xf2f2f2)
 	}
-	box := w.snap(rectF{x, y, bw, bh})
+	box := w.snap(geom.Rect{X: x, Y: y, W: bw, H: bh})
 	radii := [4]float32{6 * s, 6 * s, 6 * s, 6 * s}
 	shadow := Shadow{Y: 2, Blur: 8, Color: RGBA(0, 0, 0, 0.25)}
 	w.scene.Add(w.shadowPrim(box, radii, full, shadow, 1))
 	w.scene.Add(render.Prim{Bounds: box, Clip: full, Color: bg.arr(1), Radii: radii, Kind: render.KindRect})
 	return l.Draw(&w.scene, (x+8)*s, (y+5)*s, fg.arr(1), full)
-}
-
-func (w *Window) showTooltip() {
-	for _, e := range w.hoverPath {
-		if tip := w.tipOf(e); tip != "" {
-			now := time.Now()
-			if w.tipLeft.IsZero() || w.tipText != tip || w.tipAnchor != (rectF{e.absX, e.absY, e.w, e.h}) {
-				w.tipAt = now
-			} else {
-				// The same tooltip came back while leaving: it turns around
-				// from where it has faded to.
-				w.tipAt = now.Add(-w.tipElapsedAt(w.tipProgress(now)))
-			}
-			w.tipText = tip
-			w.tipShown = true
-			w.tipLeft = time.Time{}
-			w.tipAnchor = rectF{e.absX, e.absY, e.w, e.h}
-			w.tipSide, w.tipSideSet = e.tipSide, e.tipSideSet
-			w.invalidate()
-			return
-		}
-	}
 }
 
 // tipOf returns the tooltip the element shows now, or "".
@@ -277,15 +169,31 @@ func (w *Window) truncated(e *El) bool {
 	return nw > max(e.w-pad.Left-pad.Right, 0)*w.scale+0.5
 }
 
+// tipTiming is how styled tooltips move.
+func tipTiming() tooltip.Timing {
+	var m *motion.Spec
+	if ts := tooltipStyle.Load(); ts != nil {
+		m = &ts.Motion
+	}
+	return tooltip.NewTiming(m, reducedMotion.Load())
+}
+
+func (w *Window) showTooltip() {
+	for _, e := range w.hoverPath {
+		if tip := w.tipOf(e); tip != "" {
+			anchor := geom.Rect{X: e.absX, Y: e.absY, W: e.w, H: e.h}
+			w.tip.Show(tip, anchor, geom.Side(e.tipSide), e.tipSideSet, time.Now(), tipTiming())
+			w.invalidate()
+			return
+		}
+	}
+}
+
 func (w *Window) hideTooltip() {
 	win.KillTimer(w.hwnd, timerTip)
-	if w.tipShown {
-		if ts := tooltipStyle.Load(); ts != nil && !ts.Motion.IsInstant() && ts.Motion.Duration() > 0 {
-			now := time.Now()
-			w.tipFrom = w.tipProgress(now) // read while it still counts as shown
-			w.tipLeft = now
-		}
-		w.tipShown = false
+	ts := tooltipStyle.Load()
+	fades := ts != nil && !ts.Motion.IsInstant() && ts.Motion.Duration() > 0
+	if w.tip.Hide(time.Now(), tipTiming(), fades) {
 		w.invalidate()
 	}
 }

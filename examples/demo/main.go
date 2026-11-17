@@ -32,6 +32,7 @@ import (
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/motion"
 	"github.com/myparsleycat/fairy/svg"
+	"github.com/myparsleycat/fairy/taskbar"
 	"github.com/myparsleycat/fairy/tray"
 )
 
@@ -205,10 +206,10 @@ func (a *app) addFiles(paths []string) {
 	w := a.win
 	go func() {
 		for i := 1; i <= 20; i++ {
-			w.SetProgress(fairy.ProgressNormal, float64(i)/20)
+			taskbar.SetProgress(w, taskbar.ProgressNormal, float64(i)/20)
 			time.Sleep(50 * time.Millisecond)
 		}
-		w.SetProgress(fairy.ProgressNone, 0)
+		taskbar.SetProgress(w, taskbar.ProgressNone, 0)
 	}()
 }
 

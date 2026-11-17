@@ -1,6 +1,7 @@
 package fairy
 
 import (
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/motion"
 )
@@ -105,7 +106,7 @@ type ghost struct {
 
 // matchRec is where an element with a MatchID was last placed.
 type matchRec struct {
-	r     rectF // as drawn, in flight or not
+	r     geom.Rect // as drawn, in flight or not
 	el    uint64
 	pass  int
 	frame int
@@ -134,7 +135,7 @@ func (w *Window) placeFlight(e *El) {
 	rec, ok := w.matched[e.matchID]
 	if ok && rec.el != e.id && rec.pass != w.placePass && rec.frame >= w.frame-1 && e.w > 0 && e.h > 0 &&
 		(e.parent == nil || e.parent.xf.identity()) && !reducedMotion.Load() {
-		tr.Set([4]float32{rec.r.x - e.absX, rec.r.y - e.absY, rec.r.w / e.w, rec.r.h / e.h})
+		tr.Set([4]float32{rec.r.X - e.absX, rec.r.Y - e.absY, rec.r.W / e.w, rec.r.H / e.h})
 	}
 	m := motion.Default
 	if e.layoutMotion != nil {
@@ -144,7 +145,7 @@ func (w *Window) placeFlight(e *El) {
 	if w.matched == nil {
 		w.matched = map[string]matchRec{}
 	}
-	w.matched[e.matchID] = matchRec{r: rectF{e.absX + v[0], e.absY + v[1], e.w * v[2], e.h * v[3]}, el: e.id, pass: w.placePass, frame: w.frame}
+	w.matched[e.matchID] = matchRec{r: geom.Rect{X: e.absX + v[0], Y: e.absY + v[1], W: e.w * v[2], H: e.h * v[3]}, el: e.id, pass: w.placePass, frame: w.frame}
 	if !tr.Moving() {
 		return
 	}
@@ -261,8 +262,8 @@ func (w *Window) transformPrims(e *El, start int) {
 			p.Clip2 = render.NoClip
 		}
 		if p.Clip != outer {
-			c := rectF{p.Clip2[0], p.Clip2[1], p.Clip2[2], p.Clip2[3]}.intersect(rectF{p.Clip[0], p.Clip[1], p.Clip[2], p.Clip[3]})
-			p.Clip2, p.Clip = [4]float32{c.x, c.y, c.w, c.h}, outer
+			c := geom.Rect{X: p.Clip2[0], Y: p.Clip2[1], W: p.Clip2[2], H: p.Clip2[3]}.Intersect(geom.Rect{X: p.Clip[0], Y: p.Clip[1], W: p.Clip[2], H: p.Clip[3]})
+			p.Clip2, p.Clip = [4]float32{c.X, c.Y, c.W, c.H}, outer
 		}
 		n := m.then(xform{p.Xform[0], p.Xform[1], p.Xform[2], p.Xform[3], p.Xlate[0], p.Xlate[1]})
 		p.Xform, p.Xlate = [4]float32{n.a, n.b, n.c, n.d}, [2]float32{n.tx, n.ty}
@@ -357,11 +358,11 @@ func (w *Window) paintGhostsOf(parent *El, ghosts []*ghost, opacity float32, col
 			kc = parent.pinClip
 		}
 		pc := w.snap(kc)
-		c := rectF{pc[0], pc[1], pc[2], pc[3]}
+		c := geom.Rect{X: pc[0], Y: pc[1], W: pc[2], H: pc[3]}
 		for i := range w.scene.Prims[start:] {
 			p := &w.scene.Prims[start+i]
-			r := rectF{p.Clip[0], p.Clip[1], p.Clip[2], p.Clip[3]}.intersect(c)
-			p.Clip = [4]float32{r.x, r.y, r.w, r.h}
+			r := geom.Rect{X: p.Clip[0], Y: p.Clip[1], W: p.Clip[2], H: p.Clip[3]}.Intersect(c)
+			p.Clip = [4]float32{r.X, r.Y, r.W, r.H}
 		}
 	}
 	return ok

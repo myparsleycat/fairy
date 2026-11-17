@@ -5,6 +5,10 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/myparsleycat/fairy/internal/frameprof"
+	"github.com/myparsleycat/fairy/internal/geom"
+	"github.com/myparsleycat/fairy/internal/gesture"
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
@@ -27,14 +31,14 @@ func (h *hit) contains(x, y float32) bool {
 	if h.clipTurned {
 		cx, cy = h.clipInv.apply(x, y)
 	}
-	if !h.clip.contains(cx, cy) {
+	if !h.clip.Contains(cx, cy) {
 		return false
 	}
 	px, py := x, y
 	if h.turned {
 		px, py = h.inv.apply(x, y)
 	}
-	return (rectF{h.x, h.y, h.w, h.h}).containsRounded(px, py, h.radii)
+	return (geom.Rect{X: h.x, Y: h.y, W: h.w, H: h.h}).ContainsRounded(px, py, h.radii)
 }
 
 func (w *Window) chromeHitTest(x, y float32) *El {
@@ -79,9 +83,9 @@ type pressState struct {
 
 type scrollBar struct {
 	el       uint64
-	track    rectF
-	thumb    rectF
-	vis      rectF
+	track    geom.Rect
+	thumb    geom.Rect
+	vis      geom.Rect
 	vertical bool
 	// above is the index in hits where the elements placed after the scroll container's subtree start; the bar
 	// is drawn over its own content but under those.
@@ -93,8 +97,8 @@ type scrollBar struct {
 func (w *Window) barAt(x, y float32) *scrollBar {
 	for i := len(w.bars) - 1; i >= 0; i-- {
 		b := &w.bars[i]
-		hitArea := rectF{b.track.x - 3, b.track.y - 3, b.track.w + 6, b.track.h + 6}
-		if b.vis.contains(x, y) && hitArea.contains(x, y) && !w.coveredFrom(b.above, x, y) {
+		hitArea := geom.Rect{X: b.track.X - 3, Y: b.track.Y - 3, W: b.track.W + 6, H: b.track.H + 6}
+		if b.vis.Contains(x, y) && hitArea.Contains(x, y) && !w.coveredFrom(b.above, x, y) {
 			return b
 		}
 	}
@@ -141,7 +145,7 @@ func (w *Window) onMouseMove(x, y float32) {
 			dx, dy := x-p.x, y-p.y
 			slop := float32(3)
 			if p.touch {
-				slop = touchSlop
+				slop = gesture.Slop
 			}
 			if !p.dragging && dx*dx+dy*dy < slop*slop {
 				break
@@ -204,7 +208,7 @@ func (w *Window) flushPointerMove() {
 					Mods:   w.mods(),
 				},
 			) {
-			w.markDirty(dirtyPointer)
+			w.markDirty(frameprof.CausePointer)
 		}
 	}
 }
@@ -264,14 +268,14 @@ func (w *Window) setHoverPath(path []*El) bool {
 				changed = true
 				if e := w.byID[id]; e != nil && e.onHover != nil {
 					e.onHover(false)
-					w.markDirty(dirtyHover)
+					w.markDirty(frameprof.CauseHover)
 				}
 			}
 		}
 		for _, e := range path {
 			if !w.hoverIDs[e.id] && e.onHover != nil {
 				e.onHover(true)
-				w.markDirty(dirtyHover)
+				w.markDirty(frameprof.CauseHover)
 			}
 		}
 		w.hoverPath, w.hoverIDs = path, ids
@@ -315,7 +319,7 @@ func (w *Window) setHoverPath(path []*El) bool {
 
 func (w *Window) onButtonDown(x, y float32, button int) {
 	w.hideTooltip()
-	w.wheelLatch = wheelLatch{}
+	w.wheelLatch = scroll.Latch{}
 	if w.autoScroll != nil {
 		// Any press ends autoscroll and does nothing else.
 		w.stopAutoScroll()
@@ -344,10 +348,10 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 			break
 		}
 		r := l.root
-		inside := rectF{r.absX, r.absY, r.w, r.h}.contains(x, y)
+		inside := geom.Rect{X: r.absX, Y: r.absY, W: r.w, H: r.h}.Contains(x, y)
 		if !inside && !l.pop.opts.DismissOnAnchorPress {
 			if a := w.byID[l.anchor]; a != nil {
-				inside = rectF{a.absX, a.absY, a.w, a.h}.contains(x, y)
+				inside = geom.Rect{X: a.absX, Y: a.absY, W: a.w, H: a.h}.Contains(x, y)
 			}
 		}
 		if inside {
@@ -355,7 +359,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 		}
 		if l.onDismiss != nil {
 			l.onDismiss()
-			w.markDirty(dirtyDismiss)
+			w.markDirty(frameprof.CauseDismiss)
 		}
 	}
 	w.mouseX, w.mouseY = x, y
@@ -364,7 +368,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	dx, dy := x-w.lastClickX, y-w.lastClickY
 	near := float32(4)
 	if w.touchPress {
-		near = touchSlop
+		near = gesture.Slop
 	}
 	if now-w.lastClickAt <= win.GetDoubleClickTime() && dx*dx+dy*dy <= near*near {
 		w.clickCount++
@@ -377,14 +381,14 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 		if e := w.byID[b.el]; e != nil && e.state != nil {
 			bar := *b
 			p := &pressState{button: 0, x: x, y: y, bar: &bar}
-			if !bar.thumb.contains(x, y) {
+			if !bar.thumb.Contains(x, y) {
 				// Jump so the thumb centers on the pointer, then drag from there.
 				w.scrollBarJump(e, &bar, x, y)
 			}
 			if bar.vertical {
-				p.barStart = e.state.scrollY
+				p.barStart = e.state.ScrollY
 			} else {
-				p.barStart = e.state.scrollX
+				p.barStart = e.state.ScrollX
 			}
 			w.press = p
 			w.setCapture()
@@ -415,7 +419,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 			pe.LocalX, pe.LocalY = x-e.absX, y-e.absY
 			pe.W, pe.H = e.w, e.h
 			e.onPointerDown(pe)
-			w.markDirty(dirtyPointer)
+			w.markDirty(frameprof.CausePointer)
 			break
 		}
 	}
@@ -568,4 +572,194 @@ func (w *Window) cancelPress() {
 		}
 	}
 	w.invalidate()
+}
+
+// Touch follows one contact, as browsers do on Windows. A touch on an element
+// that drags with the left button, or on a scroll bar, is a left press held
+// for as long as the finger stays down. Anywhere else it does nothing until it
+// is recognized: lifted within gesture.Slop it is a left click, held for
+// gesture.LongPress a right click, and moved further it pans the innermost
+// scroll container that can move that way, then keeps going with inertia when
+// lifted while still moving. Pen input stays with Windows, which turns it into
+// mouse messages.
+
+func (w *Window) onTouchDown(id uint32, x, y float32, at time.Time) {
+	w.wheelLatch = scroll.Latch{}
+	if w.touch != nil {
+		// A new primary contact means the last one ended without its up
+		// reaching the window.
+		w.onTouchCancel(w.touch.ID)
+	}
+	w.hideTooltip()
+	w.stopAutoScroll()
+	t := gesture.New(id, x, y, at)
+	w.touch = t
+	for e := w.pointerHitTest(x, y); e != nil; e = e.parent {
+		if e.state != nil && e.state.Fling {
+			e.state.Fling = false
+			t.SuppressTap = true
+		}
+	}
+	if w.touchPresses(x, y) {
+		t.Phase = gesture.Pressed
+		w.touchButtonDown(x, y, 0)
+		if w.press == nil {
+			t.Phase = gesture.Done
+		}
+		return
+	}
+	win.SetTimer(w.hwnd, timerTouch, uint32(gesture.LongPress.Milliseconds()))
+}
+
+// touchPresses reports whether a touch at (x, y) goes straight to the mouse
+// press path: it is on a scroll bar or on an element that drags with the left
+// button, which takes the touch instead of letting it pan.
+func (w *Window) touchPresses(x, y float32) bool {
+	top := w.chromeHitTest(x, y)
+	chrome := top != nil
+	if !chrome {
+		if w.barAt(x, y) != nil {
+			return true
+		}
+		top = w.hitTest(x, y)
+	}
+	for e := top; e != nil && (!chrome || e.inChrome); e = e.parent {
+		if e.dragsWith(0) {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Window) onTouchMove(id uint32, x, y float32, at time.Time) {
+	t := w.touch
+	if t == nil || t.ID != id {
+		return
+	}
+	t.Record(x, y, at)
+	switch t.Phase {
+	case gesture.Pressed:
+		w.onMouseMove(x, y)
+	case gesture.Pending:
+		if !t.PastSlop(x, y) {
+			return
+		}
+		win.KillTimer(w.hwnd, timerTouch)
+		if !w.startTouchPan(t, x-t.X0, y-t.Y0) {
+			t.Phase = gesture.Done
+			return
+		}
+		// The view starts following from here, so it does not jump by the slop.
+		t.LX, t.LY = x, y
+	case gesture.Panning:
+		dx, dy := t.Follow(x, y)
+		e := w.byID[t.Target]
+		if e == nil || e.state == nil {
+			t.Phase = gesture.Done
+			return
+		}
+		w.scrollNow(e, -dx, -dy)
+		if w.dirty {
+			w.Update()
+		}
+	}
+}
+
+// startTouchPan picks the scroll container a pan moved by (dx, dy) from its
+// start drives: the innermost one under the start that can still move that
+// way. It keeps it for the rest of the contact and the fling after it.
+func (w *Window) startTouchPan(t *gesture.Touch, dx, dy float32) bool {
+	onlyX, onlyY := gesture.Axes(dx, dy)
+	for e := w.pointerHitTest(t.X0, t.Y0); e != nil; e = e.parent {
+		if e.state == nil || e.kind == kindInput {
+			continue
+		}
+		s, n := e.state, &e.node
+		maxX, maxY := n.ContentW-n.W, n.ContentH-n.H
+		canX := e.style.ScrollX && maxX > 0 && !onlyY
+		canY := e.style.ScrollY && maxY > 0 && !onlyX
+		movesX := canX && (dx > 0 && s.ScrollX > 0 || dx < 0 && s.ScrollX < maxX)
+		movesY := canY && (dy > 0 && s.ScrollY > 0 || dy < 0 && s.ScrollY < maxY)
+		if movesX || movesY {
+			t.Phase, t.Target, t.CanX, t.CanY = gesture.Panning, e.id, canX, canY
+			return true
+		}
+	}
+	return false
+}
+
+func (w *Window) onTouchUp(id uint32, x, y float32, at time.Time) {
+	t := w.touch
+	if t == nil || t.ID != id {
+		return
+	}
+	if t.Phase == gesture.Panning {
+		w.onTouchMove(id, x, y, at)
+	}
+	w.touch = nil
+	win.KillTimer(w.hwnd, timerTouch)
+	switch t.Phase {
+	case gesture.Pressed:
+		w.onButtonUp(x, y, 0)
+	case gesture.Pending:
+		if !t.SuppressTap {
+			w.touchButtonDown(t.X0, t.Y0, 0)
+			w.onButtonUp(t.X0, t.Y0, 0)
+		}
+	case gesture.Panning:
+		if e := w.byID[t.Target]; e != nil && e.state != nil {
+			vx, vy := t.ReleaseVelocity()
+			if e.state.StartFling(-vx, -vy) {
+				w.invalidate()
+			}
+		}
+	}
+	w.endTouchHover()
+}
+
+func (w *Window) onTouchCancel(id uint32) {
+	t := w.touch
+	if t == nil || t.ID != id {
+		return
+	}
+	w.touch = nil
+	win.KillTimer(w.hwnd, timerTouch)
+	if t.Phase == gesture.Pressed && w.press != nil {
+		w.cancelPress()
+		w.releaseCapture()
+	}
+	w.endTouchHover()
+}
+
+// onTouchLongPress turns a contact held in place into a right click.
+func (w *Window) onTouchLongPress() {
+	t := w.touch
+	if t == nil || t.Phase != gesture.Pending {
+		return
+	}
+	t.Phase = gesture.Done
+	if t.SuppressTap {
+		return
+	}
+	w.touchButtonDown(t.X0, t.Y0, 1)
+	w.onButtonUp(t.X0, t.Y0, 1)
+}
+
+// touchButtonDown is onButtonDown for a touch, which allows gesture.Slop of
+// finger movement where the mouse allows a few pixels: between the taps of a
+// double tap and before a press starts to drag.
+func (w *Window) touchButtonDown(x, y float32, button int) {
+	w.touchPress = true
+	w.onButtonDown(x, y, button)
+	w.touchPress = false
+}
+
+// endTouchHover clears the hover a touch left behind: no pointer stays over
+// the window once the finger lifts.
+func (w *Window) endTouchHover() {
+	w.mouseIn = false
+	w.hideTooltip()
+	if w.press == nil && w.setHoverPath(nil) {
+		w.invalidate()
+	}
 }

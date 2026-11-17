@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/myparsleycat/fairy"
+	"github.com/myparsleycat/fairy/clipboard"
 	"github.com/myparsleycat/fairy/icons/lucide"
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/kit"
@@ -62,7 +63,7 @@ func View(id string, s *State, p ViewProps) *fairy.El {
 		Fill(lk.bg).Radius(t.RadiusLg()).Border(1, t.Border).Clip().
 		Focusable().FocusVisibleBorder(t.Ring).FocusRing(3, t.Ring.Alpha(0.5)).
 		Role(fairy.RoleList).Label(kit.Messages.Diff).FontSize(fontSize).
-		OnKey(func(ev keyboard.KeyEvent) bool { return v.key(ev, w) })
+		OnKey(v.key)
 }
 
 type view struct {
@@ -148,12 +149,12 @@ func (v *view) gutterW(f int) float32 {
 	return barW + n
 }
 
-func (v *view) key(ev keyboard.KeyEvent, w *fairy.Window) bool {
+func (v *view) key(ev keyboard.KeyEvent) bool {
 	s := v.s
 	if ev.Is(keyboard.KeyC, keyboard.ModCtrl) {
 		text, ok := s.SelectedText()
-		if ok && w != nil {
-			w.SetClipboardText(text)
+		if ok {
+			clipboard.SetText(text)
 		}
 		return ok
 	}

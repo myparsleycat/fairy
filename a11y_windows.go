@@ -1,793 +1,465 @@
 package fairy
 
-import (
-	"slices"
-	"strings"
+import "strings"
 
-	"github.com/myparsleycat/fairy/internal/uia"
-	"github.com/myparsleycat/fairy/internal/win"
+// Role is what an element is to assistive technology such as screen readers.
+type Role uint8
+
+const (
+	// RoleAuto derives the role from the element: an Input is an edit field,
+	// Text is text, an element with OnClick is a button, and a plain
+	// container is left out while its children stay in the tree.
+	RoleAuto Role = iota
+	// RoleNone leaves the element out of the accessibility tree; its children stay in it.
+	RoleNone
+	// RoleHidden leaves the element and its subtree out of the accessibility
+	// tree, as for decoration or a caption that a control already uses as its label.
+	RoleHidden
+	RoleGroup
+	RoleButton
+	RoleLink
+	RoleCheckBox
+	RoleSwitch
+	RoleRadio
+	RoleText
+	RoleImage
+	RoleEdit
+	RoleComboBox
+	RoleSlider
+	RoleProgressBar
+	RoleList
+	RoleListItem
+	RoleTree
+	RoleTreeItem
+	RoleMenu
+	RoleMenuItem
+	// RoleMenuBar is a row of menu items that each open a menu.
+	RoleMenuBar
+	RoleTabList
+	RoleTab
+	RoleToolBar
+	RoleStatusBar
+	RoleDialog
+	RoleSeparator
+	RoleDocument
+	// RoleGrid is a table whose rows the keyboard moves through; RoleRow is one
+	// of its rows (the header row too), RoleGridCell a body cell and
+	// RoleColumnHeader a header cell.
+	RoleGrid
+	RoleRow
+	RoleGridCell
+	RoleColumnHeader
 )
 
-func init() { uia.Dispatch = doQuiet }
-
-// a11yState is the window's UI Automation side. It exists once a client has
-// asked for the window's provider.
-type a11yState struct {
-	root   *uia.Provider
-	nodes  map[uint64]*a11yNode
-	tree   *a11yTree
-	ver    int       // treeVer the tree was built from
-	evTree *a11yTree // tree of the last change-event pass
-	spare  *a11yTree // a built tree that neither tree nor evTree holds
-	focus  uint64
-}
-
-// a11yNode is the provider of one exposed element, kept by element identity.
-type a11yNode struct {
-	w    *Window
-	id   uint64
-	prov *uia.Provider
-	seen int // treeVer when last in the tree
-	last a11ySnap
-	kids []uint64
-}
-
-// a11ySnap holds the properties whose changes are raised as events.
-type a11ySnap struct {
-	name     string
-	toggle   int32
-	selected bool
-	expand   int32
-	value    string
-	rng      float64
-	enabled  bool
-	live     string // the text of a live region
-}
-
-func (w *Window) a11yGetObject(wp, lp uintptr) uintptr {
-	if !uia.Available() {
-		return win.DefWindowProc(w.hwnd, win.WM_GETOBJECT, wp, lp)
+// leaf reports whether the role's subtree is presented as one element.
+func (r Role) leaf() bool {
+	switch r {
+	case RoleButton, RoleLink, RoleCheckBox, RoleSwitch, RoleRadio, RoleText, RoleImage, RoleEdit,
+		RoleComboBox, RoleSlider, RoleProgressBar, RoleMenuItem, RoleTab, RoleSeparator:
+		return true
 	}
-	if w.acc == nil {
-		w.acc = &a11yState{nodes: map[uint64]*a11yNode{}}
-		w.acc.root = uia.NewRoot(&a11yRootEl{w})
-	}
-	return uia.ReturnRawElementProvider(uintptr(w.hwnd), wp, lp, w.acc.root)
+	return false
 }
 
-func (w *Window) a11yShutdown() {
-	a := w.acc
-	if a == nil {
+// nameFromContent reports whether an unlabelled element of this role is named
+// by the text inside it.
+func (r Role) nameFromContent() bool {
+	switch r {
+	case RoleButton, RoleLink, RoleCheckBox, RoleSwitch, RoleRadio, RoleText, RoleComboBox,
+		RoleMenuItem, RoleTab, RoleListItem, RoleTreeItem, RoleRow, RoleGridCell, RoleColumnHeader:
+		return true
+	}
+	return false
+}
+
+type a11yProps struct {
+	role      Role
+	label     string
+	checked   int8 // 0 unset, 1 off, 2 on, 3 mixed
+	selected  int8 // 0 unset, 1 no, 2 yes
+	expanded  int8 // 0 unset, 1 collapsed, 2 expanded
+	heading   int8
+	level     int32 // tree depth, 1-based; 0 unset
+	pos, size int32 // position in set, 1-based, and set size; 0 unset
+	disabled  bool
+	clickable bool // had a click handler before Disabled removed it
+	active    bool
+	rng       *rangeProps
+	valueText string
+	live      LiveRegion
+	liveSet   bool
+}
+
+// LiveRegion is how assistive technology reports changes to a live region.
+type LiveRegion uint8
+
+const (
+	LiveOff LiveRegion = iota
+	// LivePolite reads changes when the user is idle.
+	LivePolite
+	// LiveAssertive reads changes at once, interrupting.
+	LiveAssertive
+)
+
+// LiveRegion makes the element a live region: when the text inside it changes,
+// screen readers read it without the user moving focus there, as for a
+// status line or a log. A RoleStatusBar is polite unless set otherwise.
+func (e *El) LiveRegion(l LiveRegion) *El {
+	a := e.acc()
+	a.live, a.liveSet = l, true
+	return e
+}
+
+func (e *El) liveSetting(r Role) LiveRegion {
+	if e.a11y != nil && e.a11y.liveSet {
+		return e.a11y.live
+	}
+	if r == RoleStatusBar {
+		return LivePolite
+	}
+	return LiveOff
+}
+
+type rangeProps struct {
+	value, min, max, step float64
+	set                   func(float64)
+}
+
+func (e *El) acc() *a11yProps {
+	if e.a11y == nil {
+		e.a11y = &a11yProps{}
+	}
+	return e.a11y
+}
+
+// Role sets what the element is to assistive technology. Most elements need
+// none: see RoleAuto.
+func (e *El) Role(r Role) *El { e.acc().role = r; return e }
+
+// Label names the element for assistive technology, replacing the name taken
+// from its text or Tooltip. Give one to controls that show only an icon or
+// whose caption is elsewhere.
+func (e *El) Label(s string) *El { e.acc().label = s; return e }
+
+// Checked sets the on/off state of a check box, switch or toggle button.
+func (e *El) Checked(on bool) *El {
+	e.acc().checked = 1
+	if on {
+		e.a11y.checked = 2
+	}
+	return e
+}
+
+// CheckedMixed marks a check box as partly checked.
+func (e *El) CheckedMixed() *El { e.acc().checked = 3; return e }
+
+// Selected sets whether a radio button, tab or list item is the selected one.
+func (e *El) Selected(on bool) *El {
+	e.acc().selected = 1
+	if on {
+		e.a11y.selected = 2
+	}
+	return e
+}
+
+// Expanded sets whether the menu, list or subtree that the element opens is shown.
+func (e *El) Expanded(open bool) *El {
+	e.acc().expanded = 1
+	if open {
+		e.a11y.expanded = 2
+	}
+	return e
+}
+
+// PositionInSet reports the element as item pos (1-based) of size items,
+// for lists whose items are not all in the tree. Rows of virtual lists get
+// their index and the list's count without it.
+func (e *El) PositionInSet(pos, size int) *El {
+	a := e.acc()
+	a.pos, a.size = int32(max(pos, 0)), int32(max(size, 0))
+	return e
+}
+
+// Level reports the depth of a tree item, 1 for top-level items.
+func (e *El) Level(n int) *El { e.acc().level = int32(max(n, 0)); return e }
+
+// Heading marks the element as a heading of level 1 to 9.
+func (e *El) Heading(level int) *El { e.acc().heading = int8(min(max(level, 1), 9)); return e }
+
+// RangeValue describes a slider (set non-nil) or a progress bar (set nil):
+// its value between min and max, and the step that arrow keys move it by.
+func (e *El) RangeValue(value, min, max, step float64, set func(float64)) *El {
+	e.acc().rng = &rangeProps{value: value, min: min, max: max, step: step, set: set}
+	return e
+}
+
+// ValueText gives assistive technology the element's value as text, read
+// only, as "saturation 40%, brightness 80%" for an area that sets two values
+// at once. A slider reports it beside its RangeValue.
+func (e *El) ValueText(s string) *El { e.acc().valueText = s; return e }
+
+// Disabled makes the element and its subtree unavailable: they take no focus,
+// clicks, drags, key presses or edits, and assistive technology reports them
+// as disabled. Their look is left to the caller.
+func (e *El) Disabled(d bool) *El { e.acc().disabled = d; return e }
+
+// ActiveDescendant marks the item that keyboard navigation has highlighted
+// inside the focused control, such as the current row of an open list whose
+// focus stays on its trigger. Assistive technology treats it as focused.
+func (e *El) ActiveDescendant() *El { e.acc().active = true; return e }
+
+// applyDisabled inherits Disabled from parent and strips the input handlers
+// of a disabled element. It runs while the tree is prepared.
+func (e *El) applyDisabled(parent *El) {
+	if parent != nil && parent.a11y != nil && parent.a11y.disabled {
+		e.acc().disabled = true
+	}
+	a := e.a11y
+	if a == nil || !a.disabled {
 		return
 	}
-	uia.ReturnRawElementProvider(uintptr(w.hwnd), 0, 0, nil)
-	for _, n := range a.nodes {
-		n.prov.Disconnect()
-		n.prov.Release()
+	a.clickable = a.clickable || e.onClick != nil || e.onDoubleClick != nil
+	e.onClick, e.onDoubleClick, e.onRightClick, e.onPointerDown = nil, nil, nil, nil
+	e.onDrag, e.onKey, e.onFileDrop = nil, nil, nil
+	e.onWheel, e.onPointerMove = nil, nil
+	e.focusable, e.autoFocus = false, false
+	if e.input != nil {
+		e.input.onChange, e.input.onSubmit = nil, nil
+		e.input.onKey, e.input.onPaste = nil, nil
 	}
-	a.root.Disconnect()
-	a.root.Release()
-	w.acc = nil
+	if a.rng != nil {
+		a.rng.set = nil
+	}
 }
 
-// a11yRoots returns the trees UI Automation sees: the view and its layers, or
-// only the topmost modal overlay and the layers above it.
-func (w *Window) a11yRoots() []*El {
-	start := -1
-	for i, l := range w.layers {
-		if l.modal && !l.hidden {
-			start = i
-		}
-	}
-	var roots []*El
-	if start < 0 && w.root != nil {
-		roots = append(roots, w.root)
-	}
-	for _, l := range w.layers[max(start, 0):] {
-		if !l.hidden {
-			roots = append(roots, l.root)
-		}
-	}
-	return roots
+func (e *El) disabled() bool { return e.a11y != nil && e.a11y.disabled }
+
+func (e *El) clickable() bool {
+	return e.onClick != nil || e.onDoubleClick != nil || e.a11y != nil && e.a11y.clickable
 }
 
-func (w *Window) a11yTree() *a11yTree {
-	a := w.acc
-	if a.tree == nil || a.ver != w.treeVer {
-		var reuse *a11yTree
-		if a.tree != a.evTree {
-			reuse = a.tree
-		} else {
-			reuse, a.spare = a.spare, nil
+// a11yRole returns the role the element is exposed with, or RoleNone or
+// RoleHidden when it is not exposed itself.
+func (e *El) a11yRole() Role {
+	a := e.a11y
+	if a != nil && a.role != RoleAuto {
+		return a.role
+	}
+	switch {
+	case e.kind == kindInput:
+		return RoleEdit
+	case a != nil && a.rng != nil:
+		if a.rng.set != nil || a.disabled {
+			return RoleSlider
 		}
-		a.tree = buildA11yTree(reuse, w.a11yRoots())
-		a.ver = w.treeVer
-		for id, n := range a.nodes {
-			if _, ok := a.tree.info[id]; ok {
-				n.seen = a.ver
-			} else if a.ver-n.seen > stateTTL {
-				n.prov.Disconnect()
-				n.prov.Release()
-				delete(a.nodes, id)
+		return RoleProgressBar
+	case a != nil && a.checked != 0:
+		return RoleCheckBox
+	case e.clickable():
+		// A clickable card holding its own controls keeps them reachable.
+		for _, c := range e.children {
+			if hasControl(c) {
+				return RoleGroup
 			}
 		}
+		return RoleButton
+	case a != nil && a.heading > 0:
+		return RoleText
+	case e.kind == kindText:
+		if e.text == "" {
+			return RoleNone
+		}
+		return RoleText
+	case e.focusable, a != nil && a.liveSet && a.live != LiveOff:
+		return RoleGroup
+	case a != nil && a.label != "":
+		switch {
+		case e.kind == kindImage, e.kind == kindIcon, e.kind == kindSurface, e.embedsMedia():
+			return RoleImage
+		}
+		return RoleGroup
 	}
-	return a.tree
+	return RoleNone
 }
 
-// a11yProvider returns the provider of an exposed element, or the root for 0.
-func (w *Window) a11yProvider(id uint64) *uia.Provider {
-	if id == 0 {
-		return w.acc.root
+// hasControl reports whether e or a descendant is something the user operates.
+func hasControl(e *El) bool {
+	if e.style.Hidden || e.a11y != nil && e.a11y.role == RoleHidden {
+		return false
 	}
-	n := w.acc.nodes[id]
-	if n == nil {
-		n = &a11yNode{w: w, id: id, seen: w.acc.ver}
-		n.prov = uia.NewProvider(n, w.acc.root)
-		w.acc.nodes[id] = n
+	if e.clickable() || e.focusable || e.kind == kindInput {
+		return true
 	}
-	return n.prov
-}
-
-// a11yFocus returns the element UI Automation should treat as focused, or 0.
-func (w *Window) a11yFocus() uint64 {
-	f := w.focusedEl()
-	if f == nil {
-		return 0
-	}
-	t := w.a11yTree()
-	if a := t.info[t.active]; a != nil && w.activeFor(a.el, f) {
-		return t.active
-	}
-	return t.exposedAncestor(f)
-}
-
-// activeFor reports whether the ActiveDescendant a belongs to the focused
-// element f: it is inside f, in the same popover, or in a popover anchored at
-// f or one of f's ancestors.
-func (w *Window) activeFor(a, f *El) bool {
-	ra, rf := a, f
-	for ; ra.parent != nil; ra = ra.parent {
-		if ra == f {
+	for _, c := range e.children {
+		if hasControl(c) {
 			return true
-		}
-	}
-	for rf.parent != nil {
-		rf = rf.parent
-	}
-	for _, l := range w.layers {
-		if l.root != ra || l.pop == nil {
-			continue
-		}
-		if ra == rf {
-			return true
-		}
-		anchor := w.byID[l.anchor]
-		for e := f; e != nil; e = e.parent {
-			if e == anchor {
-				return true
-			}
 		}
 	}
 	return false
 }
 
-// a11yAfterFrame raises focus, structure and property change events.
-func (w *Window) a11yAfterFrame() {
-	a := w.acc
-	if a == nil || !uia.ClientsAreListening() {
-		return
+// a11yName returns the accessible name of an element exposed with role r.
+func (e *El) a11yName(r Role) string {
+	if e.a11y != nil && e.a11y.label != "" {
+		return e.a11y.label
 	}
-	t := w.a11yTree()
-	if prev := a.evTree; prev != t {
-		a.evTree = t
-		if prev != nil {
-			for id, in := range t.info {
-				if _, was := prev.info[id]; was {
-					continue
-				}
-				switch in.role {
-				case RoleMenu:
-					w.a11yProvider(id).RaiseEvent(uia.EventMenuOpened)
-				case RoleDialog:
-					w.a11yProvider(id).RaiseEvent(uia.EventWindowOpened)
-				}
+	if r == RoleEdit && e.input != nil {
+		return e.input.placeholder
+	}
+	if r.nameFromContent() {
+		if e.kind == kindText && len(e.children) == 0 && !e.style.Hidden {
+			if s := strings.TrimSpace(e.text); s != "" {
+				return s
 			}
-		}
-		if prev != nil && !slices.Equal(prev.top, t.top) {
-			a.root.RaiseChildrenInvalidated()
-		}
-		if prev != nil {
-			a.spare = prev
-		}
-		for id, n := range a.nodes {
-			in := t.info[id]
-			if in == nil {
-				continue
-			}
-			if n.kids != nil && !slices.Equal(n.kids, in.kids) {
-				n.prov.RaiseChildrenInvalidated()
-			}
-			n.kids = append(n.kids[:0], in.kids...)
-			if n.kids == nil {
-				n.kids = []uint64{}
-			}
-			n.raiseChanges()
-		}
-	}
-	focus := uint64(0)
-	if w.osFocus {
-		focus = w.a11yFocus()
-	}
-	if focus != a.focus {
-		a.focus = focus
-		if focus != 0 {
-			w.a11yProvider(focus).RaiseEvent(uia.EventFocusChanged)
-		}
-	}
-}
-
-// Announce asks screen readers to read text, as for a finished background
-// task or a toast. It does nothing when no screen reader is running. It may
-// be called from any goroutine.
-func (w *Window) Announce(text string) {
-	if !onUIThread() {
-		Go(func() { w.Announce(text) })
-		return
-	}
-	if w.acc != nil && text != "" && uia.ClientsAreListening() {
-		w.acc.root.RaiseNotification(text)
-	}
-}
-
-// screenRect converts a window rectangle in logical pixels to screen pixels.
-func (w *Window) screenRect(r rectF) uia.Rect {
-	var p win.POINT
-	win.ClientToScreen(w.hwnd, &p)
-	s := float64(w.scale)
-	return uia.Rect{
-		Left:   float64(p.X) + float64(r.x)*s,
-		Top:    float64(p.Y) + float64(r.y)*s,
-		Width:  float64(r.w) * s,
-		Height: float64(r.h) * s,
-	}
-}
-
-// visibleRect returns the part of e that is on screen, or false when it is
-// scrolled out, culled or inside a culled ancestor.
-func visibleRect(e *El) (rectF, bool) {
-	for a := e; a != nil; a = a.parent {
-		if a.culled {
-			return rectF{}, false
-		}
-	}
-	r := rectF{e.absX, e.absY, e.w, e.h}.intersect(e.clipR)
-	return r, !r.empty()
-}
-
-// scrollIntoView scrolls e's scroll container ancestors, innermost first, so
-// that e is visible.
-func (w *Window) scrollIntoView(e *El) {
-	for a := e.parent; a != nil; a = a.parent {
-		if !(a.style.ScrollX || a.style.ScrollY) || a.state == nil {
-			continue
-		}
-		var x, y float32 // e's position in a's content
-		for c := e; c != a; c = c.parent {
-			x += c.node.X
-			y += c.node.Y
-			if p := c.parent; p != a && p.state != nil && (p.style.ScrollX || p.style.ScrollY) {
-				x -= p.state.scrollX
-				y -= p.state.scrollY
-			}
-		}
-		s, n := a.state, &a.node
-		sx, sy := s.scrollX, s.scrollY
-		ci := a.clipInset
-		if a.style.ScrollY {
-			if y < sy+ci[0] {
-				sy = y - ci[0]
-			} else if y+e.node.H > sy+n.H-ci[2] {
-				sy = y + e.node.H - n.H + ci[2]
-			}
-		}
-		if a.style.ScrollX {
-			if x < sx+ci[3] {
-				sx = x - ci[3]
-			} else if x+e.node.W > sx+n.W-ci[1] {
-				sx = x + e.node.W - n.W + ci[1]
-			}
-		}
-		w.setScroll(a, sx, sy)
-	}
-}
-
-var controlTypes = map[Role]int32{
-	RoleGroup:        uia.ControlGroup,
-	RoleButton:       uia.ControlButton,
-	RoleLink:         uia.ControlHyperlink,
-	RoleCheckBox:     uia.ControlCheckBox,
-	RoleSwitch:       uia.ControlButton,
-	RoleRadio:        uia.ControlRadioButton,
-	RoleText:         uia.ControlText,
-	RoleImage:        uia.ControlImage,
-	RoleEdit:         uia.ControlEdit,
-	RoleComboBox:     uia.ControlComboBox,
-	RoleSlider:       uia.ControlSlider,
-	RoleProgressBar:  uia.ControlProgressBar,
-	RoleList:         uia.ControlList,
-	RoleListItem:     uia.ControlListItem,
-	RoleTree:         uia.ControlTree,
-	RoleTreeItem:     uia.ControlTreeItem,
-	RoleMenu:         uia.ControlMenu,
-	RoleMenuItem:     uia.ControlMenuItem,
-	RoleMenuBar:      uia.ControlMenuBar,
-	RoleTabList:      uia.ControlTab,
-	RoleTab:          uia.ControlTabItem,
-	RoleToolBar:      uia.ControlToolBar,
-	RoleStatusBar:    uia.ControlStatusBar,
-	RoleDialog:       uia.ControlPane,
-	RoleSeparator:    uia.ControlSeparator,
-	RoleDocument:     uia.ControlDocument,
-	RoleGrid:         uia.ControlDataGrid,
-	RoleRow:          uia.ControlDataItem,
-	RoleGridCell:     uia.ControlText,
-	RoleColumnHeader: uia.ControlHeaderItem,
-}
-
-// a11yRootEl is the window's fragment root.
-type a11yRootEl struct{ w *Window }
-
-func (r *a11yRootEl) Alive() bool { return r.w.acc != nil && windows[r.w.hwnd] == r.w }
-
-func (r *a11yRootEl) Navigate(d uia.Direction) *uia.Provider {
-	kids := r.w.a11yTree().top
-	if len(kids) == 0 {
-		return nil
-	}
-	switch d {
-	case uia.FirstChild:
-		return r.w.a11yProvider(kids[0])
-	case uia.LastChild:
-		return r.w.a11yProvider(kids[len(kids)-1])
-	}
-	return nil
-}
-
-func (r *a11yRootEl) Property(id int32) any {
-	if id == uia.PropFrameworkID {
-		return "fairy"
-	}
-	return nil
-}
-
-func (r *a11yRootEl) Pattern(int32) any  { return nil }
-func (r *a11yRootEl) Bounds() uia.Rect   { return uia.Rect{} }
-func (r *a11yRootEl) SetFocus()          {}
-func (r *a11yRootEl) RuntimeID() []int32 { return nil }
-func (r *a11yRootEl) HWND() uintptr      { return uintptr(r.w.hwnd) }
-
-func (r *a11yRootEl) FromPoint(x, y float64) *uia.Provider {
-	w := r.w
-	p := win.POINT{X: int32(x), Y: int32(y)}
-	win.ScreenToClient(w.hwnd, &p)
-	e := w.hitTest(float32(p.X)/w.scale, float32(p.Y)/w.scale)
-	if id := w.a11yTree().exposedAncestor(e); id != 0 {
-		return w.a11yProvider(id)
-	}
-	return nil
-}
-
-func (r *a11yRootEl) Focus() *uia.Provider {
-	if id := r.w.a11yFocus(); id != 0 {
-		return r.w.a11yProvider(id)
-	}
-	return nil
-}
-
-func (n *a11yNode) el() (*El, Role) {
-	if in := n.w.a11yTree().info[n.id]; in != nil {
-		return in.el, in.role
-	}
-	return nil, RoleAuto
-}
-
-func (n *a11yNode) Alive() bool {
-	if n.w.acc == nil || windows[n.w.hwnd] != n.w {
-		return false
-	}
-	e, _ := n.el()
-	return e != nil
-}
-
-func (n *a11yNode) RuntimeID() []int32 {
-	return []int32{3 /* UiaAppendRuntimeId */, int32(n.id >> 32), int32(n.id)}
-}
-
-func (n *a11yNode) Navigate(d uia.Direction) *uia.Provider {
-	w, t := n.w, n.w.a11yTree()
-	var id uint64
-	switch d {
-	case uia.Parent:
-		if in := t.info[n.id]; in != nil {
-			return w.a11yProvider(in.parent)
-		}
-		return nil
-	case uia.NextSibling:
-		id = t.sibling(n.id, 1)
-	case uia.PreviousSibling:
-		id = t.sibling(n.id, -1)
-	case uia.FirstChild:
-		if k := t.kids(n.id); len(k) > 0 {
-			id = k[0]
-		}
-	case uia.LastChild:
-		if k := t.kids(n.id); len(k) > 0 {
-			id = k[len(k)-1]
-		}
-	}
-	if id == 0 {
-		return nil
-	}
-	return w.a11yProvider(id)
-}
-
-func (n *a11yNode) Property(id int32) any {
-	e, r := n.el()
-	switch id {
-	case uia.PropControlType:
-		return controlTypes[r]
-	case uia.PropName:
-		return e.a11yName(r)
-	case uia.PropHasKeyboardFocus:
-		return n.w.osFocus && n.w.a11yFocus() == n.id
-	case uia.PropIsKeyboardFocusable:
-		return e.focusable
-	case uia.PropIsEnabled:
-		return !e.disabled()
-	case uia.PropAutomationID:
-		if e.key != "" {
-			return e.key
-		}
-	case uia.PropHelpText:
-		if e.tooltip != "" && e.tooltip != e.a11yName(r) {
 			return e.tooltip
 		}
-	case uia.PropIsControlElement, uia.PropIsContentElement:
-		return true
-	case uia.PropIsPassword:
-		return e.input != nil && e.input.password
-	case uia.PropIsOffscreen:
-		_, ok := visibleRect(e)
-		return !ok
-	case uia.PropFrameworkID:
-		return "fairy"
-	case uia.PropHeadingLevel:
-		if e.a11y != nil && e.a11y.heading > 0 {
-			return uia.Heading1 - 1 + int32(e.a11y.heading)
-		}
-		return uia.HeadingNone
-	case uia.PropIsDialog:
-		return r == RoleDialog
-	case uia.PropPositionInSet, uia.PropSizeOfSet:
-		if pos, size := setPosition(e); size > 0 {
-			if id == uia.PropPositionInSet {
-				return pos
-			}
-			return size
-		}
-	case uia.PropLevel:
-		if e.a11y != nil && e.a11y.level > 0 {
-			return e.a11y.level
-		}
-	case uia.PropLiveSetting:
-		if l := e.liveSetting(r); l != LiveOff {
-			return int32(l)
-		}
-	}
-	return nil
-}
-
-// setPosition returns the element's 1-based position in its set and the set's
-// size: as set with PositionInSet, or for a virtual list row, its index among
-// all rows of the list, built or not.
-func setPosition(e *El) (int32, int32) {
-	if a := e.a11y; a != nil && a.size > 0 {
-		return a.pos, a.size
-	}
-	if e.rowIndex > 0 && e.parent != nil && e.parent.virtual != nil {
-		return e.rowIndex, int32(e.parent.virtual.count)
-	}
-	return 0, 0
-}
-
-func (n *a11yNode) Pattern(id int32) any {
-	e, r := n.el()
-	a := e.a11y
-	if a == nil {
-		a = &a11yProps{}
-	}
-	switch id {
-	case uia.PatternInvoke:
-		if e.onClick == nil || a.checked != 0 {
-			return nil
-		}
-		switch r {
-		case RoleCheckBox, RoleSwitch, RoleRadio, RoleTab, RoleComboBox, RoleEdit, RoleSlider, RoleDialog:
-			return nil
-		}
-		return n
-	case uia.PatternToggle:
-		if a.checked != 0 || r == RoleCheckBox || r == RoleSwitch {
-			return n
-		}
-	case uia.PatternSelectionItem:
-		if a.selected != 0 || r == RoleRadio || r == RoleTab {
-			return n
-		}
-	case uia.PatternExpandCollapse:
-		if a.expanded != 0 {
-			return n
-		}
-	case uia.PatternValue:
-		if r == RoleEdit || r == RoleComboBox || a.valueText != "" {
-			return n
-		}
-	case uia.PatternRangeValue:
-		if a.rng != nil {
-			return n
-		}
-	case uia.PatternScrollItem:
-		return n
-	}
-	return nil
-}
-
-func (n *a11yNode) Bounds() uia.Rect {
-	e, _ := n.el()
-	r, ok := visibleRect(e)
-	if !ok {
-		return uia.Rect{}
-	}
-	return n.w.screenRect(r)
-}
-
-func (n *a11yNode) SetFocus() {
-	e, _ := n.el()
-	if e.focusable {
-		n.w.setFocus(e)
-		n.w.Update()
-	}
-}
-
-// post runs f with the node's current element after the call returns, so
-// that handlers which open dialogs do not block the UI Automation client.
-func (n *a11yNode) post(f func(e *El)) {
-	w, id := n.w, n.id
-	w.Post(func() {
-		if e := w.byID[id]; e != nil {
-			f(e)
-		}
-	})
-}
-
-func (n *a11yNode) click() {
-	n.post(func(e *El) {
-		if e.onClick != nil {
-			e.onClick()
-		}
-	})
-}
-
-func (n *a11yNode) Invoke() { n.click() }
-
-func (n *a11yNode) ToggleState() int32 {
-	e, _ := n.el()
-	if e.a11y == nil {
-		return uia.ToggleOff
-	}
-	switch e.a11y.checked {
-	case 2:
-		return uia.ToggleOn
-	case 3:
-		return uia.ToggleIndeterminate
-	}
-	return uia.ToggleOff
-}
-
-func (n *a11yNode) Toggle() { n.click() }
-
-func (n *a11yNode) IsSelected() bool {
-	e, _ := n.el()
-	return e.a11y != nil && e.a11y.selected == 2
-}
-
-func (n *a11yNode) Select() {
-	if !n.IsSelected() {
-		n.click()
-	}
-}
-
-func (n *a11yNode) Container() *uia.Provider {
-	t := n.w.a11yTree()
-	in := t.info[n.id]
-	for in != nil && in.parent != 0 {
-		id := in.parent
-		if in = t.info[id]; in == nil {
-			break
-		}
-		switch in.role {
-		case RoleList, RoleTabList, RoleTree, RoleMenu, RoleGroup, RoleGrid:
-			return n.w.a11yProvider(id)
-		}
-	}
-	return nil
-}
-
-func (n *a11yNode) ExpandCollapseState() int32 {
-	e, _ := n.el()
-	if e.a11y != nil && e.a11y.expanded == 2 {
-		return uia.Expanded
-	}
-	return uia.Collapsed
-}
-
-func (n *a11yNode) Expand() {
-	if n.ExpandCollapseState() == uia.Collapsed {
-		n.click()
-	}
-}
-
-func (n *a11yNode) Collapse() {
-	if n.ExpandCollapseState() == uia.Expanded {
-		n.click()
-	}
-}
-
-func (n *a11yNode) Value() string {
-	e, r := n.el()
-	if e.a11y != nil && e.a11y.valueText != "" {
-		return e.a11y.valueText
-	}
-	if r == RoleComboBox {
-		// The shown choice, not the label that names the combo box.
-		var b strings.Builder
-		for _, c := range e.children {
-			textContent(c, &b)
-		}
-		return b.String()
-	}
-	if e.input == nil {
-		return e.text // a read-only field drawn as Text
-	}
-	if e.input.password {
-		return ""
-	}
-	return e.input.value
-}
-
-func (n *a11yNode) ReadOnly() bool {
-	e, r := n.el()
-	return r != RoleEdit || e.input == nil || e.input.onChange == nil
-}
-
-func (n *a11yNode) RangeReadOnly() bool {
-	e, _ := n.el()
-	return e.a11y.rng.set == nil
-}
-
-func (n *a11yNode) SetValue(s string) {
-	w := n.w
-	n.post(func(e *El) {
-		if e.input == nil || e.input.onChange == nil {
-			return
-		}
-		st := w.editOf(e)
-		st.Anchor, st.Caret = 0, len(st.Value)
-		w.insertText(e, s)
-	})
-}
-
-func (n *a11yNode) Range() (value, lo, hi, small, large float64) {
-	e, _ := n.el()
-	g := e.a11y.rng
-	small = g.step
-	if small <= 0 {
-		small = (g.max - g.min) / 100
-	}
-	return g.value, g.min, g.max, small, max((g.max-g.min)/10, small)
-}
-
-func (n *a11yNode) SetRangeValue(v float64) {
-	n.post(func(e *El) {
-		if e.a11y != nil && e.a11y.rng != nil && e.a11y.rng.set != nil {
-			e.a11y.rng.set(v)
-		}
-	})
-}
-
-func (n *a11yNode) ScrollIntoView() {
-	e, _ := n.el()
-	n.w.scrollIntoView(e)
-}
-
-// raiseChanges raises property change events against the last snapshot.
-func (n *a11yNode) raiseChanges() {
-	e, r := n.el()
-	s := a11ySnap{name: e.a11yName(r), enabled: !e.disabled()}
-	a := e.a11y
-	if a != nil {
-		s.toggle = n.ToggleState()
-		s.selected = a.selected == 2
-		s.expand = n.ExpandCollapseState()
-		if a.rng != nil {
-			s.rng = a.rng.value
-		}
-	}
-	if r == RoleEdit || r == RoleComboBox || a != nil && a.valueText != "" {
-		s.value = n.Value()
-	}
-	if e.liveSetting(r) != LiveOff {
 		var b strings.Builder
 		textContent(e, &b)
-		s.live = b.String()
-	}
-	old := n.last
-	n.last = s
-	if old == (a11ySnap{}) {
-		return // first look: nothing to compare with
-	}
-	p := n.prov
-	if s.name != old.name {
-		p.RaisePropertyChanged(uia.PropName, oldText(old.name), s.name)
-	}
-	if s.enabled != old.enabled {
-		p.RaisePropertyChanged(uia.PropIsEnabled, old.enabled, s.enabled)
-	}
-	if s.toggle != old.toggle {
-		p.RaisePropertyChanged(uia.PropToggleState, old.toggle, s.toggle)
-	}
-	if s.selected != old.selected {
-		p.RaisePropertyChanged(uia.PropSelectionIsSelected, old.selected, s.selected)
-	}
-	if s.expand != old.expand {
-		p.RaisePropertyChanged(uia.PropExpandCollapseState, old.expand, s.expand)
-	}
-	if s.value != old.value {
-		p.RaisePropertyChanged(uia.PropValueValue, oldText(old.value), s.value)
-	}
-	if s.rng != old.rng {
-		p.RaisePropertyChanged(uia.PropRangeValueValue, old.rng, s.rng)
-	}
-	if s.live != old.live && s.live != "" {
-		p.RaiseEvent(uia.EventLiveRegionChanged)
-	}
-}
-
-// oldText returns the old value of a text property change event. Past 4 KB
-// it is nil, which is sent as VT_EMPTY, so that a long document is not copied
-// into one more BSTR per change.
-func oldText(s string) any {
-	if len(s) > 4096 {
-		return nil
-	}
-	return s
-}
-
-// Announce asks screen readers to read text in the focused window, or in
-// another window when none of them has focus. It may be called from any goroutine.
-func Announce(text string) {
-	if !onUIThread() {
-		Go(func() { Announce(text) })
-		return
-	}
-	var target *Window
-	for _, w := range windows {
-		if w.acc != nil && (target == nil || w.osFocus) {
-			target = w
+		if b.Len() > 0 {
+			return b.String()
 		}
 	}
-	if target != nil {
-		target.Announce(text)
+	return e.tooltip
+}
+
+// textContent appends the visible text of e's subtree, separated by spaces.
+func textContent(e *El, b *strings.Builder) {
+	if e.style.Hidden {
+		return
 	}
+	add := func(s string) {
+		if s = strings.TrimSpace(s); s != "" {
+			if b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			b.WriteString(s)
+		}
+	}
+	if a := e.a11y; a != nil {
+		if a.role == RoleHidden {
+			return
+		}
+		if a.label != "" {
+			add(a.label)
+			return
+		}
+	}
+	if e.kind == kindText {
+		add(e.text)
+		return
+	}
+	for _, c := range e.children {
+		textContent(c, b)
+	}
+}
+
+// a11yTree is the accessibility view of a window: the exposed elements and
+// their exposed parents. ID 0 is the window.
+type a11yTree struct {
+	info   map[uint64]*a11yInfo
+	top    []uint64 // the window's exposed children
+	active uint64   // an element marked ActiveDescendant
+	slabs  [][]a11yInfo
+	used   int // entries of slabs handed out by the last build
+}
+
+// a11yInfo is one exposed element.
+type a11yInfo struct {
+	parent uint64
+	role   Role
+	el     *El
+	idx    int // position in the parent's kids
+	kids   []uint64
+}
+
+const a11ySlab = 256
+
+// buildA11yTree builds the tree of roots into t, reusing its storage, or into
+// a new tree when t is nil.
+func buildA11yTree(t *a11yTree, roots []*El) *a11yTree {
+	if t == nil {
+		t = &a11yTree{info: map[uint64]*a11yInfo{}}
+	}
+	clear(t.info)
+	t.top, t.active = t.top[:0], 0
+	prev := t.used
+	t.used = 0
+	for _, r := range roots {
+		t.walk(r, 0, &t.top)
+	}
+	for i := t.used; i < prev; i++ {
+		t.slabs[i/a11ySlab][i%a11ySlab].el = nil
+	}
+	return t
+}
+
+func (t *a11yTree) alloc() *a11yInfo {
+	s := t.used / a11ySlab
+	if s == len(t.slabs) {
+		t.slabs = append(t.slabs, make([]a11yInfo, a11ySlab))
+	}
+	n := &t.slabs[s][t.used%a11ySlab]
+	t.used++
+	*n = a11yInfo{kids: n.kids[:0]}
+	return n
+}
+
+func (t *a11yTree) walk(e *El, parent uint64, kids *[]uint64) {
+	if e.style.Hidden {
+		return
+	}
+	r := e.a11yRole()
+	if r == RoleHidden {
+		return
+	}
+	if r != RoleNone {
+		n := t.alloc()
+		n.parent, n.role, n.el, n.idx = parent, r, e, len(*kids)
+		*kids = append(*kids, e.id)
+		t.info[e.id] = n
+		if e.a11y != nil && e.a11y.active {
+			t.active = e.id
+		}
+		if r.leaf() {
+			return
+		}
+		parent, kids = e.id, &n.kids
+	}
+	for _, c := range e.children {
+		t.walk(c, parent, kids)
+	}
+}
+
+// kids returns the exposed children of id, the window's for 0.
+func (t *a11yTree) kids(id uint64) []uint64 {
+	if id == 0 {
+		return t.top
+	}
+	if n := t.info[id]; n != nil {
+		return n.kids
+	}
+	return nil
+}
+
+// sibling returns the exposed sibling of id at offset d, or 0.
+func (t *a11yTree) sibling(id uint64, d int) uint64 {
+	n := t.info[id]
+	if n == nil {
+		return 0
+	}
+	kids := t.kids(n.parent)
+	if j := n.idx + d; j >= 0 && j < len(kids) {
+		return kids[j]
+	}
+	return 0
+}
+
+// exposedAncestor returns the nearest exposed element at or above e, or 0.
+func (t *a11yTree) exposedAncestor(e *El) uint64 {
+	for ; e != nil; e = e.parent {
+		if _, ok := t.info[e.id]; ok {
+			return e.id
+		}
+	}
+	return 0
 }

@@ -4,48 +4,52 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/myparsleycat/fairy/internal/frameprof"
+	"github.com/myparsleycat/fairy/internal/geom"
+	"github.com/myparsleycat/fairy/internal/pancursor"
 	"github.com/myparsleycat/fairy/internal/render"
+	"github.com/myparsleycat/fairy/internal/scroll"
 	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
-func (w *Window) placeScrollBar(e *El, vis rectF, vertical bool) {
+func (w *Window) placeScrollBar(e *El, vis geom.Rect, vertical bool) {
 	n := &e.node
 	st := e.effectiveScrollBarStyle()
 	thick, inset := st.Thickness, st.Inset
-	var track, thumb rectF
+	var track, thumb geom.Rect
 	if s := e.state; s != nil {
-		if vertical && s.scrollY != s.barScroll || !vertical && s.scrollX != s.barScrollX {
-			s.scrolledAt = w.now()
+		if vertical && s.ScrollY != s.BarScroll || !vertical && s.ScrollX != s.BarScrollX {
+			s.ScrolledAt = w.now()
 		}
 		if !vertical {
-			s.barScrollX = s.scrollX
+			s.BarScrollX = s.ScrollX
 		}
 	}
 	if vertical {
 		end := min(st.TrackInset, max(0, (n.H-1)/2))
-		track = rectF{e.absX + n.W - thick - inset, e.absY + end, thick, n.H - 2*end}
-		th := min(track.h, max(track.h*n.H/n.ContentH, 24))
+		track = geom.Rect{X: e.absX + n.W - thick - inset, Y: e.absY + end, W: thick, H: n.H - 2*end}
+		th := scroll.ThumbLength(track.H, n.H, n.ContentH)
 		// A thumb whose length changes while the view
 		// holds still (rows measured, content added) glides to its new length;
 		// while scrolling it follows at once.
 		if s := e.state; s != nil {
 			tr := s.track(animThumb, 1, 0.25)
-			if s.scrollY != s.barScroll || !tr.Initialized() || reducedMotion.Load() {
+			if s.ScrollY != s.BarScroll || !tr.Initialized() || reducedMotion.Load() {
 				tr.Set([4]float32{th})
 			} else {
-				th = w.animate(s, animThumb, 1, 0.25, [4]float32{th}, motionGlide)[0]
+				th = w.animate(s, animThumb, 1, 0.25, [4]float32{th}, scroll.GlideMotion)[0]
 			}
-			s.barScroll = s.scrollY
+			s.BarScroll = s.ScrollY
 		}
-		pos := (track.h - th) * (e.state.scrollY / max(n.ContentH-n.H, 1))
-		thumb = rectF{track.x, track.y + pos, thick, th}
+		pos := scroll.ThumbPos(track.H, th, e.state.ScrollY, n.ContentH-n.H)
+		thumb = geom.Rect{X: track.X, Y: track.Y + pos, W: thick, H: th}
 	} else {
 		end := min(st.TrackInset, max(0, (n.W-1)/2))
-		track = rectF{e.absX + end, e.absY + n.H - thick - inset, n.W - 2*end, thick}
-		tw := min(track.w, max(track.w*n.W/n.ContentW, 24))
-		pos := (track.w - tw) * (e.state.scrollX / max(n.ContentW-n.W, 1))
-		thumb = rectF{track.x + pos, track.y, tw, thick}
+		track = geom.Rect{X: e.absX + end, Y: e.absY + n.H - thick - inset, W: n.W - 2*end, H: thick}
+		tw := scroll.ThumbLength(track.W, n.W, n.ContentW)
+		pos := scroll.ThumbPos(track.W, tw, e.state.ScrollX, n.ContentW-n.W)
+		thumb = geom.Rect{X: track.X + pos, Y: track.Y, W: tw, H: thick}
 	}
 	w.bars = append(w.bars, scrollBar{
 		el: e.id, track: track, thumb: thumb, vis: vis, vertical: vertical, above: len(w.hits),
@@ -68,9 +72,9 @@ func (w *Window) paintScrollBars(e *El, color Color, opacity float32) {
 	fade := float32(1)
 	if !st.AlwaysVisible {
 		show := w.hovered(e) || dragging
-		if left := scrollBarLinger - w.now().Sub(s.scrolledAt); left > 0 && !s.scrolledAt.IsZero() {
+		if left := scrollBarLinger - w.now().Sub(s.ScrolledAt); left > 0 && !s.ScrolledAt.IsZero() {
 			show = true
-			w.frameAt(s.scrolledAt.Add(scrollBarLinger))
+			w.frameAt(s.ScrolledAt.Add(scrollBarLinger))
 		}
 		to := float32(0)
 		if show {
@@ -99,9 +103,9 @@ func (w *Window) paintScrollBars(e *El, color Color, opacity float32) {
 		case dragging:
 			thumb = color.Alpha(0.5)
 		}
-		rad := b.thumb.w * w.scale / 2
+		rad := b.thumb.W * w.scale / 2
 		if !b.vertical {
-			rad = b.thumb.h * w.scale / 2
+			rad = b.thumb.H * w.scale / 2
 		}
 		w.scene.Add(render.Prim{
 			Bounds: w.snap(b.thumb),
@@ -116,11 +120,9 @@ func (w *Window) paintScrollBars(e *El, color Color, opacity float32) {
 func (w *Window) scrollBarJump(e *El, b *scrollBar, x, y float32) {
 	n := &e.node
 	if b.vertical {
-		frac := (y - b.track.y - b.thumb.h/2) / max(b.track.h-b.thumb.h, 1)
-		w.setScroll(e, e.state.scrollX, frac*(n.ContentH-n.H))
+		w.setScroll(e, e.state.ScrollX, scroll.TrackOffset(y-b.track.Y, b.track.H, b.thumb.H, n.ContentH-n.H))
 	} else {
-		frac := (x - b.track.x - b.thumb.w/2) / max(b.track.w-b.thumb.w, 1)
-		w.setScroll(e, frac*(n.ContentW-n.W), e.state.scrollY)
+		w.setScroll(e, scroll.TrackOffset(x-b.track.X, b.track.W, b.thumb.W, n.ContentW-n.W), e.state.ScrollY)
 	}
 }
 
@@ -132,30 +134,12 @@ func (w *Window) dragScrollBar(p *pressState, x, y float32) {
 	n := &e.node
 	b := p.bar
 	if b.vertical {
-		ratio := (n.ContentH - n.H) / max(b.track.h-b.thumb.h, 1)
-		w.setScroll(e, e.state.scrollX, p.barStart+(y-p.y)*ratio)
+		ratio := scroll.DragRatio(b.track.H, b.thumb.H, n.ContentH-n.H)
+		w.setScroll(e, e.state.ScrollX, p.barStart+(y-p.y)*ratio)
 	} else {
-		ratio := (n.ContentW - n.W) / max(b.track.w-b.thumb.w, 1)
-		w.setScroll(e, p.barStart+(x-p.x)*ratio, e.state.scrollY)
+		ratio := scroll.DragRatio(b.track.W, b.thumb.W, n.ContentW-n.W)
+		w.setScroll(e, p.barStart+(x-p.x)*ratio, e.state.ScrollY)
 	}
-}
-
-func (w *Window) setScroll(e *El, sx, sy float32) bool {
-	n := &e.node
-	sx = min(max(sx, 0), max(n.ContentW-n.W, 0))
-	sy = min(max(sy, 0), max(n.ContentH-n.H, 0))
-	if sx == e.state.scrollX && sy == e.state.scrollY {
-		return false
-	}
-	e.state.scrollX, e.state.scrollY = sx, sy
-	e.state.smooth = false
-	stopGlide(e.state)
-	if e.onScroll != nil {
-		e.onScroll(sx, sy)
-		w.markDirty(dirtyScroll)
-	}
-	w.invalidate()
-	return true
 }
 
 type scrollStepRequest struct {
@@ -183,65 +167,33 @@ func (w *Window) applyScrollStep(r *scrollStepRequest) {
 	if r.up {
 		inset = e.clipInset[0]
 	}
-	y := scrollStepTarget(spans, e.state.scrollY, n.H, max(n.ContentH-n.H, 0), inset, r.up)
-	w.setScroll(e, e.state.scrollX, y)
+	y := scroll.StepTarget(spans, e.state.ScrollY, n.H, max(n.ContentH-n.H, 0), inset, r.up)
+	w.setScroll(e, e.state.ScrollX, y)
 }
 
-// scrollStepTarget returns the offset that shows one more of spans, the tops
-// and bottoms of a container's children in order, toward the top (up) or
-// bottom of a view viewH tall at offset y whose edge that way is covered by
-// inset: the child before the first one shown whole lines up below the inset,
-// or the child after the last one shown whole above it. Next to the first or
-// last child it goes to that end.
-func scrollStepTarget(spans [][2]float32, y, viewH, maxY, inset float32, up bool) float32 {
-	const tolerance = 1
-	n := len(spans)
-	if n == 0 {
-		return y
+// wheel handles a wheel step of delta notches at (x, y), signed as
+// WM_MOUSEWHEEL and WM_MOUSEHWHEEL. fractional marks a step that is not a
+// whole notch: precision touchpads and high-resolution wheels send them, and
+// a whole notch in the middle of such a stream is treated alike.
+func (w *Window) setScroll(e *El, sx, sy float32) bool {
+	n := &e.node
+	if !e.state.Set(sx, sy, n.ContentW-n.W, n.ContentH-n.H) {
+		return false
 	}
-	if up {
-		first := n
-		for i, s := range spans {
-			if s[0] >= y+inset-tolerance {
-				first = i
-				break
-			}
-		}
-		if first <= 1 {
-			return 0
-		}
-		return min(max(spans[first-1][0]-inset, 0), maxY)
+	if e.onScroll != nil {
+		e.onScroll(e.state.ScrollX, e.state.ScrollY)
+		w.markDirty(frameprof.CauseScroll)
 	}
-	last := -1
-	for i := n - 1; i >= 0; i-- {
-		if spans[i][1] <= y+viewH-inset+tolerance {
-			last = i
-			break
-		}
-	}
-	if last >= n-2 {
-		return maxY
-	}
-	return min(max(spans[last+1][1]-(viewH-inset), 0), maxY)
+	w.invalidate()
+	return true
 }
 
 // wheelScroll moves a scroll container's target offset; the offset follows it smoothly.
 func (w *Window) wheelScroll(e *El, dx, dy float32) bool {
-	s, n := e.state, &e.node
-	bx, by := scrollBase(s)
-	tx := min(max(bx+dx, 0), max(n.ContentW-n.W, 0))
-	ty := min(max(by+dy, 0), max(n.ContentH-n.H, 0))
-	if tx == bx && ty == by {
+	n := &e.node
+	if !e.state.Wheel(dx, dy, n.ContentW-n.W, n.ContentH-n.H) {
 		return false
 	}
-	if s.glide || s.fling {
-		// The wheel takes over from a glide or a fling, from where the view is now.
-		s.scrollTX, s.scrollTY = s.scrollX, s.scrollY
-		tx = min(max(s.scrollX+dx, 0), max(n.ContentW-n.W, 0))
-		ty = min(max(s.scrollY+dy, 0), max(n.ContentH-n.H, 0))
-		stopGlide(s)
-	}
-	s.scrollTX, s.scrollTY, s.smooth = tx, ty, true
 	w.invalidate()
 	return true
 }
@@ -249,61 +201,25 @@ func (w *Window) wheelScroll(e *El, dx, dy float32) bool {
 // scrollNow moves a scroll container at once, continuing from where smooth
 // scrolling was heading.
 func (w *Window) scrollNow(e *El, dx, dy float32) bool {
-	bx, by := scrollBase(e.state)
+	bx, by := e.state.Base()
 	return w.setScroll(e, bx+dx, by+dy)
 }
 
-// scrollBase is the offset a new scroll step starts from: where smooth
-// scrolling is heading while it runs, else the current offset.
-func scrollBase(s *elState) (float32, float32) {
-	if s.smooth {
-		return s.scrollTX, s.scrollTY
-	}
-	return s.scrollX, s.scrollY
-}
-
-// wheelPageScroll is WHEEL_PAGESCROLL, the wheel setting that scrolls a
-// screen at a time.
-const wheelPageScroll = ^uint32(0)
-
-const (
-	// wheelLatchTimeout is the pause in wheel input that ends a scroll
-	// gesture, as Chromium's wheel scroll latching transaction.
-	wheelLatchTimeout = 500 * time.Millisecond
-	// wheelLatchSlop is how far, in logical pixels, the pointer may move
-	// during a gesture before the next wheel step starts a new one.
-	wheelLatchSlop = 4
-)
-
-// wheelLatch is the scroll container a wheel gesture scrolled. Until the
-// gesture pauses or the pointer moves, the wheel scrolls only it: an inner list
-// that reaches its end swallows the rest of the gesture instead of handing it
-// to the page, and an inner list that passes under the pointer while the page
-// scrolls does not take it over. A press or key ends the gesture.
-type wheelLatch struct {
-	state      *elState
-	x, y       float32 // pointer position when the gesture started
-	horizontal bool
-	mods       keyboard.Mods
-	at         time.Time // last wheel step of the gesture
-}
-
-// holding returns the latched container's state when the gesture continues
-// over it from target and it can still scroll along the gesture's axis, else
-// nil.
-func (l wheelLatch) holding(target *El, x, y float32, now time.Time, horizontal bool, mods keyboard.Mods) *elState {
-	dx, dy := x-l.x, y-l.y
-	if l.state == nil || l.horizontal != horizontal || l.mods != mods || now.Sub(l.at) >= wheelLatchTimeout ||
-		dx*dx+dy*dy > wheelLatchSlop*wheelLatchSlop {
+// latchHolding returns the latched container's state when a wheel step
+// continues the gesture over it from target and it can still scroll along the
+// gesture's axis, else nil.
+func (w *Window) latchHolding(target *El, x, y float32, now time.Time, horizontal bool, mods keyboard.Mods) *scroll.State {
+	l := w.wheelLatch
+	if !l.Continues(x, y, now, horizontal, mods) {
 		return nil
 	}
 	for e := target; e != nil; e = e.parent {
-		if e.state == l.state {
+		if e.state != nil && &e.state.State == l.State {
 			n := &e.node
 			canY := e.style.ScrollY && n.ContentH > n.H
 			canX := e.style.ScrollX && n.ContentW > n.W
 			if !horizontal && canY || (horizontal || !e.style.ScrollY) && canX {
-				return l.state
+				return l.State
 			}
 			return nil
 		}
@@ -311,10 +227,6 @@ func (l wheelLatch) holding(target *El, x, y float32, now time.Time, horizontal 
 	return nil
 }
 
-// wheel handles a wheel step of delta notches at (x, y), signed as
-// WM_MOUSEWHEEL and WM_MOUSEHWHEEL. fractional marks a step that is not a
-// whole notch: precision touchpads and high-resolution wheels send them, and
-// a whole notch in the middle of such a stream is treated alike.
 func (w *Window) wheel(x, y, delta float32, fractional, hwheel bool) {
 	if hwheel {
 		delta = -delta
@@ -354,29 +266,24 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	}
 	// step is how far a notch scrolls a view of the given size. A setting of
 	// 0 lines scrolls nothing.
-	step := func(view float32) float32 {
-		if lines == wheelPageScroll {
-			return delta * view
-		}
-		return delta * float32(lines) * 100 / 3
-	}
-	scroll := w.wheelScroll
+	step := func(view float32) float32 { return scroll.WheelStep(delta, lines, view) }
+	move := w.wheelScroll
 	if precise {
-		scroll = w.scrollNow
+		move = w.scrollNow
 	}
 	now := w.now()
 	target := w.hitTest(x, y)
-	latch := w.wheelLatch.holding(target, x, y, now, horizontal, mods)
+	latch := w.latchHolding(target, x, y, now, horizontal, mods)
 	for e := target; e != nil; e = e.parent {
 		if e.onWheel != nil {
 			ev.LocalX, ev.LocalY, ev.W, ev.H = x-e.absX, y-e.absY, e.w, e.h
 			handled := e.onWheel(ev)
-			w.markDirty(dirtyWheel)
+			w.markDirty(frameprof.CauseWheel)
 			if handled {
 				break
 			}
 		}
-		if e.state == nil || e.kind == kindInput || latch != nil && e.state != latch {
+		if e.state == nil || e.kind == kindInput || latch != nil && &e.state.State != latch {
 			continue
 		}
 		n := &e.node
@@ -384,15 +291,15 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 		canX := e.style.ScrollX && n.ContentW > n.W
 		moved := false
 		if !horizontal && canY {
-			moved = scroll(e, 0, -step(n.H))
+			moved = move(e, 0, -step(n.H))
 		} else if (horizontal || !e.style.ScrollY) && canX {
-			moved = scroll(e, -step(n.W), 0)
+			moved = move(e, -step(n.W), 0)
 		}
 		if latch == nil && moved {
-			w.wheelLatch = wheelLatch{state: e.state, x: x, y: y, horizontal: horizontal, mods: mods}
+			w.wheelLatch = scroll.Latch{State: &e.state.State, X: x, Y: y, Horizontal: horizontal, Mods: mods}
 		}
 		if latch != nil || moved {
-			w.wheelLatch.at = now
+			w.wheelLatch.At = now
 		}
 		if moved {
 			break
@@ -401,4 +308,161 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	if w.dirty {
 		w.Update()
 	}
+}
+
+// A middle press on a scroll container that no element under the pointer
+// drags with the middle button starts autoscroll, as in browsers on Windows:
+// the view scrolls toward the pointer at a speed set by its distance from the
+// press point. Releasing the button after moving away ends it; releasing in
+// place keeps it on until the next press, key or wheel step.
+
+// autoScrollPoll is how often the pointer is read while it is outside the
+// window and the view is not moving.
+const autoScrollPoll = 50 * time.Millisecond
+
+type autoScroll struct {
+	el         uint64
+	x, y       float32 // the press point
+	canX, canY bool
+	held       bool // the middle button is still down
+	moved      bool // the pointer left the dead zone while the button was held
+	cursor     pancursor.Kind
+}
+
+// startAutoScroll starts autoscroll in the innermost scroll container that
+// can move above top, and reports whether it did.
+func (w *Window) startAutoScroll(top *El, x, y float32) bool {
+	for e := top; e != nil; e = e.parent {
+		if e.dragsWith(2) {
+			return false
+		}
+		if e.state == nil || e.kind == kindInput {
+			continue
+		}
+		n := &e.node
+		canY := e.style.ScrollY && n.ContentH > n.H
+		canX := e.style.ScrollX && n.ContentW > n.W
+		if !canX && !canY {
+			continue
+		}
+		s := e.state
+		s.ScrollTX, s.ScrollTY, s.Smooth = s.ScrollX, s.ScrollY, false
+		s.StopGlide()
+		w.autoScroll = &autoScroll{el: e.id, x: x, y: y, canX: canX, canY: canY, held: true}
+		w.setCapture()
+		w.applyCursor()
+		w.invalidate()
+		return true
+	}
+	return false
+}
+
+func (w *Window) stopAutoScroll() {
+	a := w.autoScroll
+	if a == nil {
+		return
+	}
+	w.autoScroll = nil
+	if a.held {
+		w.releaseCapture()
+	}
+	if w.mouseIn {
+		w.applyCursor()
+	}
+	w.invalidate()
+}
+
+// autoScrollMove follows the pointer while autoscroll is on.
+func (w *Window) autoScrollMove(x, y float32) {
+	a := w.autoScroll
+	if a.held && !a.moved && (abs32(x-a.x) > scroll.AutoDeadZone || abs32(y-a.y) > scroll.AutoDeadZone) {
+		a.moved = true
+	}
+	if w.panCursor() != a.cursor {
+		w.applyCursor()
+	}
+	w.invalidate()
+}
+
+// autoScrollRelease handles a middle release and reports whether autoscroll
+// took it.
+func (w *Window) autoScrollRelease() bool {
+	a := w.autoScroll
+	if a == nil || !a.held {
+		return false
+	}
+	a.held = false
+	w.releaseCapture()
+	// Capture may have suppressed the leave notification; the next move
+	// re-arms it so that leaving the window is noticed. A headless window is
+	// never under the cursor and must not track it.
+	w.tracking = w.hl != nil
+	if a.moved {
+		w.stopAutoScroll()
+	}
+	return true
+}
+
+// stepAutoScroll moves the autoscrolled container by dt seconds of its
+// current speed and keeps frames coming while it moves.
+func (w *Window) stepAutoScroll(dt float32) {
+	a := w.autoScroll
+	if a == nil {
+		return
+	}
+	e := w.byID[a.el]
+	if e == nil || e.state == nil {
+		w.stopAutoScroll()
+		return
+	}
+	x, y := w.mouseX, w.mouseY
+	outside := !w.mouseIn && !w.scripted && w.hl == nil
+	if outside {
+		// No moves arrive outside the window without capture; the pointer is
+		// read here and polled while the view stands still.
+		p := win.GetCursorPos()
+		win.ScreenToClient(w.hwnd, &p)
+		x, y = float32(p.X)/w.scale, float32(p.Y)/w.scale
+	}
+	var vx, vy float32
+	if a.canX {
+		vx = scroll.AutoSpeed(x - a.x)
+	}
+	if a.canY {
+		vy = scroll.AutoSpeed(y - a.y)
+	}
+	s, n := e.state, &e.node
+	stuckX := vx == 0 || (vx < 0 && s.ScrollX <= 0) || (vx > 0 && s.ScrollX >= max(n.ContentW-n.W, 0))
+	stuckY := vy == 0 || (vy < 0 && s.ScrollY <= 0) || (vy > 0 && s.ScrollY >= max(n.ContentH-n.H, 0))
+	if stuckX && stuckY {
+		if outside {
+			w.frameAt(time.Now().Add(autoScrollPoll))
+		}
+		return
+	}
+	w.animating = true
+	w.setScroll(e, s.ScrollX+vx*dt, s.ScrollY+vy*dt)
+}
+
+// panCursor is the cursor for the pointer's place relative to the press point.
+func (w *Window) panCursor() pancursor.Kind {
+	a := w.autoScroll
+	var vx, vy float32
+	if a.canX {
+		vx = scroll.AutoSpeed(w.mouseX - a.x)
+	}
+	if a.canY {
+		vy = scroll.AutoSpeed(w.mouseY - a.y)
+	}
+	return pancursor.At(vx, vy, a.canX, a.canY)
+}
+
+func (w *Window) setPanCursor() {
+	a := w.autoScroll
+	a.cursor = w.panCursor()
+	size := int(win.GetSystemMetricsForDpi(win.SM_CXCURSOR, uint32(w.scale*96+0.5)))
+	if size <= 0 {
+		size = 32
+	}
+	win.SetCursor(pancursor.Handle(a.cursor, size))
 }

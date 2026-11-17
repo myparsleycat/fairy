@@ -4,6 +4,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/motion"
 )
@@ -29,11 +30,11 @@ func (w *Window) paintScene() bool {
 		}
 	}
 	ok = w.paintFlights() && ok
-	if w.tipText != "" && (w.tipShown || !w.tipLeft.IsZero()) {
+	if w.tip.Visible() {
 		ok = w.paintTooltip() && ok
 	}
 	w.sweepSurfaces()
-	w.sweepWebViews()
+	w.sweepNatives()
 	w.sweepTextures(w.frame, maxIdleTextureBytes)
 	return ok
 }
@@ -61,7 +62,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		}
 		return ok
 	}
-	r := rectF{e.absX, e.absY, e.w, e.h}
+	r := geom.Rect{X: e.absX, Y: e.absY, W: e.w, H: e.h}
 	clip := e.clipR
 	ok := true
 	s := w.scale
@@ -153,7 +154,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 	}
 	// The shader expects each radius to fit in half the box; larger ones, as
 	// from Radius(999) for a pill, would leave the shape empty.
-	maxR := min(r.w, r.h) * s / 2
+	maxR := min(r.W, r.H) * s / 2
 	radii := [4]float32{min(e.radii[0]*s, maxR), min(e.radii[1]*s, maxR), min(e.radii[2]*s, maxR), min(e.radii[3]*s, maxR)}
 	box := w.snap(r)
 	backdrop := func(mark int, opacity float32) {
@@ -221,7 +222,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		}
 	}
 	// Media can fill the whole box, so its border must be drawn on top.
-	mediaBorder := hasBorder && (e.kind == kindImage || e.kind == kindSurface || e.kind == kindVideo)
+	mediaBorder := hasBorder && (e.kind == kindImage || e.kind == kindSurface || e.embedsMedia())
 	if fill.isSet() || e.grad != nil || (hasBorder && !mediaBorder) {
 		p := border
 		p.Color = fill.arr(opacity)
@@ -245,7 +246,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 	}
 
 	pad := e.padding()
-	content := rectF{r.x + pad.Left, r.y + pad.Top, max(r.w-pad.Left-pad.Right, 0), max(r.h-pad.Top-pad.Bottom, 0)}
+	content := geom.Rect{X: r.X + pad.Left, Y: r.Y + pad.Top, W: max(r.W-pad.Left-pad.Right, 0), H: max(r.H-pad.Top-pad.Bottom, 0)}
 
 	outerClip := w.scene.Clip
 	var inner, innerRadii [4]float32
@@ -299,10 +300,8 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		w.paintArc(e, content, textColor, devClip, opacity)
 	case kindSurface:
 		w.paintSurface(e, content, radii, devClip, opacity)
-	case kindVideo:
-		w.paintVideo(e, content, radii, devClip, opacity)
-	case kindWebView:
-		w.placeWebView(e, content)
+	case kindEmbed:
+		w.paintEmbed(e, content, radii, devClip, opacity)
 	}
 	if mediaBorder {
 		own := w.scene.Clip
@@ -359,10 +358,10 @@ func (w *Window) edgeFeather(e *El) [4]float32 {
 	f := func(hidden float32) float32 { return e.edgeFade * w.scale * min(max(hidden/15, 0), 1) }
 	var out [4]float32
 	if e.style.ScrollY {
-		out[0], out[2] = f(st.scrollY), f(n.ContentH-n.H-st.scrollY)
+		out[0], out[2] = f(st.ScrollY), f(n.ContentH-n.H-st.ScrollY)
 	}
 	if e.style.ScrollX {
-		out[3], out[1] = f(st.scrollX), f(n.ContentW-n.W-st.scrollX)
+		out[3], out[1] = f(st.ScrollX), f(n.ContentW-n.W-st.ScrollX)
 	}
 	return out
 }

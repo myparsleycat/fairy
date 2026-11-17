@@ -1,0 +1,395 @@
+// Package video plays media files and URLs in fairy windows with Media
+// Foundation.
+package video
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/myparsleycat/fairy"
+	"github.com/myparsleycat/fairy/internal/embed"
+	"github.com/myparsleycat/fairy/internal/geom"
+	"github.com/myparsleycat/fairy/internal/mf"
+	"github.com/myparsleycat/fairy/internal/render"
+)
+
+// Options configures Open.
+type Options struct {
+	AutoPlay bool
+	Loop     bool
+	Muted    bool
+	// OnEnded runs on the UI thread when playback reaches the end without Loop.
+	OnEnded func()
+	// OnError runs on the UI thread when the source cannot be played.
+	OnError func(error)
+}
+
+// State is the playback state of a Video.
+type State uint8
+
+const (
+	Loading State = iota
+	Ready         // metadata is known; paused
+	Playing
+	Ended
+	Failed
+)
+
+// View draws the current frame of v. Size it like a box. The frame is
+// letterboxed by default; call Fit to change that. The window keeps painting
+// while v plays. A nil v draws nothing.
+func View(v *Video) *fairy.El {
+	var x embed.Element
+	if v != nil {
+		x = (*element)(v)
+	}
+	return embed.NewEl(x).(*fairy.El).Fit(fairy.FitContain)
+}
+
+func secondsToDuration(s float64) time.Duration {
+	if s != s || s < 0 || s > 1e9 { // NaN, unknown or infinite (live streams)
+		return 0
+	}
+	return time.Duration(s * float64(time.Second))
+}
+
+// Video plays a file or URL with Media Foundation, decoding into a texture on
+// the GPU. Formats are those Windows supports, such as MP4 (H.264, HEVC with
+// the extension), WebM (VP9, AV1 with the extension) and MP3. Use it from the
+// UI thread.
+type Video struct {
+	source string
+	opts   Options
+	dev    *render.Device
+	eng    *mf.Engine
+	frame  *render.Target
+	state  State
+	err    error
+	resume time.Duration // position to restore after the device is recreated
+	closed bool
+	pacer  videoPacer
+	fresh  bool // the last currentFrame transferred a new frame
+}
+
+// Open starts loading source, a file path or URL. Errors while loading are
+// reported later through Options.OnError and Err.
+func Open(source string, opts Options) (*Video, error) {
+	v := &Video{source: source, opts: opts}
+	if err := v.start(); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func (v *Video) start() error {
+	dev, err := render.AcquireDevice()
+	if err != nil {
+		return err
+	}
+	eng, err := mf.NewEngine(dev.Dev.P, func(event uint32, _ uintptr, _ uint32) {
+		switch event {
+		case mf.EventLoadedMetadata, mf.EventCanPlay, mf.EventPlay, mf.EventPlaying, mf.EventPause,
+			mf.EventEnded, mf.EventError, mf.EventSeeked, mf.EventDurationChange:
+			fairy.Go(func() { v.onEvent(event) })
+		}
+	})
+	if err != nil {
+		dev.Release()
+		return err
+	}
+	v.dev, v.eng, v.state, v.err = dev, eng, Loading, nil
+	eng.SetLoop(v.opts.Loop)
+	eng.SetMuted(v.opts.Muted)
+	eng.SetAutoPlay(v.opts.AutoPlay)
+	if err := eng.SetSource(v.source); err != nil {
+		v.release()
+		return err
+	}
+	return nil
+}
+
+func (v *Video) onEvent(event uint32) {
+	if v.eng == nil {
+		return
+	}
+	switch event {
+	case mf.EventLoadedMetadata:
+		if v.state == Loading {
+			v.state = Ready
+		}
+		if v.resume > 0 {
+			v.eng.Seek(v.resume.Seconds())
+			v.resume = 0
+		}
+	case mf.EventPlay, mf.EventPlaying:
+		v.state = Playing
+		v.pacer.next = time.Time{}
+	case mf.EventSeeked:
+		v.pacer.next = time.Time{}
+	case mf.EventPause:
+		if v.state == Playing {
+			v.state = Ready
+		}
+	case mf.EventEnded:
+		if !v.opts.Loop {
+			v.state = Ended
+			if v.opts.OnEnded != nil {
+				v.opts.OnEnded()
+			}
+		}
+	case mf.EventError:
+		code, hr := v.eng.Error()
+		v.state = Failed
+		v.err = fmt.Errorf("fairy: video %s: media engine error %d (%v)", v.source, code, hr)
+		if v.opts.OnError != nil {
+			v.opts.OnError(v.err)
+		}
+	}
+}
+
+func (v *Video) release() {
+	if v.eng != nil {
+		v.eng.Release()
+		v.eng = nil
+	}
+	v.frame.Release()
+	v.frame = nil
+	if v.dev != nil {
+		v.dev.Release()
+		v.dev = nil
+	}
+}
+
+// Close stops playback and frees the decoder.
+func (v *Video) Close() {
+	v.closed = true
+	v.release()
+}
+
+// State returns the playback state.
+func (v *Video) State() State { return v.state }
+
+// Err returns the error that stopped playback, if any.
+func (v *Video) Err() error { return v.err }
+
+// Play starts or resumes playback; at the end it starts over.
+func (v *Video) Play() {
+	if v.eng == nil {
+		return
+	}
+	if v.state == Ended {
+		v.eng.Seek(0)
+	}
+	v.eng.Play()
+}
+
+// Pause pauses playback.
+func (v *Video) Pause() {
+	if v.eng != nil {
+		v.eng.Pause()
+	}
+}
+
+// Playing reports whether the video is playing.
+func (v *Video) Playing() bool { return v.eng != nil && !v.eng.Paused() && v.state == Playing }
+
+// Seek moves to position d.
+func (v *Video) Seek(d time.Duration) {
+	if v.eng != nil {
+		v.eng.Seek(d.Seconds())
+		v.pacer.next = time.Time{}
+	}
+}
+
+// Position returns the current playback position.
+func (v *Video) Position() time.Duration {
+	if v.eng == nil {
+		return 0
+	}
+	return secondsToDuration(v.eng.CurrentTime())
+}
+
+// Duration returns the length of the media, or 0 while unknown.
+func (v *Video) Duration() time.Duration {
+	if v.eng == nil {
+		return 0
+	}
+	return secondsToDuration(v.eng.Duration())
+}
+
+// Size returns the frame size in pixels, or 0, 0 before metadata loads.
+func (v *Video) Size() (int, int) {
+	if v.eng == nil || v.state == Loading || v.state == Failed {
+		return 0, 0
+	}
+	return v.eng.VideoSize()
+}
+
+// SetMuted mutes or unmutes the audio.
+func (v *Video) SetMuted(m bool) {
+	v.opts.Muted = m
+	if v.eng != nil {
+		v.eng.SetMuted(m)
+	}
+}
+
+// Muted reports whether the audio is muted.
+func (v *Video) Muted() bool { return v.opts.Muted }
+
+// SetVolume sets the volume from 0 to 1.
+func (v *Video) SetVolume(vol float64) {
+	if v.eng != nil {
+		v.eng.SetVolume(min(max(vol, 0), 1))
+	}
+}
+
+// Volume returns the volume from 0 to 1.
+func (v *Video) Volume() float64 {
+	if v.eng == nil {
+		return 0
+	}
+	return v.eng.Volume()
+}
+
+// SetLoop makes playback start over at the end.
+func (v *Video) SetLoop(loop bool) {
+	v.opts.Loop = loop
+	if v.eng != nil {
+		v.eng.SetLoop(loop)
+	}
+}
+
+// currentFrame transfers a new frame if one is ready and returns the texture
+// holding the latest frame.
+func (v *Video) currentFrame() *render.Target {
+	v.fresh = false
+	if v.closed {
+		return nil
+	}
+	if v.dev != nil && v.dev.Lost() {
+		v.resume = v.Position()
+		playing := v.Playing()
+		v.release()
+		v.opts.AutoPlay = playing
+		if v.start() != nil {
+			return nil
+		}
+	}
+	if v.eng == nil || v.state == Loading || v.state == Failed {
+		return nil
+	}
+	w, h := v.eng.VideoSize()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	fresh := false
+	if v.frame == nil || v.frame.Width != w || v.frame.Height != h {
+		v.frame.Release()
+		t, err := render.NewTarget(v.dev, w, h)
+		if err != nil {
+			v.frame = nil
+			return nil
+		}
+		v.frame, fresh = t, true
+	}
+	pts, ok := v.eng.NewFrame()
+	if ok {
+		v.pacer.frame(pts)
+		v.fresh = true
+	}
+	if ok || fresh {
+		v.eng.Transfer(v.frame.Resource().P, w, h)
+		v.frame.Touch()
+	}
+	return v.frame
+}
+
+const (
+	// videoPollInterval is the longest frame interval polled on every
+	// display refresh. Longer ones, such as 24 and 30 fps, sleep between frames.
+	videoPollInterval = 25 * time.Millisecond
+	// videoWakeEarly is how long before a frame is due the window wakes to
+	// poll for it, covering timer resolution and scheduling delay.
+	videoWakeEarly = 20 * time.Millisecond
+)
+
+// videoPacer estimates a video's frame interval from the presentation times
+// of the frames it shows, to decide when to paint next.
+type videoPacer struct {
+	last     time.Duration // presentation time of the last frame
+	have     bool
+	step     time.Duration // between the last two frames
+	interval time.Duration // 0 while unknown
+	next     time.Time     // when a wake-up is scheduled; zero when polling
+}
+
+func (p *videoPacer) frame(pts int64) {
+	t := time.Duration(pts) * 100
+	// Seeks and loops move backwards or far ahead and say nothing of the rate.
+	if d := t - p.last; p.have && d > 0 && d <= time.Second {
+		// A dropped frame doubles one step, so a longer interval is taken
+		// only once two steps in a row agree on it.
+		if p.interval == 0 || d < p.interval || (d-p.step).Abs() <= time.Millisecond {
+			p.interval = d
+		}
+		p.step = d
+	}
+	p.last, p.have = t, true
+}
+
+// wake returns when to paint next after a paint at now, given whether that
+// paint showed a new frame and the playback position. It reports false to
+// paint on every display refresh instead.
+func (p *videoPacer) wake(now time.Time, fresh bool, pos time.Duration) (time.Time, bool) {
+	if p.interval <= videoPollInterval {
+		p.next = time.Time{}
+		return time.Time{}, false
+	}
+	if fresh {
+		due := min(max(p.last+p.interval-pos, 0), p.interval)
+		p.next = now.Add(max(due-videoWakeEarly, 0))
+		return p.next, true
+	}
+	// Woken early by something else; keep the wake-up. Past it, the frame is
+	// late, so poll until it arrives.
+	if !p.next.IsZero() && now.Before(p.next) {
+		return p.next, true
+	}
+	p.next = time.Time{}
+	return time.Time{}, false
+}
+
+// element is the embed.Element of a Video, kept off the Video's methods.
+type element Video
+
+func (e *element) Paint(c *embed.Context) {
+	v := (*Video)(e)
+	if c.Box.Empty() {
+		return
+	}
+	frame := v.currentFrame()
+	if v.state == Loading {
+		c.Animate()
+	} else if v.Playing() {
+		var pos time.Duration
+		if v.fresh {
+			pos = v.Position()
+		}
+		if at, ok := v.pacer.wake(c.Now, v.fresh, pos); ok {
+			c.WakeAt(at)
+		} else {
+			c.Animate()
+		}
+	}
+	if frame == nil {
+		return
+	}
+	dst, uv := geom.FitImage(c.Box, float32(frame.Width), float32(frame.Height), c.Fit)
+	c.Scene.AddImage(render.Prim{
+		Bounds: c.Snap(dst),
+		Clip:   c.Clip,
+		Color:  [4]float32{1, 1, 1, c.Opacity},
+		Radii:  c.Radii,
+		UV:     uv,
+	}, &frame.Texture)
+}

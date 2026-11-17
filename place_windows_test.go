@@ -60,7 +60,7 @@ func TestScrollStepAndPinToView(t *testing.T) {
 		w.build()
 	}
 	w.placeAll()
-	if y := w.root.state.scrollY; y != 4 {
+	if y := w.root.state.ScrollY; y != 4 {
 		t.Fatalf("scrollY = %v, want 4: the third row's bottom above the covered 20 pixels", y)
 	}
 	if want := [][2]bool{{true, false}, {false, false}}; len(edges) != 2 || edges[0] != want[0] || edges[1] != want[1] {
@@ -90,10 +90,10 @@ func TestClipInsetAndHiddenScrollBar(t *testing.T) {
 		return list.Child(Box().Key("pinned").Size(20, 20).Right(0).Bottom(0).Absolute().PinToView())
 	})
 	row, pinned := w.findKey("row2"), w.findKey("pinned")
-	if got := row.clipR.y + row.clipR.h; got != 80 {
+	if got := row.clipR.Y + row.clipR.H; got != 80 {
 		t.Fatalf("row clip ends at y %v, want 80", got)
 	}
-	if got := pinned.clipR.y + pinned.clipR.h; got != 100 {
+	if got := pinned.clipR.Y + pinned.clipR.H; got != 100 {
 		t.Fatalf("pinned clip ends at y %v, want 100", got)
 	}
 	if hit := w.hitTest(10, 82); hit != w.root {
@@ -106,40 +106,7 @@ func TestClipInsetAndHiddenScrollBar(t *testing.T) {
 		t.Fatalf("%d scroll bars placed, want none", len(w.bars))
 	}
 	w.scrollIntoView(w.findKey("row3"))
-	if y := w.root.state.scrollY; y != 32 {
+	if y := w.root.state.ScrollY; y != 32 {
 		t.Fatalf("scrollY = %v after scrolling row 3 into view, want 32: its bottom above the strip", y)
-	}
-}
-
-func TestScrollStepTarget(t *testing.T) {
-	// Rows 28 tall below 4 pixels of padding: content 288, view 100.
-	var rows [][2]float32
-	for i := range 10 {
-		top := 4 + float32(i)*28
-		rows = append(rows, [2]float32{top, top + 28})
-	}
-	// A 24 pixel heading among the rows: content 168.
-	mixed := [][2]float32{{4, 28}, {28, 56}, {56, 84}, {84, 108}, {108, 136}, {136, 164}}
-	tests := []struct {
-		name  string
-		spans [][2]float32
-		y     float32
-		maxY  float32
-		up    bool
-		want  float32
-	}{
-		{"down from the top shows the row under the arrow", rows, 0, 188, false, 12},
-		{"down a row before the end", rows, 170, 188, false, 180},
-		{"down to the end", rows, 180, 188, false, 188},
-		{"up from the end shows the row under the arrow", rows, 188, 188, true, 176},
-		{"up a row before the top", rows, 20, 188, true, 8},
-		{"up to the top", rows, 8, 188, true, 0},
-		{"down past rows of other heights", mixed, 0, 68, false, 8},
-		{"no children", nil, 5, 0, false, 5},
-	}
-	for _, tt := range tests {
-		if got := scrollStepTarget(tt.spans, tt.y, 100, tt.maxY, 24, tt.up); got != tt.want {
-			t.Errorf("%s: got %v, want %v", tt.name, got, tt.want)
-		}
 	}
 }

@@ -19,7 +19,7 @@ Detailed usage and development notes for [Fairy](../README.md). Run commands fro
 - **Focus styles**: rings outside the border box (`Ring`, `HoverRing`) and styles shown only for keyboard focus, as CSS `:focus-visible` (`FocusRing`, `FocusVisibleBorder`, `FocusWithin`).
 - **Component kit** (`kit`): themed controls with the sizes, colors and motion of shadcn/ui: buttons, switches, checkboxes, radios, sliders, text fields, selects, comboboxes, menus and a menu bar, a shortcut recorder, tabs, dialogs, toasts, a virtualized table, a split view with sidebar and inspector, a virtualized tree, a diff view (`kit/diff`), a date picker, a color picker, progress indicators and a Markdown renderer with syntax-highlighted code blocks.
 - **Localization** (`i18n`): a message catalog that loads i18next JSON files, with interpolation, CLDR plural rules, Korean particles (`Josa`), number and list formatting, and matching of the system UI languages (`UseSystemLanguage`).
-- **Native surfaces**: `Surface` elements drawn by the app with Direct3D 11, `VideoView` playing files and URLs through Media Foundation, and `WebViewHost` embedding Edge WebView2 without `WebView2Loader.dll`. All windows share one Direct3D device.
+- **Native surfaces**: `Surface` elements drawn by the app with Direct3D 11, `video.View` playing files and URLs through Media Foundation, and `webview.Host` embedding Edge WebView2 without `WebView2Loader.dll`. All windows share one Direct3D device.
 - **Offscreen rendering**: `RenderImage` draws an element tree into an `image.NRGBA` without a window. `SurfaceImage` and `NewTextureImage` turn rendered textures into `Image`s without a copy to memory.
 - **Headless windows**: `Options.Headless` windows draw into a texture shared with other Direct3D 11 devices instead of onto the screen, for UI drawn inside another program such as a game, and take input injected by that program. See [Headless windows](#headless-windows).
 - **Accessibility**: a UI Automation provider, so screen readers such as Narrator and UI test tools see the element tree. See [Accessibility](#accessibility).
@@ -230,6 +230,10 @@ go run -tags fairydebug ./examples/kit
 | `github.com/myparsleycat/fairy/d3d` | Direct3D 11 binding and `D3DCompile` for apps that draw 3D |
 | `github.com/myparsleycat/fairy/dialog` | Native file dialogs and message boxes |
 | `github.com/myparsleycat/fairy/tray` | Notification area icons and notifications |
+| `github.com/myparsleycat/fairy/clipboard` | Clipboard text, HTML, images and secrets |
+| `github.com/myparsleycat/fairy/taskbar` | Taskbar button progress |
+| `github.com/myparsleycat/fairy/video` | Video playback with Media Foundation |
+| `github.com/myparsleycat/fairy/webview` | Edge WebView2 browser hosting |
 | `github.com/myparsleycat/fairy/shortcut` | Global keyboard shortcuts |
 
 The `internal` packages hold the Win32, COM, DirectWrite, renderer, Media Foundation, WebView2, UI Automation and image decoding code.

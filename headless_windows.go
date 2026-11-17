@@ -3,12 +3,16 @@ package fairy
 import (
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"log"
+	"os"
 	"syscall"
 	"time"
 	"unicode/utf16"
 
 	"github.com/myparsleycat/fairy/d3d"
+	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/internal/win"
@@ -407,7 +411,7 @@ func (w *Window) resizeHeadless(width, height int, dpi uint32) {
 		if s := float32(dpi) / 96; s != w.scale {
 			w.scale = s
 			InvalidateMemos()
-			w.markDirty(dirtyResize)
+			w.markDirty(frameprof.CauseResize)
 		}
 	}
 	if width != w.width || height != w.height {
@@ -415,11 +419,11 @@ func (w *Window) resizeHeadless(width, height int, dpi uint32) {
 		if w.r != nil && width > 0 && height > 0 {
 			w.resizeRenderer()
 		}
-		w.markDirty(dirtyResize)
+		w.markDirty(frameprof.CauseResize)
 	}
 	// Input queued behind the resize hit-tests the new layout, not the one the
 	// next frame would replace.
-	if w.dirtyBy&dirtyResize != 0 && w.r != nil && w.width > 0 && w.height > 0 {
+	if w.dirtyBy&frameprof.CauseResize != 0 && w.r != nil && w.width > 0 && w.height > 0 {
 		w.layout(0)
 	}
 	w.invalidate()
@@ -449,4 +453,33 @@ func (w *Window) releaseCapture() {
 	if w.hl == nil {
 		win.ReleaseCapture()
 	}
+}
+
+// SaveSnapshot writes the next rendered frame to a PNG file and calls done with the result.
+func (w *Window) SaveSnapshot(path string, done func(error)) {
+	if w.r == nil {
+		if done != nil {
+			w.Post(func() { done(errors.New("fairy: snapshot: no renderer while the GPU device is being recreated")) })
+		}
+		return
+	}
+	w.r.RequestSnapshot(func(img *image.NRGBA) {
+		err := writePNG(path, img)
+		if done != nil {
+			w.Post(func() { done(err) })
+		}
+	})
+	w.invalidate()
+}
+
+func writePNG(path string, img image.Image) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

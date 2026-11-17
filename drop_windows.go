@@ -1,10 +1,7 @@
 package fairy
 
 import (
-	"syscall"
-	"unsafe"
-
-	"github.com/myparsleycat/fairy/internal/com"
+	"github.com/myparsleycat/fairy/internal/dragdrop"
 	"github.com/myparsleycat/fairy/internal/win"
 )
 
@@ -55,118 +52,34 @@ func (cx *Cx) FileDropTarget() string {
 // turned them down with AcceptFiles.
 func (cx *Cx) FileDropRejected() bool { return cx.w.drag != nil && cx.w.drag.rejected }
 
-// dropTarget is an IDropTarget registered for one window. OLE calls it on the
-// UI thread, inside its drag loop.
-type dropTarget struct {
-	vtbl *[7]uintptr
-	hwnd win.HWND
+func (w *Window) registerDrop() { dragdrop.Register(w.hwnd, windowDrop{w}) }
+
+func (w *Window) revokeDrop() { dragdrop.Revoke(w.hwnd) }
+
+// windowDrop passes the file drags OLE reports for a window to it.
+type windowDrop struct{ w *Window }
+
+func (d windowDrop) Enter(paths []string, pt win.POINT) uint32 {
+	x, y := d.w.dropPoint(pt)
+	return d.w.fileDragEnter(paths, x, y)
 }
 
-var (
-	dropVtbl         [7]uintptr
-	iidIDropTarget   = com.MustGUID("00000122-0000-0000-c000-000000000046")
-	iidIUnknownGUID  = com.MustGUID("00000000-0000-0000-c000-000000000046")
-	formatHDROP      = win.FORMATETC{Format: win.CF_HDROP, Aspect: win.DVASPECT_CONTENT, Index: -1, Tymed: win.TYMED_HGLOBAL}
-	dropTargetsAlive = map[win.HWND]*dropTarget{} // keeps the objects OLE points to reachable
-)
-
-func init() {
-	dropVtbl = [7]uintptr{
-		syscall.NewCallback(dtQueryInterface),
-		syscall.NewCallback(dtAddRef),
-		syscall.NewCallback(dtRelease),
-		syscall.NewCallback(dtDragEnter),
-		syscall.NewCallback(dtDragOver),
-		syscall.NewCallback(dtDragLeave),
-		syscall.NewCallback(dtDrop),
-	}
+func (d windowDrop) Over(pt win.POINT) uint32 {
+	x, y := d.w.dropPoint(pt)
+	return d.w.fileDragOver(x, y)
 }
 
-func (w *Window) registerDrop() {
-	t := &dropTarget{vtbl: &dropVtbl, hwnd: w.hwnd}
-	if win.RegisterDragDrop(w.hwnd, unsafe.Pointer(t)) >= 0 {
-		dropTargetsAlive[w.hwnd] = t
-	}
+func (d windowDrop) Leave() { d.w.fileDragLeave() }
+
+func (d windowDrop) Drop(paths []string, pt win.POINT) uint32 {
+	x, y := d.w.dropPoint(pt)
+	return d.w.fileDrop(paths, x, y)
 }
 
-func (w *Window) revokeDrop() {
-	if dropTargetsAlive[w.hwnd] != nil {
-		win.RevokeDragDrop(w.hwnd)
-		delete(dropTargetsAlive, w.hwnd)
-	}
-}
-
-func dropWindow(this uintptr) *Window {
-	return windows[(*dropTarget)(com.Ptr(this)).hwnd]
-}
-
-func dtQueryInterface(this, riid, out uintptr) uintptr {
-	iid := *(*com.GUID)(com.Ptr(riid))
-	if iid == iidIUnknownGUID || iid == iidIDropTarget {
-		*(*uintptr)(com.Ptr(out)) = this
-		return 0
-	}
-	*(*uintptr)(com.Ptr(out)) = 0
-	return 0x80004002 // E_NOINTERFACE
-}
-
-func dtAddRef(this uintptr) uintptr  { return 1 }
-func dtRelease(this uintptr) uintptr { return 1 }
-
-// droppedPaths reads CF_HDROP from an IDataObject.
-func droppedPaths(dataObj uintptr) []string {
-	if dataObj == 0 {
-		return nil
-	}
-	f := formatHDROP
-	var m win.STGMEDIUM
-	if com.HR(com.Ptr(dataObj), 3, uintptr(unsafe.Pointer(&f)), uintptr(unsafe.Pointer(&m))).Failed() {
-		return nil
-	}
-	defer win.ReleaseStgMedium(&m)
-	return win.DropFiles(m.Handle)
-}
-
-func setEffect(p uintptr, e uint32) { *(*uint32)(com.Ptr(p)) = e }
-
-func dtDragEnter(this, dataObj, keys, pt, effect uintptr) uintptr {
-	w := dropWindow(this)
-	if w == nil {
-		setEffect(effect, win.DROPEFFECT_NONE)
-		return 0
-	}
-	x, y := w.dropPoint(pt)
-	setEffect(effect, w.fileDragEnter(droppedPaths(dataObj), x, y))
-	return 0
-}
-
-func dtDragOver(this, keys, pt, effect uintptr) uintptr {
-	w := dropWindow(this)
-	if w == nil {
-		setEffect(effect, win.DROPEFFECT_NONE)
-		return 0
-	}
-	x, y := w.dropPoint(pt)
-	setEffect(effect, w.fileDragOver(x, y))
-	return 0
-}
-
-func dtDragLeave(this uintptr) uintptr {
-	if w := dropWindow(this); w != nil {
-		w.fileDragLeave()
-	}
-	return 0
-}
-
-func dtDrop(this, dataObj, keys, pt, effect uintptr) uintptr {
-	w := dropWindow(this)
-	if w == nil {
-		setEffect(effect, win.DROPEFFECT_NONE)
-		return 0
-	}
-	x, y := w.dropPoint(pt)
-	setEffect(effect, w.fileDrop(droppedPaths(dataObj), x, y))
-	return 0
+// dropPoint converts a point in screen pixels to logical window coordinates.
+func (w *Window) dropPoint(p win.POINT) (float32, float32) {
+	win.ScreenToClient(w.hwnd, &p)
+	return float32(p.X) / w.scale, float32(p.Y) / w.scale
 }
 
 func (w *Window) fileDragEnter(paths []string, x, y float32) uint32 {
@@ -228,14 +141,6 @@ func (w *Window) fileDrop(paths []string, x, y float32) uint32 {
 	}
 	target.onFileDrop(FileDrop{Paths: paths, X: x, Y: y})
 	return win.DROPEFFECT_COPY
-}
-
-// dropPoint converts a POINTL passed by value (x in the low half, y in the
-// high half) from screen pixels to logical window coordinates.
-func (w *Window) dropPoint(pt uintptr) (float32, float32) {
-	p := win.POINT{X: int32(uint32(pt)), Y: int32(uint32(pt >> 32))}
-	win.ScreenToClient(w.hwnd, &p)
-	return float32(p.X) / w.scale, float32(p.Y) / w.scale
 }
 
 func (w *Window) dropTargetAt(x, y float32) *El {

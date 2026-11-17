@@ -203,7 +203,8 @@ func NewTextureImage(tex d3d.Texture2D, opts TextureImageOptions) (*Image, error
 
 func newGPUImage(t *render.Texture, gen uint64, premul bool) *Image {
 	g := &gpuImage{tex: t, gen: gen, premul: premul}
-	img := &Image{id: imageSeq.Add(1), data: imaging.Bitmap{W: t.Width, H: t.Height}, gpu: g}
+	img := wrapImage(&imaging.Bitmap{W: t.Width, H: t.Height})
+	img.gpu = g
 	g.cleanup = runtime.AddCleanup(img, func(g *gpuImage) { g.release() }, g)
 	return img
 }
@@ -302,18 +303,18 @@ func (i *Image) Lost() bool {
 // its natural size.
 func (i *Image) NRGBA() (*image.NRGBA, error) {
 	if i.gpu == nil {
-		if i.lazy != nil {
-			full, err := i.lazy.decodeFull()
+		if i.core().Lazy != nil {
+			full, err := i.core().Lazy.DecodeFull()
 			if err != nil {
 				return nil, err
 			}
 			// The full decode is not kept, so convert its pixels in place.
-			px := full.data.Pixels
+			px := full.Data.Pixels
 			imaging.UnpremultiplyRGBA(px, px)
-			return &image.NRGBA{Pix: px, Stride: full.data.W * 4, Rect: image.Rect(0, 0, full.data.W, full.data.H)}, nil
+			return &image.NRGBA{Pix: px, Stride: full.Data.W * 4, Rect: image.Rect(0, 0, full.Data.W, full.Data.H)}, nil
 		}
-		img := image.NewNRGBA(image.Rect(0, 0, i.data.W, i.data.H))
-		imaging.UnpremultiplyRGBA(img.Pix, i.data.Pixels)
+		img := image.NewNRGBA(image.Rect(0, 0, i.core().Data.W, i.core().Data.H))
+		imaging.UnpremultiplyRGBA(img.Pix, i.core().Data.Pixels)
 		return img, nil
 	}
 	var out *image.NRGBA
