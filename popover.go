@@ -1,3 +1,5 @@
+//go:build windows
+
 package fairy
 
 import "github.com/myparsleycat/fairy/internal/geom"
