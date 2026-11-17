@@ -1,15 +1,15 @@
+//go:build windows
+
 package fairy
 
 import (
 	"time"
-	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/pancursor"
 	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/scroll"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -258,11 +258,11 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	} else {
 		ev.DY = -delta
 	}
-	lines := uint32(3)
+	var lines uint32
 	if w.scriptWheelLines != nil {
 		lines = *w.scriptWheelLines
 	} else {
-		win.SystemParametersInfo(win.SPI_GETWHEELSCROLLLINES, 0, unsafe.Pointer(&lines))
+		lines = wheelScrollLines()
 	}
 	// step is how far a notch scrolls a view of the given size. A setting of
 	// 0 lines scrolls nothing.
@@ -396,7 +396,11 @@ func (w *Window) autoScrollRelease() bool {
 	// Capture may have suppressed the leave notification; the next move
 	// re-arms it so that leaving the window is noticed. A headless window is
 	// never under the cursor and must not track it.
-	w.tracking = w.hl != nil
+	if w.hl != nil {
+		w.ignoreMouseLeave()
+	} else {
+		w.rearmMouseLeave()
+	}
 	if a.moved {
 		w.stopAutoScroll()
 	}
@@ -420,9 +424,7 @@ func (w *Window) stepAutoScroll(dt float32) {
 	if outside {
 		// No moves arrive outside the window without capture; the pointer is
 		// read here and polled while the view stands still.
-		p := win.GetCursorPos()
-		win.ScreenToClient(w.hwnd, &p)
-		x, y = float32(p.X)/w.scale, float32(p.Y)/w.scale
+		x, y = w.pointerPos()
 	}
 	var vx, vy float32
 	if a.canX {
@@ -455,14 +457,4 @@ func (w *Window) panCursor() pancursor.Kind {
 		vy = scroll.AutoSpeed(w.mouseY - a.y)
 	}
 	return pancursor.At(vx, vy, a.canX, a.canY)
-}
-
-func (w *Window) setPanCursor() {
-	a := w.autoScroll
-	a.cursor = w.panCursor()
-	size := int(win.GetSystemMetricsForDpi(win.SM_CXCURSOR, uint32(w.scale*96+0.5)))
-	if size <= 0 {
-		size = 32
-	}
-	win.SetCursor(pancursor.Handle(a.cursor, size))
 }

@@ -1,13 +1,13 @@
+//go:build windows
+
 package fairy
 
 import (
 	"log"
 	"time"
 
-	"github.com/myparsleycat/fairy/d3d"
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/render"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 const stateTTL = 3 // builds an element's state survives without being built
@@ -22,7 +22,7 @@ func (w *Window) renderFrame() {
 	}
 	// A minimized window draws nothing. Restoring it sends WM_PAINT, which
 	// resumes any animation.
-	if w.hl == nil && win.IsIconic(w.hwnd) {
+	if w.hl == nil && w.IsMinimized() {
 		return
 	}
 	// An offscreen target whose resize failed keeps its old size; a headless
@@ -35,7 +35,7 @@ func (w *Window) renderFrame() {
 	if w.hl != nil {
 		w.hl.drawnAt = start
 	}
-	ticks := win.Ticks()
+	ticks := monoTicks()
 	dt := w.frameDT(start)
 	w.lastFrame = start
 	w.ft = frameprof.Times{}
@@ -80,19 +80,19 @@ func (w *Window) renderFrame() {
 		st := w.r.Stats()
 		w.ft.Record, w.ft.Present = st.Record, st.Present
 		w.ft.Log(frameprof.Frame{
-			N: w.frame, Total: win.Ticks() - ticks, Prims: len(w.scene.Prims), Batches: st.Batches, Hits: len(w.hits),
+			N: w.frame, Total: monoTicks() - ticks, Prims: len(w.scene.Prims), Batches: st.Batches, Hits: len(w.hits),
 			Animating: w.animating, Width: w.width, Height: w.height,
 		}, w.r)
 	}
 	w.frame++
 	switch {
-	case w.hl == nil && !win.IsWindowVisible(w.hwnd):
+	case w.hl == nil && !w.IsVisible():
 		// Hidden windows wait for the WM_PAINT that showing them sends.
 	case w.animating && occluded:
 		w.setTimer(timerAnim, hiddenFrameMs)
 	case w.animating && w.sizeMove:
 		w.setTimer(timerAnim, sizeMoveFrameMs)
-	case w.animating && w.hl == nil && w.r != nil && !w.r.Presented() && !win.DwmFlush():
+	case w.animating && w.hl == nil && w.r != nil && !w.r.Presented() && !waitForCompositor():
 		// A frame that changed nothing did not wait for the display in
 		// Present, so it waits for the next composition instead.
 		w.setTimer(timerAnim, sizeMoveFrameMs)
@@ -168,34 +168,6 @@ func (w *Window) frameAt(t time.Time) {
 	if w.wakeAt.IsZero() || t.Before(w.wakeAt) {
 		w.wakeAt = t
 	}
-}
-
-func (w *Window) newRenderer() (r *render.Renderer, err error) {
-	defer func() {
-		if err != nil {
-			return
-		}
-		if frameprof.GPU {
-			r.SetGPUTiming(true)
-		}
-		frameprof.SetDamageTracking(r)
-	}()
-	if w.hl != nil {
-		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
-	}
-	composition := w.opts.DynamicBackdrop || w.backdrop != BackdropNone
-	r, err = render.New(uintptr(w.hwnd), w.width, w.height, composition)
-	if err == nil || !composition {
-		return r, err
-	}
-
-	log.Printf("fairy: window backdrop off: %v", err)
-	w.opts.DynamicBackdrop = false
-	if w.backdrop != BackdropNone {
-		w.applyBackdrop(BackdropNone)
-		w.backdrop = BackdropNone
-	}
-	return render.New(uintptr(w.hwnd), w.width, w.height, false)
 }
 
 // recreateRenderer replaces the renderer after the GPU device was lost. When a

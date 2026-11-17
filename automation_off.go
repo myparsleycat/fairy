@@ -1,4 +1,4 @@
-//go:build !fairydebug
+//go:build windows && !fairydebug
 
 package fairy
 

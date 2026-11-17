@@ -1,16 +1,16 @@
+//go:build windows
+
 package fairy
 
 import (
 	"image"
 	"log"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/imagecache"
 	"github.com/myparsleycat/fairy/internal/imaging"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 type Fit uint8
@@ -224,18 +224,6 @@ func (c *ImageCache) Blurred(src string, maxW, maxH int, sigma float32, read fun
 func (c *ImageCache) BlurredErr(src string, maxW, maxH int, sigma float32) error {
 	return c.c.BlurredErr(src, maxW, maxH, sigma)
 }
-
-// memoryPressureInterval is the least time between trims: the notification
-// stays signaled for as long as memory is low.
-const memoryPressureInterval = 30 * time.Second
-
-// watchMemoryPressure trims image memory whenever Windows reports that
-// physical memory is low.
-func watchMemoryPressure() {
-	memoryPressureOnce.Do(func() { win.WatchLowMemory(memoryPressureInterval, trimImageMemory) })
-}
-
-var memoryPressureOnce sync.Once
 
 // trimImageMemory halves every image cache, releases the textures of images
 // no window drew in its last frame and returns freed memory to the system.

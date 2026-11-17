@@ -1,3 +1,5 @@
+//go:build windows
+
 package fairy
 
 import (
@@ -7,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/myparsleycat/fairy/internal/frameprof"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // Memo returns the subtree build made the last time the view was built with
@@ -176,7 +177,7 @@ func (w *Window) withBuildWindow(build func() *El) *El {
 	// another view on the same thread before returning.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	thread := win.GetCurrentThreadId()
+	thread := currentThreadID()
 	viewBuilds.Lock()
 	prev := viewBuilds.windows[thread]
 	viewBuilds.windows[thread] = w
@@ -197,7 +198,7 @@ func (w *Window) withBuildWindow(build func() *El) *El {
 // View. Components keep it for handlers that act on the window, such as
 // scrolling a row into view.
 func CurrentWindow() *Window {
-	thread := win.GetCurrentThreadId()
+	thread := currentThreadID()
 	viewBuilds.RLock()
 	w := viewBuilds.windows[thread]
 	viewBuilds.RUnlock()
@@ -247,14 +248,7 @@ func (l *Live[T]) Set(v T) {
 			// Its handle may belong to another window now.
 			continue
 		}
-		switch h := w.hwnd; {
-		case h != 0 && w.opts.Headless:
-			// A message-only window gets no WM_PAINT; the window paces
-			// its own frames on the UI thread.
-			win.PostMessage(h, msgInvalidate, 0, 0)
-		case h != 0:
-			win.InvalidateRect(h, false)
-		}
+		w.redrawAsync()
 	}
 }
 

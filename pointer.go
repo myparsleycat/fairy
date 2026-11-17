@@ -1,15 +1,15 @@
+//go:build windows
+
 package fairy
 
 import (
 	"slices"
 	"time"
-	"unsafe"
 
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/geom"
 	"github.com/myparsleycat/fairy/internal/gesture"
 	"github.com/myparsleycat/fairy/internal/scroll"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // hitTest returns the topmost element under (x, y).
@@ -116,11 +116,7 @@ func (w *Window) coveredFrom(start int, x, y float32) bool {
 
 func (w *Window) onMouseMove(x, y float32) {
 	w.mouseX, w.mouseY, w.mouseIn = x, y, true
-	if !w.tracking && !w.ncHover {
-		t := win.TRACKMOUSEEVENT{Size: uint32(unsafe.Sizeof(win.TRACKMOUSEEVENT{})), Flags: win.TME_LEAVE, Hwnd: w.hwnd}
-		win.TrackMouseEvent(&t)
-		w.tracking = true
-	}
+	w.trackMouseLeave()
 	if w.autoScroll != nil {
 		w.autoScrollMove(x, y)
 		return
@@ -370,7 +366,7 @@ func (w *Window) onButtonDown(x, y float32, button int) {
 	if w.touchPress {
 		near = gesture.Slop
 	}
-	if now-w.lastClickAt <= win.GetDoubleClickTime() && dx*dx+dy*dy <= near*near {
+	if now-w.lastClickAt <= doubleClickMs() && dx*dx+dy*dy <= near*near {
 		w.clickCount++
 	} else {
 		w.clickCount = 1

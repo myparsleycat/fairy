@@ -1,4 +1,4 @@
-//go:build fairydebug
+//go:build windows && fairydebug
 
 package fairy
 
@@ -14,7 +14,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/script"
 	"github.com/myparsleycat/fairy/internal/scroll"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -68,7 +67,7 @@ func (w *Window) runScriptFromEnv() {
 		w.setClock(d)
 	}
 	w.scripted = true
-	w.tracking = true
+	w.ignoreMouseLeave()
 	go func() {
 		sc := bufio.NewScanner(strings.NewReader(string(data)))
 		for sc.Scan() {
@@ -224,15 +223,7 @@ func (w *Window) scriptStep(line string) error {
 	case "dragleave":
 		w.fileDragLeave()
 	case "resize":
-		r := win.GetWindowRect(w.hwnd)
-		cw, ch := int32(num(1)*w.scale), int32(num(2)*w.scale)
-		if w.opts.Frameless {
-			// The visible frameless window is its client area; the invisible
-			// resize borders are not part of the requested size.
-			rc := w.outerRect(cw, ch, uint32(w.scale*96))
-			cw, ch = rc.Right-rc.Left, rc.Bottom-rc.Top
-		}
-		win.SetWindowPos(w.hwnd, 0, r.Left, r.Top, cw, ch, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+		w.resizeClient(num(1), num(2))
 	case "maximize":
 		w.ToggleMaximize()
 	case "snap":

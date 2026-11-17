@@ -1,3 +1,5 @@
+//go:build windows
+
 package fairy
 
 import (
@@ -8,7 +10,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/edit"
 	"github.com/myparsleycat/fairy/internal/spell"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 const spellDebounce = 150 * time.Millisecond
@@ -35,7 +36,7 @@ type spellShift struct {
 	src, out []spell.Range
 }
 
-var userLocale = sync.OnceValue(win.UserLocale)
+var userLocale = sync.OnceValue(systemLocale)
 
 func (w *Window) spellLanguage() string {
 	if w.opts.SpellLanguage != "" {

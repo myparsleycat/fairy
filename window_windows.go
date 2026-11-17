@@ -2,14 +2,18 @@ package fairy
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
 
+	"github.com/myparsleycat/fairy/d3d"
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/gesture"
+	"github.com/myparsleycat/fairy/internal/pancursor"
+	"github.com/myparsleycat/fairy/internal/render"
 	"github.com/myparsleycat/fairy/internal/text"
 	"github.com/myparsleycat/fairy/internal/uia"
 	"github.com/myparsleycat/fairy/internal/win"
@@ -838,4 +842,114 @@ func (w *Window) wantedCursor() Cursor {
 		c = w.press.cursor
 	}
 	return c
+}
+
+// trackMouseLeave arms the WM_MOUSELEAVE that reports the pointer leaving
+// the window.
+func (w *Window) trackMouseLeave() {
+	if w.tracking || w.ncHover {
+		return
+	}
+	t := win.TRACKMOUSEEVENT{Size: uint32(unsafe.Sizeof(win.TRACKMOUSEEVENT{})), Flags: win.TME_LEAVE, Hwnd: w.hwnd}
+	win.TrackMouseEvent(&t)
+	w.tracking = true
+}
+
+// ignoreMouseLeave stops arming trackMouseLeave, for windows the pointer is
+// never over: scripted and headless ones.
+func (w *Window) ignoreMouseLeave() { w.tracking = true }
+
+// rearmMouseLeave makes the next move arm trackMouseLeave again.
+func (w *Window) rearmMouseLeave() { w.tracking = false }
+
+// pointerPos returns where the pointer is now in window coordinates, also
+// outside the window.
+func (w *Window) pointerPos() (x, y float32) {
+	p := win.GetCursorPos()
+	win.ScreenToClient(w.hwnd, &p)
+	return float32(p.X) / w.scale, float32(p.Y) / w.scale
+}
+
+func (w *Window) setPanCursor() {
+	a := w.autoScroll
+	a.cursor = w.panCursor()
+	size := int(win.GetSystemMetricsForDpi(win.SM_CXCURSOR, uint32(w.scale*96+0.5)))
+	if size <= 0 {
+		size = 32
+	}
+	win.SetCursor(pancursor.Handle(a.cursor, size))
+}
+
+// redrawAsync repaints the window without rebuilding it. It is safe from
+// any goroutine.
+func (w *Window) redrawAsync() {
+	switch h := w.hwnd; {
+	case h != 0 && w.opts.Headless:
+		// A message-only window gets no WM_PAINT; the window paces
+		// its own frames on the UI thread.
+		win.PostMessage(h, msgInvalidate, 0, 0)
+	case h != 0:
+		win.InvalidateRect(h, false)
+	}
+}
+
+// resizeClient resizes the window so its client area is width x height
+// logical pixels, keeping its position.
+func (w *Window) resizeClient(width, height float32) {
+	r := win.GetWindowRect(w.hwnd)
+	cw, ch := int32(width*w.scale), int32(height*w.scale)
+	if w.opts.Frameless {
+		// The visible frameless window is its client area; the invisible
+		// resize borders are not part of the requested size.
+		rc := w.outerRect(cw, ch, uint32(w.scale*96))
+		cw, ch = rc.Right-rc.Left, rc.Bottom-rc.Top
+	}
+	win.SetWindowPos(w.hwnd, 0, r.Left, r.Top, cw, ch, win.SWP_NOZORDER|win.SWP_NOACTIVATE)
+}
+
+func (w *Window) newRenderer() (r *render.Renderer, err error) {
+	defer func() {
+		if err != nil {
+			return
+		}
+		if frameprof.GPU {
+			r.SetGPUTiming(true)
+		}
+		frameprof.SetDamageTracking(r)
+	}()
+	if w.hl != nil {
+		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
+	}
+	composition := w.opts.DynamicBackdrop || w.backdrop != BackdropNone
+	r, err = render.New(uintptr(w.hwnd), w.width, w.height, composition)
+	if err == nil || !composition {
+		return r, err
+	}
+
+	log.Printf("fairy: window backdrop off: %v", err)
+	w.opts.DynamicBackdrop = false
+	if w.backdrop != BackdropNone {
+		w.applyBackdrop(BackdropNone)
+		w.backdrop = BackdropNone
+	}
+	return render.New(uintptr(w.hwnd), w.width, w.height, false)
+}
+
+// onChar handles a WM_CHAR, joining the halves of a surrogate pair.
+func (w *Window) onChar(c uint16) {
+	r := rune(c)
+	high := w.charHigh
+	w.charHigh = 0
+	switch {
+	case c >= 0xD800 && c < 0xDC00:
+		w.charHigh = c
+		return
+	case c >= 0xDC00 && c < 0xE000:
+		// A low surrogate without its high half is dropped.
+		if high == 0 {
+			return
+		}
+		r = utf16.DecodeRune(rune(high), r)
+	}
+	w.onTypedRune(r)
 }
