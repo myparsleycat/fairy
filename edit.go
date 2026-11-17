@@ -1,3 +1,5 @@
+//go:build windows
+
 package fairy
 
 import (
@@ -5,7 +7,6 @@ import (
 
 	"github.com/myparsleycat/fairy/internal/edit"
 	"github.com/myparsleycat/fairy/internal/text"
-	"github.com/myparsleycat/fairy/internal/win"
 	"github.com/myparsleycat/fairy/keyboard"
 )
 
@@ -330,14 +331,14 @@ func (w *Window) moveCaretTo(e *El, x, y float32, extend bool) {
 }
 
 func (w *Window) updateIME() {
-	if w.hwnd == 0 {
+	if !w.hasNativeWindow() {
 		return
 	}
 	e := w.focusedEl()
 	editing := e != nil && e.kind == kindInput
 	on := w.takesIME(e) && w.hl == nil
 	if on != w.imeOn {
-		win.ImmEnable(w.hwnd, on)
+		w.enableIME(on)
 		w.imeOn = on
 		if !on && editing {
 			w.editOf(e).comp = ""
@@ -359,53 +360,11 @@ func (w *Window) imeInput() (*El, *editState) {
 	return e, w.editOf(e)
 }
 
-func (w *Window) onIMEComposition(lp uintptr) {
-	e, st := w.imeInput()
-	if e == nil {
-		return
-	}
-	himc := win.ImmGetContext(w.hwnd)
-	if himc == 0 {
-		return
-	}
-	defer win.ImmReleaseContext(w.hwnd, himc)
-	if lp&win.GCS_RESULTSTR != 0 {
-		res := win.ImmGetCompositionString(himc, win.GCS_RESULTSTR)
-		st.comp = ""
-		if res != "" {
-			w.typeText(e, res)
-		}
-	}
-	if lp&win.GCS_COMPSTR != 0 {
-		st.comp = win.ImmGetCompositionString(himc, win.GCS_COMPSTR)
-		cur := win.ImmGetCompositionCursor(himc)
-		st.compCursor = edit.UTF16ToByteOffset(st.comp, cur)
-	} else if lp&win.GCS_RESULTSTR == 0 {
-		st.comp = ""
-	}
-	w.resetBlink()
-	w.updateIMEPosition()
-	w.invalidate()
-}
-
 func (w *Window) onIMEEnd() {
 	if _, st := w.imeInput(); st != nil && st.comp != "" {
 		st.comp = ""
 		w.invalidate()
 	}
-}
-
-func (w *Window) commitComposition() {
-	_, st := w.imeInput()
-	if st == nil || st.comp == "" {
-		return
-	}
-	himc := win.ImmGetContext(w.hwnd)
-	if himc == 0 {
-		return
-	}
-	win.ImmNotifyIME(himc, win.NI_COMPOSITIONSTR, win.CPS_COMPLETE, 0)
-	win.ImmReleaseContext(w.hwnd, himc)
 }
 
 // commitCompositionOutside commits the focused input's composition when a
@@ -421,24 +380,4 @@ func (w *Window) commitCompositionOutside(x, y float32) {
 		}
 	}
 	w.commitComposition()
-}
-
-func (w *Window) updateIMEPosition() {
-	_, st := w.imeInput()
-	if st == nil || st.geom == nil {
-		return
-	}
-	himc := win.ImmGetContext(w.hwnd)
-	if himc == 0 {
-		return
-	}
-	defer win.ImmReleaseContext(w.hwnd, himc)
-	c := st.geom.caret
-	x, y, h := int32(c.X*w.scale), int32(c.Y*w.scale), int32(c.H*w.scale)
-	win.ImmSetCompositionWindow(himc, &win.COMPOSITIONFORM{Style: win.CFS_POINT, CurrPos: win.POINT{X: x, Y: y}})
-	win.ImmSetCandidateWindow(himc, &win.CANDIDATEFORM{
-		Style:   win.CFS_EXCLUDE,
-		CurrPos: win.POINT{X: x, Y: y + h},
-		Area:    win.RECT{Left: x, Top: y, Right: x + 1, Bottom: y + h},
-	})
 }
