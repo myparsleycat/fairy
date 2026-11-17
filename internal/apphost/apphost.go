@@ -6,21 +6,12 @@
 // or from package init before Main starts, so they need no lock.
 package apphost
 
-import (
-	"errors"
-
-	"github.com/myparsleycat/fairy/internal/win"
-)
-
-// MsgTray is the callback message of tray icons.
-const MsgTray = win.WM_APP + 11
+import "errors"
 
 // ErrUIUnavailable is returned when no UI loop runs a call.
 var ErrUIUnavailable = errors.New("fairy: UI thread unavailable")
 
 var (
-	// HWND returns the app window, or 0 outside Main.
-	HWND = func() win.HWND { return 0 }
 	// OnUIThread reports whether the caller runs on the UI thread.
 	OnUIThread = func() bool { return false }
 	// Running reports whether Main runs.
