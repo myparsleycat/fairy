@@ -15,7 +15,6 @@ import (
 	"weak"
 
 	"github.com/myparsleycat/fairy/internal/imaging"
-	"github.com/myparsleycat/fairy/internal/win"
 )
 
 // Cache decodes images on background goroutines and keeps the decoded
@@ -306,7 +305,7 @@ func New(maxBytes int64, workers int) *Cache {
 		latest:   map[string]imageKey{},
 		reads:    newSlotQueue(2 * workers),
 		decodes:  slotQueue{limit: workers},
-		wic:      imaging.DecodeWIC,
+		wic:      nativeDecoder(),
 		waiting:  map[*Pending]*imageWorkWait{},
 	}
 	cachesMu.Lock()
@@ -325,7 +324,7 @@ func (c *Cache) SetNativeDecoders(on bool) {
 	defer c.mu.Unlock()
 	c.wic = nil
 	if on {
-		c.wic = imaging.DecodeWIC
+		c.wic = nativeDecoder()
 	}
 }
 
@@ -334,7 +333,7 @@ func (c *Cache) SetNativeDecoders(on bool) {
 func (c *Cache) resolveBudget() {
 	if c.auto {
 		c.auto = false
-		c.maxBytes = autoImageBudget(win.ScreenPixels())
+		c.maxBytes = autoImageBudget(screenPixels())
 	}
 }
 

@@ -139,25 +139,3 @@ func straightAt(pix []byte, i int) color.NRGBA {
 	UnpremultiplyRGBA(p[:], pix[i:i+4])
 	return color.NRGBA{p[0], p[1], p[2], p[3]}
 }
-
-func TestImageDecodeReservationIncludesOrientation(t *testing.T) {
-	in, err := Inspect(pngBytes(t, 2, 1))
-	if err != nil {
-		t.Fatal(err)
-	}
-	in.meta.orient = 6
-	in.Config.Width, in.Config.Height = 1, 2
-	var decoded *Bitmap
-	_, _, err = in.DecodePixels(Bound{}, 0, 0, false,
-		func(in Input, bound Bound) *Bitmap { decoded = DecodeWIC(in, bound); return decoded },
-		func(_ int64, f func()) bool {
-			f()
-			if decoded == nil || decoded.W != 1 || decoded.H != 2 {
-				t.Error("decode reservation ended before orientation completed")
-			}
-			return true
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-}

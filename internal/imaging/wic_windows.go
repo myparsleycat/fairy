@@ -52,6 +52,9 @@ func wicOpaque(f com.GUID) bool {
 // pngEnd is the IEND chunk, which a complete PNG ends with.
 var pngEnd = []byte("\x00\x00\x00\x00IEND\xaeB`\x82")
 
+// wicAccepts reports whether WIC decodes in's format.
+func wicAccepts(in Input) bool { return wicDecoderClass(in) != nil }
+
 // wicDecoderClass returns the built-in WIC decoder for still JPEG, PNG and
 // AVIF images. Images that need a guard the Go decoders give, or a color
 // conversion WIC does differently, are left to Go: truncated files, which
