@@ -82,10 +82,12 @@ func Menubar(id string, menus []MenubarMenu) *fairy.El {
 			})
 		if expanded {
 			trigger.Fill(t.Muted)
-			o := menuOpts{bar: true, fromEnd: st.fromEnd, step: step}
+			key := "kit.menubar:" + id + ":" + strconv.Itoa(i)
+			o := menuOpts{bar: true, fromEnd: st.fromEnd, step: step, key: key}
+			rows := menuItems(&st.popupState, 0, m.Items(), close, o)
 			// One MatchID for all the menus: the menu being replaced goes at
 			// once instead of running its exit, as Base UI switches menus.
-			panel := popupPanel(false, menuItems(&st.popupState, 0, m.Items(), close, o)...).MinW(144).
+			panel := popupPanel(key, false, nil, rows...).MinW(144).
 				Role(fairy.RoleMenu).FocusGroup().MatchID("kit.menubar:" + id).AnimateLayout(motion.Instant)
 			if st.instant {
 				panel.Enter(fairy.Transition{Opacity: 1, Motion: motion.Instant})

@@ -65,14 +65,9 @@ type popupState struct {
 	hovered   string // the Select row whose RowAction shows
 	byPointer bool   // the pointer, not keys or typing, last moved highlight
 	chip      string // the MultiCombobox chip under the pointer
-	// hiddenAbove and hiddenBelow report a Select list scrolled away from
-	// its top and its bottom, for its scroll arrows. arrow is the arrow under
-	// the pointer, -1 up or +1 down, and arrowGen tells its scrolling timer
-	// when it has been replaced. builtAt is when the open list was last
-	// built, so the timer stops once it is not.
-	hiddenAbove, hiddenBelow bool
-	arrow, arrowGen          int
-	builtAt                  time.Time
+	// reveal scrolls the highlighted row of a Combobox list into view when
+	// the list is next built, as after the query changed.
+	reveal bool
 	// openSent and highlightSent are what OnOpenChange and OnHighlight
 	// last received.
 	openSent      bool
@@ -114,11 +109,15 @@ func popupSurface(e *fairy.El, large bool) *fairy.El {
 	return shadowMd(e)
 }
 
-// popupPanel is the scrolling list of a menu or select. It is as tall as its
-// rows; the popover cuts it to the room beside its anchor.
-func popupPanel(large bool, children ...*fairy.El) *fairy.El {
-	return popupSurface(fairy.Col(children...).Pad(4).MinW(128).ScrollY(), large)
+// popupPanel is the scrolling list of a menu or select, named key in the
+// window. It is as tall as its rows; the popover cuts it to the room beside
+// its anchor. It has scroll arrows in place of a scroll bar (withScrollArrows).
+func popupPanel(key string, large bool, onArrow func() bool, children ...*fairy.El) *fairy.El {
+	list := fairy.Col(children...).Pad(4).MinW(128).ScrollY().ScrollBarStyle(popupScrollBar)
+	return popupSurface(withScrollArrows(list, key, onArrow), large)
 }
+
+var popupScrollBar = fairy.ScrollBarStyle{Hidden: true}
 
 // trackWidth records the width of trigger in st, for a popup at least as wide.
 func trackWidth(st *popupState, trigger *fairy.El) {
@@ -235,7 +234,7 @@ func listPointer(st *popupState, e *fairy.El, i int, onHover func(bool)) *fairy.
 }
 
 func menuSeparator() *fairy.El {
-	return fairy.Box().H(1).Shrink(0).Fill(current.Border).MarginEdges(4, -4, 4, -4)
+	return fairy.Box().H(1).Shrink(0).Fill(current.Border).MarginEdges(4, -4, 4, -4).Role(fairy.RoleSeparator)
 }
 
 // menuOpts is how the menus of a Menubar differ from other menus.
@@ -249,6 +248,8 @@ type menuOpts struct {
 	context bool
 	// step opens the menu d places along the bar, for Left and Right.
 	step func(d int)
+	// key names the menu in the window, for the scroll arrows of its submenus.
+	key string
 }
 
 // barStep returns which way Left or Right on a row of a Menubar's menu at
@@ -374,7 +375,8 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 				case o.context:
 					minW = 144
 				}
-				panel := popupPanel(true, menuItems(st, depth+1, sub, close, o)...).MinW(minW).Role(fairy.RoleMenu).FocusGroup().
+				panel := popupPanel(o.key+":"+key, true, nil, menuItems(st, depth+1, sub, close, o)...).
+					MinW(minW).Role(fairy.RoleMenu).FocusGroup().
 					OnKey(func(k keyboard.KeyEvent) bool {
 						if k.Is(keyboard.KeyLeft, 0) {
 							closeBelow()
@@ -445,7 +447,9 @@ func DropdownMenuFunc(id string, trigger *fairy.El, items func() []MenuItem, opt
 	trigger.OnClick(func() { st.open, st.sub = !st.open, st.sub[:0] }).Expanded(st.open)
 	trackWidth(st, trigger)
 	if st.open {
-		panel := sizeMenu(popupPanel(false, menuItems(st, 0, items(), close, menuOpts{})...).
+		key := "kit.menu:" + id
+		rows := menuItems(st, 0, items(), close, menuOpts{key: key})
+		panel := sizeMenu(popupPanel(key, false, nil, rows...).
 			MinW(max(128, st.anchorW)).Role(fairy.RoleMenu).FocusGroup(), o)
 		pop := fairy.PopoverOptions{OnDismiss: close}
 		if o.alignEnd {
@@ -485,8 +489,9 @@ func ContextMenu(id string, target *fairy.El, items func() []MenuItem, opts ...O
 		st.open, st.x, st.y, st.sub = true, p.LocalX, p.LocalY, st.sub[:0]
 	})
 	if st.open {
-		panel := popupPanel(false, menuItems(st, 0, items(), close, menuOpts{context: true})...).MinW(144).
-			Role(fairy.RoleMenu).FocusGroup()
+		key := "kit.ctx:" + id
+		rows := menuItems(st, 0, items(), close, menuOpts{context: true, key: key})
+		panel := popupPanel(key, false, nil, rows...).MinW(144).Role(fairy.RoleMenu).FocusGroup()
 		target.Popover(sizeMenu(panel, o),
 			fairy.PopoverOptions{
 				AtPoint: true, X: st.x, Y: st.y, Side: fairy.SideRight, Gap: 1,
@@ -540,36 +545,49 @@ func itemLabel(items []Item, value string) (string, bool) {
 
 // listKeys handles arrow keys, Enter and Escape for an open popup list of n
 // enabled entries; open opens the list and pick receives the highlighted index.
-func listKeys(st *popupState, n int, open func(), pick func(int)) func(keyboard.KeyEvent) bool {
+// A key that moves the highlight, or opens the list on a row, scrolls that
+// row into view; rowAt returns the key of enabled entry i's row, unique in the
+// window.
+func listKeys(st *popupState, n int, open func(), pick func(int), rowAt func(int) string) func(keyboard.KeyEvent) bool {
+	window := fairy.CurrentWindow()
 	return func(k keyboard.KeyEvent) bool {
-		if !st.open {
-			if k.Is(keyboard.KeyDown, 0) || k.Is(keyboard.KeyEnter, 0) || k.Is(keyboard.KeySpace, 0) {
-				open()
-				return true
-			}
-			return false
+		before := st.highlight
+		handled := listKey(st, n, open, pick, k)
+		if handled && st.open && st.highlight != before && st.highlight >= 0 && st.highlight < n && window != nil {
+			window.ScrollIntoView(rowAt(st.highlight))
 		}
-		switch {
-		case k.Is(keyboard.KeyDown, 0):
-			st.highlight = min(st.highlight+1, n-1)
-		case k.Is(keyboard.KeyUp, 0):
-			if st.highlight < 0 {
-				st.highlight = n - 1
-			} else {
-				st.highlight = max(st.highlight-1, 0)
-			}
-		case k.Is(keyboard.KeyEnter, 0):
-			if st.highlight >= 0 && st.highlight < n {
-				pick(st.highlight)
-			}
-		case k.Is(keyboard.KeyEscape, 0):
-			st.open = false
-		default:
-			return false
-		}
-		st.byPointer = false
-		return true
+		return handled
 	}
+}
+
+func listKey(st *popupState, n int, open func(), pick func(int), k keyboard.KeyEvent) bool {
+	if !st.open {
+		if k.Is(keyboard.KeyDown, 0) || k.Is(keyboard.KeyEnter, 0) || k.Is(keyboard.KeySpace, 0) {
+			open()
+			return true
+		}
+		return false
+	}
+	switch {
+	case k.Is(keyboard.KeyDown, 0):
+		st.highlight = min(st.highlight+1, n-1)
+	case k.Is(keyboard.KeyUp, 0):
+		if st.highlight < 0 {
+			st.highlight = n - 1
+		} else {
+			st.highlight = max(st.highlight-1, 0)
+		}
+	case k.Is(keyboard.KeyEnter, 0):
+		if st.highlight >= 0 && st.highlight < n {
+			pick(st.highlight)
+		}
+	case k.Is(keyboard.KeyEscape, 0):
+		st.open = false
+	default:
+		return false
+	}
+	st.byPointer = false
+	return true
 }
 
 // Select picks one of items. id must be unique in the window.
@@ -605,7 +623,6 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 	}
 	open := func() {
 		st.open, st.highlight, st.byPointer = true, 0, false
-		st.hiddenAbove, st.hiddenBelow, st.arrow = false, false, 0
 		for i, it := range enabled {
 			if it.Value == value {
 				st.highlight = i
@@ -613,15 +630,7 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 		}
 	}
 	window := fairy.CurrentWindow()
-	listKey := listKeys(st, len(enabled), open, pick)
-	keys := func(k keyboard.KeyEvent) bool {
-		before := st.highlight
-		handled := listKey(k)
-		if st.open && st.highlight != before && st.highlight >= 0 && window != nil {
-			window.ScrollIntoView(selectRowKey(id, enabled[st.highlight].Value))
-		}
-		return handled
-	}
+	keys := listKeys(st, len(enabled), open, pick, func(i int) string { return rowKey("kit.select:"+id, enabled[i].Value) })
 	trigger.OnClick(func() {
 		if st.open {
 			st.open = false
@@ -634,7 +643,6 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 		var rows []*fairy.El
 		ei := 0
 		t := &current
-		st.builtAt = time.Now()
 		for _, it := range items {
 			if it.Heading {
 				rows = append(rows, fairy.Text(it.Label).FontSize(t.SmallSize).Color(t.MutedForeground).Medium().PadXY(6, 4))
@@ -660,22 +668,10 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 			} else if !it.Disabled {
 				listPointer(st, row, i, nil)
 			}
-			rows = append(rows, row.Key(selectRowKey(id, it.Value)))
+			rows = append(rows, row.Key(rowKey("kit.select:"+id, it.Value)))
 		}
-		// The arrows replace the scroll bar. Rows are clipped out of the
-		// arrows' strips so that the strips show the panel's own surface.
-		var insetTop, insetBottom float32
-		if st.hiddenAbove {
-			rows = append(rows, selectScrollArrow(st, id, true))
-			insetTop = selectArrowH
-		}
-		if st.hiddenBelow {
-			rows = append(rows, selectScrollArrow(st, id, false))
-			insetBottom = selectArrowH
-		}
-		panel := popupPanel(false, rows...).MinW(max(144, st.anchorW)).Role(fairy.RoleList).
-			ScrollBarStyle(fairy.ScrollBarStyle{Hidden: true}).ClipInset(insetTop, 0, insetBottom, 0).
-			OnScrollEdges(func(top, bottom bool) { st.hiddenAbove, st.hiddenBelow = !top, !bottom })
+		panel := popupPanel("kit.select:"+id, false, st.dropHighlight, rows...).
+			MinW(max(144, st.anchorW)).Role(fairy.RoleList)
 		if o.maxHeight > 0 {
 			panel.MaxH(o.maxHeight)
 		}
@@ -711,37 +707,74 @@ func Select(id, value string, items []Item, onChange func(string), opts ...Optio
 }
 
 const (
-	// selectArrowH is the height of a Select list's scroll arrows: a 16 pixel
+	// arrowH is the height of a popup list's scroll arrows: a 16 pixel
 	// chevron with 4 pixels above and below.
-	selectArrowH = 24
-	// selectArrowTick is how often a scroll arrow under the pointer scrolls
-	// its list by an entry, as Base UI's.
-	selectArrowTick = 40 * time.Millisecond
-	// selectArrowStale is how long the timer of a scroll arrow keeps going
-	// without the list being built, as after its window closes.
-	selectArrowStale = 500 * time.Millisecond
+	arrowH = 24
+	// arrowTick is how often a scroll arrow under the pointer scrolls its
+	// list by an entry, as Base UI's.
+	arrowTick = 40 * time.Millisecond
+	// arrowStale is how long the timer of a scroll arrow keeps going without
+	// the list being built, as after its window closes.
+	arrowStale = 500 * time.Millisecond
 )
 
-func selectRowKey(id, value string) string { return "kit.select-row:" + id + ":" + value }
+// rowKey is the key of the row for value in the list named list.
+func rowKey(list, value string) string { return list + ":row:" + value }
 
-func selectArrowKey(id string, up bool) string {
-	if up {
-		return "kit.select-up:" + id
-	}
-	return "kit.select-down:" + id
+// scrollArrows is the state of the scroll arrows of the list named key.
+// hiddenAbove and hiddenBelow report the list scrolled away from its top and
+// its bottom; they last as long as the list's scroll offset, which a popup
+// closed and opened again within a few builds keeps. arrow is the arrow under
+// the pointer, -1 up or +1 down, and gen tells its scrolling timer when it
+// has been replaced. builtAt is when the list was last built, so the timer
+// stops once it is not.
+type scrollArrows struct {
+	key                      string
+	hiddenAbove, hiddenBelow bool
+	arrow, gen               int
+	builtAt                  time.Time
 }
 
-// selectScrollArrow is the arrow laid over the top (up) or bottom edge of a
-// Select's list, shown while there is more of the list that way. While the
-// pointer is on it, the list scrolls an entry at a time and no row is
-// highlighted, as Base UI's Select.ScrollUpArrow and ScrollDownArrow.
-func selectScrollArrow(st *popupState, id string, up bool) *fairy.El {
+// withScrollArrows lays an arrow over the top and the bottom edge of list, a
+// popup's vertical scroll container, while there is more of the list that
+// way. The arrows stand in for the hidden scroll bar: while the pointer is on
+// one, the list scrolls an entry at a time, as Base UI's Select.ScrollUpArrow
+// and ScrollDownArrow. Rows are clipped out of the arrows' strips so that the
+// strips show the panel's own surface. Call it after list has all its rows.
+// key names the list and must be unique in the window. onArrow, if set, runs
+// when the pointer moves on an arrow and returns whether the view changed.
+func withScrollArrows(list *fairy.El, key string, onArrow func() bool) *fairy.El {
+	sa := fairy.Local[scrollArrows](key + ":arrows")
+	sa.key = key
+	sa.builtAt = time.Now()
+	var top, bottom float32
+	if sa.hiddenAbove {
+		list.Child(sa.arrowEl(true, onArrow))
+		top = arrowH
+	}
+	if sa.hiddenBelow {
+		list.Child(sa.arrowEl(false, onArrow))
+		bottom = arrowH
+	}
+	return list.ClipInset(top, 0, bottom, 0).
+		OnScrollEdges(func(atTop, atBottom bool) { sa.hiddenAbove, sa.hiddenBelow = !atTop, !atBottom })
+}
+
+func arrowKey(key string, up bool) string {
+	if up {
+		return key + ":scroll-up"
+	}
+	return key + ":scroll-down"
+}
+
+// arrowEl is the arrow over the list's top (up) or bottom edge.
+func (sa *scrollArrows) arrowEl(up bool, onArrow func() bool) *fairy.El {
 	icon, dir := lucide.ChevronDown, 1
 	if up {
 		icon, dir = lucide.ChevronUp, -1
 	}
-	e := fairy.Box(fairy.Icon(icon).Size(16, 16)).Center().H(selectArrowH).
-		Absolute().Left(0).Right(0).PinToView().Role(fairy.RoleHidden).Key(selectArrowKey(id, up))
+	e := fairy.Box(fairy.Icon(icon).Size(16, 16)).Center().H(arrowH).
+		Absolute().Left(0).Right(0).PinToView().Role(fairy.RoleHidden).Key(arrowKey(sa.key, up))
 	if up {
 		e.Top(0)
 	} else {
@@ -749,40 +782,47 @@ func selectScrollArrow(st *popupState, id string, up bool) *fairy.El {
 	}
 	window := fairy.CurrentWindow()
 	return e.OnPointerMove(func(fairy.PointerEvent) bool {
-		changed := st.highlight != -1 || !st.byPointer
-		st.highlight, st.byPointer = -1, true
-		if st.arrow != dir && window != nil {
-			st.arrow = dir
-			st.arrowGen++
-			st.scrollByArrow(window, id, st.arrowGen)
+		changed := onArrow != nil && onArrow()
+		if sa.arrow != dir && window != nil {
+			sa.arrow = dir
+			sa.gen++
+			sa.scroll(window, sa.gen)
 		}
 		return changed
 	}).OnHover(func(in bool) {
-		if !in && st.arrow == dir {
-			st.arrow = 0
-			st.arrowGen++
+		if !in && sa.arrow == dir {
+			sa.arrow = 0
+			sa.gen++
 		}
 	})
 }
 
-// scrollByArrow scrolls the list an entry toward st.arrow after
-// selectArrowTick, and again after each tick until the arrow with gen is
-// left, the list closes, stops being built or shows its end that way.
-func (st *popupState) scrollByArrow(window *fairy.Window, id string, gen int) {
-	time.AfterFunc(selectArrowTick, func() {
+// scroll scrolls the list an entry toward sa.arrow after arrowTick, and
+// again after each tick until the arrow with gen is left or leaves the view,
+// the list stops being built or shows its end that way.
+func (sa *scrollArrows) scroll(window *fairy.Window, gen int) {
+	time.AfterFunc(arrowTick, func() {
 		fairy.Go(func() {
-			if !st.open || st.arrow == 0 || st.arrowGen != gen {
+			if sa.arrow == 0 || sa.gen != gen {
 				return
 			}
-			up := st.arrow < 0
-			if up && !st.hiddenAbove || !up && !st.hiddenBelow || time.Since(st.builtAt) > selectArrowStale {
-				st.arrow = 0
+			up := sa.arrow < 0
+			if up && !sa.hiddenAbove || !up && !sa.hiddenBelow || time.Since(sa.builtAt) > arrowStale ||
+				!window.ScrollStep(arrowKey(sa.key, up), up) {
+				sa.arrow = 0
 				return
 			}
-			window.ScrollStep(selectArrowKey(id, up), up)
-			st.scrollByArrow(window, id, gen)
+			sa.scroll(window, gen)
 		})
 	})
+}
+
+// dropHighlight clears the highlight of a Select or Combobox list for the
+// pointer, as when it moves off the rows, and reports whether it changed.
+func (st *popupState) dropHighlight() bool {
+	changed := st.highlight != -1 || !st.byPointer
+	st.highlight, st.byPointer = -1, true
+	return changed
 }
 
 func selectRichRow(st *popupState, row *fairy.El, i int, id string, item Item) *fairy.El {
@@ -799,11 +839,7 @@ func selectRichRow(st *popupState, row *fairy.El, i int, id string, item Item) *
 	if i >= 0 {
 		listPointer(st, wrap, i, hover)
 	} else {
-		wrap.OnHover(hover).OnPointerMove(func(fairy.PointerEvent) bool {
-			changed := st.highlight != -1 || !st.byPointer
-			st.highlight, st.byPointer = -1, true
-			return changed
-		})
+		wrap.OnHover(hover).OnPointerMove(func(fairy.PointerEvent) bool { return st.dropHighlight() })
 	}
 	if item.Trailing == nil {
 		return wrap
@@ -871,8 +907,11 @@ func Combobox(id, value string, items []Item, onChange func(string), opts ...Opt
 			onChange(shown[i].Value)
 		}
 	}
-	open := func() { st.open, st.query, st.highlight, st.byPointer = true, "", 0, false }
-	keys := listKeys(st, len(shown), open, pick)
+	open := func() {
+		st.open, st.query, st.highlight, st.byPointer = true, "", 0, false
+	}
+	key := "kit.combo:" + id
+	keys := listKeys(st, len(shown), open, pick, func(i int) string { return rowKey(key, shown[i].Value) })
 	trigger.OnClick(func() {
 		if st.open {
 			st.open, st.query = false, ""
@@ -882,7 +921,7 @@ func Combobox(id, value string, items []Item, onChange func(string), opts ...Opt
 	}).OnKey(keys).Expanded(st.open)
 	trackWidth(st, trigger)
 	if st.open {
-		panel := comboPanel(st, matching, func(v string) bool { return v == value }, pick, nil, o).OnKey(keys)
+		panel := comboPanel(st, key, matching, func(v string) bool { return v == value }, pick, nil, o).OnKey(keys)
 		trigger.Popover(panel, fairy.PopoverOptions{OnDismiss: func() { st.open, st.query = false, "" }})
 	}
 	highlighted := ""
@@ -940,6 +979,7 @@ func containsLower(s, q string) bool {
 // highlight, as Select does.
 func comboPanel(
 	st *popupState,
+	key string,
 	matching []Item,
 	checked func(string) bool,
 	pick func(int),
@@ -947,7 +987,7 @@ func comboPanel(
 	o options,
 ) *fairy.El {
 	t := &current
-	input := fairy.Input(st.query, func(s string) { st.query, st.highlight, st.byPointer = s, 0, false }).
+	input := fairy.Input(st.query, func(s string) { st.query, st.highlight, st.byPointer, st.reveal = s, 0, false, true }).
 		Placeholder(Messages.Search).PlaceholderColor(t.MutedForeground).Grow(1).MinW(0).
 		Key("kit.combo.search").AutoFocus()
 	if inputKey != nil {
@@ -955,12 +995,12 @@ func comboPanel(
 	}
 	search := fairy.Row(fairy.Icon(lucide.Search).Size(16, 16).Color(t.MutedForeground), input).
 		Gap(8).Align(fairy.Center).H(32).Shrink(0).PadXY(10, 0)
-	list := fairy.Col().Pad(4).MaxH(240).ScrollY()
+	list := fairy.Col().Pad(4).MaxH(240).ScrollY().ScrollBarStyle(popupScrollBar)
 	ei := 0
 	for _, it := range matching {
 		if it.Disabled {
 			list.Child(menuRow(fairy.RoleListItem, it.Icon, it.Label, "",
-				menuRowState{checked: checked(it.Value), disabled: true, tall: true}, nil).Key(it.Value))
+				menuRowState{checked: checked(it.Value), disabled: true, tall: true}, nil).Key(rowKey(key, it.Value)))
 			continue
 		}
 		i := ei
@@ -968,8 +1008,14 @@ func comboPanel(
 		row := menuRow(fairy.RoleListItem, it.Icon, it.Label, "",
 			menuRowState{checked: checked(it.Value), highlighted: i == st.highlight, tall: true},
 			func() { pick(i) })
-		list.Child(listPointer(st, row, i, nil).Key(it.Value))
+		list.Child(listPointer(st, row, i, nil).Key(rowKey(key, it.Value)))
+		if st.reveal && i == st.highlight {
+			if window := fairy.CurrentWindow(); window != nil {
+				window.ScrollIntoView(rowKey(key, it.Value))
+			}
+		}
 	}
+	st.reveal = false
 	if len(matching) == 0 {
 		empty := o.emptyText
 		if empty == "" {
@@ -978,6 +1024,7 @@ func comboPanel(
 		list.Child(fairy.Text(empty).FontSize(t.SmallSize).Color(t.MutedForeground).
 			TextAlign(fairy.TextCenter).PadXY(12, 8))
 	}
+	withScrollArrows(list, key, st.dropHighlight)
 	panel := fairy.Col(search, fairy.Box().H(1).Shrink(0).Fill(t.Border), list).MinW(max(192, st.anchorW)).
 		Role(fairy.RoleList)
 	return popupSurface(panel, false).Enter(fairy.Transition{Scale: 0.95, Motion: motion.Popup})

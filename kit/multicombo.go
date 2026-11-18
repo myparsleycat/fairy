@@ -89,7 +89,8 @@ func MultiCombobox(id string, values []string, items []Item, onChange func([]str
 	st.highlight = min(st.highlight, max(len(shown)-1, 0))
 	pick := func(i int) { toggle(shown[i].Value) }
 	open := func() { st.open, st.query, st.highlight, st.byPointer = true, "", 0, false }
-	keys := listKeys(st, len(shown), open, pick)
+	key := "kit.multicombo:" + id
+	keys := listKeys(st, len(shown), open, pick, func(i int) string { return rowKey(key, shown[i].Value) })
 	removeLast := func(k keyboard.KeyEvent) bool {
 		if !k.Is(keyboard.KeyBackspace, 0) || st.query != "" || len(values) == 0 {
 			return false
@@ -106,7 +107,7 @@ func MultiCombobox(id string, values []string, items []Item, onChange func([]str
 	}).OnKey(func(k keyboard.KeyEvent) bool { return removeLast(k) || keys(k) }).Expanded(st.open)
 	trackWidth(st, field)
 	if st.open {
-		panel := comboPanel(st, matching, func(v string) bool { return chosen[v] }, pick, removeLast, o).OnKey(keys)
+		panel := comboPanel(st, key, matching, func(v string) bool { return chosen[v] }, pick, removeLast, o).OnKey(keys)
 		field.Popover(panel, fairy.PopoverOptions{OnDismiss: func() { st.open, st.query = false, "" }})
 	}
 
