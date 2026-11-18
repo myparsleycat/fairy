@@ -24,8 +24,9 @@ type MenuItem struct {
 	Checked  bool
 	Danger   bool
 	Disabled bool
-	// Loading shows a spinner in place of the icon while the item's action
-	// runs; pair it with Disabled to keep the action from starting twice.
+	// Loading shows a spinner while the item's action runs, in place of the
+	// check of a check or radio item, else of the icon; pair it with Disabled
+	// to keep the action from starting twice.
 	Loading   bool
 	Separator bool // draws a line; other fields are ignored
 	Heading   bool // a non-interactive section title
@@ -145,19 +146,31 @@ type menuRowState struct {
 // the start with markStart.
 func menuRow(role fairy.Role, icon *svg.Vector, label, right string, s menuRowState, onClick func()) *fairy.El {
 	t := &current
-	row := fairy.Row().Gap(6).Align(fairy.Center).H(28).PadEdges(0, 8, 0, 6).Radius(t.RadiusMd()).Role(role).Label(label)
+	h := float32(28)
+	row := fairy.Row().Gap(6).Align(fairy.Center).PadEdges(0, 8, 0, 6).Radius(t.RadiusMd()).Role(role).Label(label)
 	if s.tall {
-		row.H(32).PadEdges(0, 8, 0, 8).Gap(8)
+		h = 32
+		row.PadEdges(0, 8, 0, 8).Gap(8)
 	}
+	row.H(h)
+	var spinner *fairy.El
+	if s.loading {
+		spinner = fairy.Spinner().Size(16, 16).Shrink(0)
+	}
+	mark := s.checked || s.radio || s.checkable
 	if s.markStart {
 		row.PadEdges(0, 6, 0, 28)
-		if s.checked {
-			row.Child(fairy.Icon(lucide.Check).Size(16, 16).Left(6).Top(6))
+		top := (h - 16) / 2
+		switch {
+		case spinner != nil:
+			row.Child(spinner.Left(6).Top(top))
+		case s.checked:
+			row.Child(fairy.Icon(lucide.Check).Size(16, 16).Left(6).Top(top))
 		}
 	}
 	switch {
-	case s.loading:
-		row.Child(fairy.Spinner().Size(16, 16).Shrink(0))
+	case spinner != nil && !mark:
+		row.Child(spinner)
 	case s.image != nil:
 		row.Child(fairy.ImageEl(s.image).Fit(fairy.FitContain).Size(16, 16).Shrink(0))
 	case icon != nil:
@@ -171,6 +184,8 @@ func menuRow(role fairy.Role, icon *svg.Vector, label, right string, s menuRowSt
 	}
 	switch {
 	case s.markStart:
+	case spinner != nil && mark:
+		row.Child(spinner)
 	case s.checked && s.radio:
 		row.Child(fairy.Box(fairy.Box().Size(8, 8).Radius(4).Fill(t.PopoverForeground)).Size(16, 16).Center())
 	case s.checked:
