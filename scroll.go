@@ -158,7 +158,7 @@ func (w *Window) applyScrollStep(r *scrollStepRequest) {
 	}
 	var spans [][2]float32
 	for _, c := range e.children {
-		if !c.style.Absolute && !c.style.Hidden {
+		if !c.style.Absolute && !c.style.Hidden && c.a11yRole() != RoleSeparator {
 			spans = append(spans, [2]float32{c.node.Y, c.node.Y + c.node.H})
 		}
 	}

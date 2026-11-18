@@ -442,12 +442,18 @@ func (w *Window) ScrollIntoView(key string) {
 // ScrollStep scrolls the innermost vertical scroll container around the
 // element with key by one of its children, at once, when the view is next
 // placed: up shows the child before the first one shown whole, down the one
-// after the last one shown whole. The child shown lines up with the
-// container's ClipInset on that edge, as under a scroll arrow laid over it
-// with PinToView.
-func (w *Window) ScrollStep(key string, up bool) {
+// after the last one shown whole. Children with RoleSeparator are passed
+// over. The child shown lines up with the container's ClipInset on that
+// edge, as under a scroll arrow laid over it with PinToView. It reports
+// whether an element with key is in the view; when it is not, nothing
+// scrolls.
+func (w *Window) ScrollStep(key string, up bool) bool {
+	if w.findKey(key) == nil {
+		return false
+	}
 	w.scrollStepReq = &scrollStepRequest{key, up}
 	w.invalidate()
+	return true
 }
 
 func (w *Window) invalidate() {

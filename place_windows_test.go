@@ -54,7 +54,12 @@ func TestScrollStepAndPinToView(t *testing.T) {
 			Box().Key("loose").H(20).Left(0).Right(0).Top(0).Absolute(),
 		)
 	})
-	w.ScrollStep("pinned", false)
+	if w.ScrollStep("gone", false) {
+		t.Fatal("ScrollStep reported an element with a key that is not in the view")
+	}
+	if !w.ScrollStep("pinned", false) {
+		t.Fatal("ScrollStep reported no element with key \"pinned\"")
+	}
 	w.placeAll()
 	if w.dirty {
 		w.build()
@@ -75,6 +80,24 @@ func TestScrollStepAndPinToView(t *testing.T) {
 	}
 	if hit := w.hitTest(10, 90); hit != pinned {
 		t.Fatalf("hit %v at the pinned child", hit)
+	}
+}
+
+// ScrollStep passes over a separator, so a step does not stop on a line a
+// pixel tall.
+func TestScrollStepSkipsSeparator(t *testing.T) {
+	w := newPointerWindow(t, func() *El {
+		list := Col().Size(200, 100).ScrollY().ClipInset(0, 0, 20, 0)
+		list.Child(Box().Size(100, 40), Box().Size(100, 41), Box().Size(100, 1).Role(RoleSeparator))
+		for range 5 {
+			list.Child(Box().Size(100, 28))
+		}
+		return list.Child(Box().Key("pinned").H(20).Left(0).Right(0).Bottom(0).Absolute().PinToView())
+	})
+	w.ScrollStep("pinned", false)
+	w.placeAll()
+	if y := w.root.state.ScrollY; y != 30 {
+		t.Fatalf("scrollY = %v, want 30: the row after the separator above the covered 20 pixels", y)
 	}
 }
 
