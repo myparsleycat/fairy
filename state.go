@@ -213,7 +213,8 @@ type Point struct{ X, Y float32 }
 // again without building their views, laying them out or running View, so
 // a value that changes every frame, such as a level meter or a playback
 // position, costs only a redraw. Bind it with OpacityLive, OffsetLive,
-// FillLive, SweepLive or TextLive. Live is safe for use from any goroutine.
+// ScaleLive, RotateLive, FillLive, ColorLive, BorderColorLive, SweepLive or
+// TextLive. Live is safe for use from any goroutine.
 type Live[T float32 | Color | Point | string] struct {
 	v       atomic.Pointer[T]
 	mu      sync.Mutex
@@ -264,10 +265,10 @@ func (l *Live[T]) read(w *Window) T {
 }
 
 type liveProps struct {
-	opacity, sweep *Live[float32]
-	offset         *Live[Point]
-	fill           *Live[Color]
-	text           *Live[string]
+	opacity, sweep, scale, rotate *Live[float32]
+	offset                        *Live[Point]
+	fill, color, border           *Live[Color]
+	text                          *Live[string]
 }
 
 func (e *El) liveProps() *liveProps {
@@ -284,8 +285,33 @@ func (e *El) OpacityLive(l *Live[float32]) *El { e.liveProps().opacity = l; retu
 // them there; the layout keeps their place.
 func (e *El) OffsetLive(l *Live[Point]) *El { e.liveProps().offset = l; return e }
 
+// ScaleLive draws the element scaled by l about its Origin, as Scale does,
+// and hit tests it there. The value applies at once, without springing.
+func (e *El) ScaleLive(l *Live[float32]) *El {
+	e.xfProps()
+	e.liveProps().scale = l
+	return e
+}
+
+// RotateLive draws the element turned l radians clockwise about its Origin,
+// as Rotate does, and hit tests it there. The value applies at once, without
+// springing.
+func (e *El) RotateLive(l *Live[float32]) *El {
+	e.xfProps()
+	e.liveProps().rotate = l
+	return e
+}
+
 // FillLive fills the element with l's color, as Fill does.
 func (e *El) FillLive(l *Live[Color]) *El { e.liveProps().fill = l; return e }
+
+// ColorLive sets the text and icon color of the element and the content in
+// it that sets none of its own, as Color does.
+func (e *El) ColorLive(l *Live[Color]) *El { e.liveProps().color = l; return e }
+
+// BorderColorLive sets the color of the element's border, as the color
+// passed to Border does. The border's width is set when the view is built.
+func (e *El) BorderColorLive(l *Live[Color]) *El { e.liveProps().border = l; return e }
 
 // SweepLive sets an Arc's sweep from l, in radians.
 func (e *El) SweepLive(l *Live[float32]) *El {
@@ -314,6 +340,12 @@ func (w *Window) applyLive(e *El) {
 	}
 	if p.fill != nil {
 		e.fill = p.fill.read(w)
+	}
+	if p.color != nil {
+		e.ownTP.color = p.color.read(w)
+	}
+	if p.border != nil {
+		e.borderColor = p.border.read(w)
 	}
 	if p.sweep != nil {
 		e.arc.sweep = max(p.sweep.read(w), 0)

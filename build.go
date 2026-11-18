@@ -58,6 +58,7 @@ func (w *Window) build() {
 		root = Box()
 	}
 	w.root = root
+	clear(w.scrollKeys)
 	base := w.baseText()
 	w.autoFocused = false
 	w.ft.Mark()
@@ -185,6 +186,12 @@ func (w *Window) prepare(e, parent *El, pid uint64, index int, inh textProps) {
 	} else if s, ok := w.states[e.id]; ok {
 		s.frame = w.gen
 		e.state = s
+	}
+	if e.key != "" && e.state != nil && (e.style.ScrollX || e.style.ScrollY) && e.kind != kindInput {
+		if w.scrollKeys == nil {
+			w.scrollKeys = map[string]*elState{}
+		}
+		w.scrollKeys[e.key] = e.state
 	}
 	if e.focusable && w.focused == 0 && w.focusKey != "" && e.key == w.focusKey {
 		w.focused = e.id

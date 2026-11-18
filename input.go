@@ -131,7 +131,8 @@ type elState struct {
 	scroll.State
 	layoutW, layoutH float32 // the size OnLayout last reported
 	laidOut          bool
-	atTop, atBottom  bool // the edges OnScrollEdges last reported
+	atTop, atBottom  bool    // the edges OnScrollEdges last reported
+	repX, repY       float32 // the scroll offset OnScroll last reported
 	edgesSeen        bool
 	edit             *editState
 	rows             *rowHeights // VirtualListMeasured row heights

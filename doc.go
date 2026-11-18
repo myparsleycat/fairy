@@ -18,16 +18,26 @@
 //		},
 //	})
 //
-// The view is built again after every event handler. Hover, scroll, focus and
-// editing state is kept by element identity: an element's position in the
-// tree and its Key.
+// The view is built again after clicks, keys and other discrete events.
+// Handlers of continuous input (OnHover, OnDrag, OnScroll, OnPointerMove and
+// OnLayout) return whether they changed what the view shows, and the view is
+// built again only then; OnWheel builds it when it handles the event. Hover,
+// scroll, focus and editing state is kept by element identity: an element's
+// position in the tree and its Key.
+//
+// Memo reuses a subtree while its version holds, and RowVersion does the same
+// for the rows of a virtual list. Live values redraw the elements bound to
+// them without a build, Window.Tick advances values once a frame, and Canvas
+// draws many shapes as one element.
 //
 // # Threads
 //
 // Handlers and views run on the UI thread and may change app state directly.
-// Other goroutines hand work to the UI thread in one of three ways:
+// Other goroutines hand work to the UI thread in one of these ways:
 //   - Window.Post runs a function and then rebuilds that window's view.
-//   - Go runs a function without waiting and then updates every window.
+//   - Window.PostQuiet runs a function without rebuilding the view.
+//   - Go runs a function without waiting and then updates every window;
+//     GoQuiet updates none.
 //   - Do runs a function and waits for it to return.
 //
 // Windows, tray icons and menus are created on the UI thread. Run opens one

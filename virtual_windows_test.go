@@ -121,7 +121,7 @@ func TestGridLineCells(t *testing.T) {
 
 // newListWindow returns a window without a native window or renderer that
 // shows view at 200x100, enough to build, lay out and place the tree.
-func newListWindow(t *testing.T, view func() *El) *Window {
+func newListWindow(t testing.TB, view func() *El) *Window {
 	ts, err := text.NewSystem(&render.Atlas{})
 	if err != nil {
 		t.Fatal(err)
@@ -475,5 +475,69 @@ func TestMeasuredListStopsHeightAnimation(t *testing.T) {
 	w.placeAll()
 	if got := w.root.node.ContentH; got != 210 {
 		t.Fatalf("content height after disabling animation = %v, want 210", got)
+	}
+}
+
+// RowVersion keeps the rows whose version holds across builds of the view,
+// builds the rest again, and the kept rows stay indexed for input.
+func TestRowVersionReusesRows(t *testing.T) {
+	versions := make([]uint64, 100)
+	built := map[int]int{}
+	w := newListWindow(t, func() *El {
+		return VirtualList(100, 20, func(i int) *El {
+			built[i]++
+			return Box().Key(strconv.Itoa(i)).H(20).OnClick(func() {})
+		}).RowVersion(func(i int) (uint64, bool) { return versions[i], i != 3 })
+	})
+	w.build()
+	w.placeAll()
+	first := len(built)
+	clear(built)
+	w.build()
+	if len(built) != 1 || built[3] != 1 {
+		t.Fatalf("second build built rows %v of %d, want only row 3", built, first)
+	}
+	versions[1]++
+	clear(built)
+	w.build()
+	if len(built) != 2 || built[1] != 1 || built[3] != 1 {
+		t.Fatalf("after a version change built rows %v, want 1 and 3", built)
+	}
+	for _, c := range w.root.children {
+		if w.byID[c.id] != c {
+			t.Fatalf("row %s is not indexed after reuse", c.key)
+		}
+	}
+	if e := w.hitTest(10, 30); e == nil || e.key != "1" {
+		t.Fatalf("hit at row 1 found %v", e)
+	}
+}
+
+// Reused rows of a measured list are measured again at a new width.
+func TestRowVersionMeasuredResize(t *testing.T) {
+	heights := func(versioned bool, width int) float32 {
+		w := newListWindow(t, func() *El {
+			list := VirtualListMeasured(20, 20, nil, func(i int) *El {
+				return Box(Text("a line of text long enough to wrap when the list narrows"))
+			})
+			if versioned {
+				list.RowVersion(func(int) (uint64, bool) { return 0, true })
+			}
+			return list
+		})
+		w.build()
+		settle(t, w)
+		w.width = width
+		w.dirty = true
+		settle(t, w)
+		return w.root.children[0].node.H
+	}
+	if wide, narrow := heights(false, 200), heights(false, 80); narrow <= wide {
+		t.Fatalf("rows %v tall at 80 and %v at 200 do not wrap", narrow, wide)
+	}
+	for _, width := range []int{200, 80} {
+		if got, want := heights(true, width), heights(false, width); got != want {
+			t.Fatalf("versioned row at width %d is %v tall, want %v", width, got, want)
+		}
 	}
 }

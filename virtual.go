@@ -20,13 +20,17 @@ type virtualList struct {
 	motion   *motion.Spec // AnimateRowHeights
 	key      func(i int) string
 	fn       func(i int) *El
-	inh      textProps
-	synced   bool // the measured heights were matched to this build's rows
-	built    bool
-	first    int
-	last     int
-	builtW   float32
-	cols     int
+	version  func(i int) (uint64, bool) // RowVersion
+	overscan float32
+	// overscanSet tells an Overscan of 0 from the default.
+	overscanSet bool
+	inh         textProps
+	synced      bool // the measured heights were matched to this build's rows
+	built       bool
+	first       int
+	last        int
+	builtW      float32
+	cols        int
 }
 
 // VirtualList is a vertical scroll container that builds only the rows in view.
@@ -65,6 +69,39 @@ func (e *El) AnimateRowHeights(m motion.Spec) *El {
 		e.virtual.motion = &m
 	}
 	return e
+}
+
+// RowVersion lets a virtual list reuse the rows it built before instead of
+// building them again with each build of the view. f returns row i's
+// version and whether the row may be reused: while the version holds, the
+// row is the one built last time, as with Memo, with the handlers it was
+// built with. Put in the version everything the row shows and every value
+// its handlers capture, including i when they capture it. A row is reused
+// only if it was built in the previous build or this one, so rows that come
+// back into view are built again. A row that returns a Memo is not reused.
+func (e *El) RowVersion(f func(i int) (version uint64, ok bool)) *El {
+	if e.virtual != nil {
+		e.virtual.version = f
+	}
+	return e
+}
+
+// Overscan sets how far beyond the view, above and below, a virtual list
+// builds rows ahead of scrolling, in pixels. It defaults to half the view's
+// height.
+func (e *El) Overscan(px float32) *El {
+	if e.virtual != nil && px >= 0 {
+		e.virtual.overscan = px
+		e.virtual.overscanSet = true
+	}
+	return e
+}
+
+func (v *virtualList) overscanFor(view float32) float32 {
+	if v.overscanSet {
+		return v.overscan
+	}
+	return view / 2
 }
 
 // VirtualGrid is a scroll container of fixed-size cells laid out in as many

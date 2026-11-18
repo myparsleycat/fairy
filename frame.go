@@ -42,6 +42,7 @@ func (w *Window) renderFrame() {
 	w.animating = false
 	w.flushPointerMove()
 	w.stepAutoScroll(dt)
+	w.runTicks(dt)
 	w.layout(dt)
 	w.dt = dt
 	w.uploaded = 0
@@ -132,6 +133,10 @@ func (w *Window) layout(dt float32) {
 			break
 		}
 	}
+	// Handlers run while placing the last pass can leave the view stale.
+	if w.dirty {
+		w.invalidate()
+	}
 }
 
 // settleView builds a stale view before input is dispatched. Messages queued
@@ -180,6 +185,7 @@ func (w *Window) recreateRenderer() {
 			se.target.Release()
 		}
 		clear(w.surfaces)
+		w.releasePathTextures()
 		w.releaseShared()
 		w.r.Release()
 		w.r = nil

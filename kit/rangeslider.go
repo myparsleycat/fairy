@@ -136,7 +136,7 @@ func RangeSlider(
 				move(st.active, v)
 			}
 		}).
-		OnDrag(func(d fairy.DragEvent) {
+		OnDrag(func(d fairy.DragEvent) bool {
 			if st.active < 0 {
 				switch {
 				case d.DX < 0:
@@ -144,10 +144,11 @@ func RangeSlider(
 				case d.DX > 0:
 					st.active = 1
 				default:
-					return
+					return false
 				}
 			}
 			move(st.active, at(d.LocalX, d.W))
+			return true
 		})
 }
 

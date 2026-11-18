@@ -152,3 +152,27 @@ func TestLiveSetPaintsWithoutBuild(t *testing.T) {
 		t.Fatalf("after Set: fill %v with %d builds, want blue with 1", c, builds)
 	}
 }
+
+// A container's HoverColor reaches content that sets no color of its own,
+// though prepare filled in the color it inherits from the window.
+func TestHoverColorReachesChildContent(t *testing.T) {
+	hover := Hex(0xff0000)
+	w := newListWindow(t, func() *El {
+		return Box(Arc(0, 3).Size(10, 10)).HoverColor(hover)
+	})
+	w.opts.TextColor = Hex(0x1a1a1a)
+	w.build()
+	w.placeAll()
+	w.hoverIDs[w.root.id] = true
+	w.scene.Reset()
+	w.paint(w.root, 1, w.opts.TextColor)
+	for _, p := range w.scene.Prims {
+		if p.Kind == render.KindArc {
+			if p.Color != hover.arr(1) {
+				t.Fatalf("arc color %v, want the container's hover color %v", p.Color, hover.arr(1))
+			}
+			return
+		}
+	}
+	t.Fatal("no arc drawn")
+}

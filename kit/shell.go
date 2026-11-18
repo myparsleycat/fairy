@@ -163,7 +163,10 @@ func paneGrip(p *PaneState, leading bool, label string) *fairy.El {
 		Role(fairy.RoleSeparator).Label(label).
 		RangeValue(float64(p.Width()), float64(p.MinWidth()), float64(p.MaxWidth()), float64(gripStep),
 			func(v float64) { p.SetWidth(float32(v)) }).
-		OnDrag(func(d fairy.DragEvent) { paneDrag(p, sign, d) }).
+		OnDrag(func(d fairy.DragEvent) bool {
+			paneDrag(p, sign, d)
+			return true
+		}).
 		OnDoubleClick(p.ResetWidth)
 	if leading {
 		return g.Right(0)

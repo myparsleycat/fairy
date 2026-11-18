@@ -77,6 +77,12 @@ struct VOut {
     float4 clip2 : SV_ClipDistance1;
 };
 
+// xform_pixel is the length in a FLAG_XFORM prim's own space of a device pixel.
+float xform_pixel(float4 m) {
+    float det = abs(m.x * m.w - m.y * m.z);
+    return det > 0.0 ? rsqrt(det) : 0.0;
+}
+
 float4 clip_distances(float2 pos, float4 c) {
     return float4(pos.x - c.x, c.x + c.z - pos.x, pos.y - c.y, c.y + c.w - pos.y);
 }
@@ -100,6 +106,13 @@ VOut vs_main(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
         float2 lo = min(b.xy, p.params.xy - extent);
         float2 hi = max(b.xy + b.zw, p.params.xy + extent);
         b = float4(lo, hi - lo);
+    } else if (p.kind == KIND_RECT && (p.flags & FLAG_XFORM) != 0) {
+        // A turned or scaled quad that ends at the shape's edge leaves out the
+        // outer half of its antialiased fringe: grow it by a device pixel. The
+        // shape is still evaluated against p.bounds.
+        float m = xform_pixel(p.xform);
+        b.xy -= m;
+        b.zw += 2.0 * m;
     }
     float2 pos = b.xy + unit * b.zw;
     float2 screen = pos;

@@ -319,3 +319,44 @@ func TestHeadlessInjectedKeys(t *testing.T) {
 		})
 	})
 }
+
+// PostQuiet runs its call in order with Post without building the view.
+func TestPostQuiet(t *testing.T) {
+	builds := 0
+	frames := make(chan struct{}, 16)
+	runHeadless(t, Options{
+		Width:   50,
+		Height:  50,
+		View:    func(*Cx) *El { builds++; return Box() },
+		OnFrame: func(Frame) { frames <- struct{}{} },
+	}, func(w *Window) {
+		<-frames
+		doQuiet(func() {})
+		for len(frames) > 0 {
+			<-frames
+		}
+		var before int
+		var order []int
+		doQuiet(func() { before = builds })
+		w.PostQuiet(func() { order = append(order, 1) })
+		w.Post(func() { order = append(order, 2) })
+		w.PostQuiet(func() { order = append(order, 3) })
+		select {
+		case <-frames:
+		case <-time.After(5 * time.Second):
+			t.Error("no frame after Post")
+		}
+		doQuiet(func() {
+			if fmt.Sprint(order) != "[1 2 3]" || builds == before {
+				t.Errorf("order %v with %d builds after %d, want [1 2 3] and a build", order, builds, before)
+			}
+			before = builds
+		})
+		w.PostQuiet(func() {})
+		doQuiet(func() {
+			if w.dirty || builds != before {
+				t.Errorf("PostQuiet left dirty %v and %d builds after %d", w.dirty, builds, before)
+			}
+		})
+	})
+}

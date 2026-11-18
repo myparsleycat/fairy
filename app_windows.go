@@ -149,7 +149,8 @@ func createAppWindow() error {
 		return fmt.Errorf("fairy: app window: %w", err)
 	}
 	app.mu.Lock()
-	if len(app.calls) != 0 && !win.PostMessage(hwnd, msgAppCall, 0, 0) {
+	if len(app.calls) != 0 && !win.PostMessage(hwnd, msgAppCall, 0, 0) ||
+		len(app.quiet) != 0 && !win.PostMessage(hwnd, msgAppQuiet, 0, 0) {
 		app.mu.Unlock()
 		win.DestroyWindow(hwnd)
 		return errors.New("fairy: could not post queued UI calls")

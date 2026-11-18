@@ -69,6 +69,13 @@ func (w *Window) spellRequest(e *El, st *editState) []spell.Range {
 	}
 	if st.spell == nil {
 		st.spell = NewLatest[spellResult](spellDebounce)
+		// Misspellings are only drawn, so their answers need no build.
+		st.spell.land = func(f func()) {
+			w.PostQuiet(func() {
+				f()
+				w.invalidate()
+			})
+		}
 	}
 	prev, hasPrev := st.spell.Value()
 	epoch := spellEpoch.Load()

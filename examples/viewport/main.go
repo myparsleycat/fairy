@@ -88,7 +88,7 @@ func (v *viewer) pick(x, y float32) int {
 	return best
 }
 
-func (v *viewer) drag(d fairy.DragEvent) {
+func (v *viewer) drag(d fairy.DragEvent) bool {
 	if d.Phase == fairy.DragStart {
 		v.base = v.cam
 		switch {
@@ -115,6 +115,7 @@ func (v *viewer) drag(d fairy.DragEvent) {
 	}
 	v.cam = c
 	v.last = fmt.Sprintf("%s drag, button %d, mods %d, phase %d, canceled %v", v.mode, d.Button, d.Mods, d.Phase, d.Canceled)
+	return true
 }
 
 // wheel zooms about the pointer: the point under it stays where it is.
@@ -155,11 +156,12 @@ func (v *viewer) view(cx *fairy.Cx) *fairy.El {
 			v.px, v.py, v.picked = p.LocalX, p.LocalY, v.pick(p.LocalX, p.LocalY)
 			return true // the crosshair follows the pointer
 		}).
-		OnHover(func(in bool) {
+		OnHover(func(in bool) bool {
 			v.hover = in
 			if !in {
 				v.picked = -1
 			}
+			return true
 		})
 	kit.ContextMenu("viewport", surface, func() []kit.MenuItem {
 		return []kit.MenuItem{{Label: "Reset view", OnClick: func() { v.cam = camera{zoom: 1, scale: 1, yaw: 0.6, pitch: -0.4} }}}

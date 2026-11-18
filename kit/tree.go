@@ -6,6 +6,7 @@ import (
 
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
+	"github.com/myparsleycat/fairy/internal/fnvhash"
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/motion"
 	"github.com/myparsleycat/fairy/svg"
@@ -44,6 +45,11 @@ type TreeProps[T any] struct {
 	Indent    float32 // 16 when zero
 	// Guides draws a line down each level of the indent.
 	Guides bool
+	// RowVersion lets the tree reuse the rows it built before instead of
+	// building them again with each build of the view. It returns a version
+	// of what Row or Label shows for data, which must change whenever that
+	// does; the tree adds the row's place, state and selection itself.
+	RowVersion func(data T) uint64
 }
 
 // Tree draws a TreeModel as a virtualized outline: only the rows on screen are
@@ -72,6 +78,13 @@ func Tree[T any](id string, m *TreeModel[T], p TreeProps[T]) *fairy.El {
 	if label == nil {
 		label = func(T) string { return "" }
 	}
+	// Reused rows keep their handlers, so those read the props of the latest
+	// build through cur.
+	cur := &p
+	if p.RowVersion != nil {
+		cur = fairy.Local[TreeProps[T]]("kit.tree.props:" + id)
+		*cur = p
+	}
 	rows := fairy.VirtualList(m.VisibleLen(), rh, func(i int) *fairy.El {
 		data, r, ok := m.Row(i)
 		if !ok {
@@ -89,12 +102,12 @@ func Tree[T any](id string, m *TreeModel[T], p TreeProps[T]) *fairy.El {
 				if r.Expandable && plain {
 					m.Toggle(rid)
 				}
-				if p.OnSelect != nil {
-					p.OnSelect(rid)
+				if cur.OnSelect != nil {
+					cur.OnSelect(rid)
 				}
 			})
 		if !r.Expandable && p.OnOpen != nil {
-			row.OnDoubleClick(func() { p.OnOpen(rid) })
+			row.OnDoubleClick(func() { cur.OnOpen(rid) })
 		}
 		return row
 	}).Key(listKey).Grow(1).MinH(0).
@@ -103,6 +116,19 @@ func Tree[T any](id string, m *TreeModel[T], p TreeProps[T]) *fairy.El {
 			m.viewport, m.rowHeight = h, rh
 			return changed
 		})
+	if p.RowVersion != nil {
+		base := fnvhash.New().Float(rh).Float(indent).Bool(p.Guides).Bool(p.OnOpen != nil)
+		rows.RowVersion(func(i int) (uint64, bool) {
+			data, r, ok := m.Row(i)
+			if !ok {
+				return 0, false
+			}
+			h := base.Uint(p.RowVersion(data)).Str(r.ID).Uint(uint64(r.Depth)).
+				Bool(r.Expandable).Bool(r.Expanded).Bool(r.Selected).Bool(r.Cursor).Bool(r.Matched).Bool(r.multi).
+				Uint(uint64(r.pos)).Uint(uint64(r.size))
+			return uint64(h), true
+		})
+	}
 	root := fairy.Col(rows).Key("kit.tree.root:" + id).Focusable().Role(fairy.RoleTree).MinH(0).
 		FontSize(t.FontSize).
 		OnKey(func(ev keyboard.KeyEvent) bool {

@@ -212,7 +212,7 @@ func ColorPicker(id string, value fairy.Color, onChange func(c fairy.Color, fina
 			st.from = st.last
 			st.down = at(p.LocalX, p.LocalY, p.W, p.H)
 		}).OnClick(func() { set(st.down, true) }).
-			OnDrag(func(d fairy.DragEvent) {
+			OnDrag(func(d fairy.DragEvent) bool {
 				switch {
 				case d.Canceled:
 					setColor(st.from, true)
@@ -221,6 +221,7 @@ func ColorPicker(id string, value fairy.Color, onChange func(c fairy.Color, fina
 				default:
 					set(at(d.LocalX, d.LocalY, d.W, d.H), false)
 				}
+				return true
 			})
 	}
 

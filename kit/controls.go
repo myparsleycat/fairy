@@ -360,7 +360,10 @@ func Slider(value, minV, maxV, step float64, onChange func(float64), opts ...Opt
 	thumb.HoverRing(3, alpha(t.Ring, 0.5)).FocusRing(3, alpha(t.Ring, 0.5)).FocusFromParent()
 	return e.Cursor(fairy.CursorPointer).Focusable().
 		OnPointerDown(func(p fairy.PointerEvent) { set(p.LocalX, p.W) }).
-		OnDrag(func(d fairy.DragEvent) { set(d.LocalX, d.W) }).
+		OnDrag(func(d fairy.DragEvent) bool {
+			set(d.LocalX, d.W)
+			return true
+		}).
 		OnKey(func(k keyboard.KeyEvent) bool {
 			if k.Mods != 0 {
 				return false

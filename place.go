@@ -447,14 +447,11 @@ func (w *Window) place(e *El, ox, oy float32, clip geom.Rect) {
 		if e.virtual != nil && e.virtual.estimate == 0 {
 			w.virtualRows(e)
 		}
-		if e.onScroll != nil && s.ScrollY != from {
-			e.onScroll(s.ScrollX, s.ScrollY)
-			w.markDirty(frameprof.CauseScroll)
-		}
 	}
 	if e.stickBottom && s != nil {
 		s.EndY = max(n.ContentH-n.H, 0)
 	}
+	w.reportScroll(e)
 	if e.onScrollEdges != nil && s != nil {
 		top, bottom := s.ScrollY <= 0.5, s.ScrollY >= n.ContentH-n.H-0.5
 		if !s.edgesSeen || top != s.atTop || bottom != s.atBottom {

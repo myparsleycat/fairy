@@ -133,3 +133,72 @@ func TestClipInsetAndHiddenScrollBar(t *testing.T) {
 		t.Fatalf("scrollY = %v after scrolling row 3 into view, want 32: its bottom above the strip", y)
 	}
 }
+
+// OnScroll hears of each change of the offset once, whether it came from an
+// event or from a glide placed several times a frame, and the view is built
+// again only when the handler asks for it.
+func TestOnScrollReportsOncePerChange(t *testing.T) {
+	for _, rebuild := range []bool{false, true} {
+		var got []float32
+		w := newListWindow(t, func() *El {
+			return Col(Box().Size(100, 400)).Size(200, 100).ScrollY().OnScroll(func(_, y float32) bool {
+				got = append(got, y)
+				return rebuild
+			})
+		})
+		w.build()
+		w.placeAll()
+
+		w.wheelScroll(w.root, 0, 40)
+		w.dt = 1.0 / 60
+		w.placeAll()
+		w.dt = 0
+		w.placeAll()
+		w.placeAll()
+		if len(got) != 1 || got[0] != w.root.state.ScrollY || got[0] == 0 {
+			t.Fatalf("glide frame reported %v, want the one offset %v", got, w.root.state.ScrollY)
+		}
+		if w.dirty != rebuild {
+			t.Fatalf("handler returning %v left dirty = %v", rebuild, w.dirty)
+		}
+
+		w.dirty = false
+		got = got[:0]
+		base := w.root.state.ScrollY
+		w.scrollNow(w.root, 0, 10)
+		if len(got) != 1 || got[0] == base || w.dirty != rebuild {
+			t.Fatalf("scrollNow reported %v (from %v) with dirty = %v", got, base, w.dirty)
+		}
+	}
+}
+
+// ScrollOffset finds the containers of the build before while View runs,
+// with their offset as it is now, until a build leaves them out.
+func TestScrollOffsetDuringView(t *testing.T) {
+	show := true
+	var y float32
+	var ok bool
+	w := newListWindow(t, func() *El {
+		_, y, ok = CurrentWindow().ScrollOffset("list")
+		if !show {
+			return Box()
+		}
+		return Col(Box().Size(100, 400)).Key("list").Size(200, 100).ScrollY()
+	})
+	w.build()
+	if ok {
+		t.Fatal("first build found a container")
+	}
+	w.placeAll()
+	w.scrollNow(w.root, 0, 30)
+	w.build()
+	if !ok || y != 30 {
+		t.Fatalf("second build read (%v, %v), want (30, true)", y, ok)
+	}
+	show = false
+	w.build()
+	w.build()
+	if ok {
+		t.Fatal("container left out of the last build is still found")
+	}
+}

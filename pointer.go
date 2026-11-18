@@ -155,8 +155,11 @@ func (w *Window) onMouseMove(x, y float32) {
 				p.dragging = true
 				phase = DragStart
 			}
-			e.onDrag(w.dragEvent(e, p, phase, x, y))
-			w.Update()
+			if e.onDrag(w.dragEvent(e, p, phase, x, y)) {
+				w.Update()
+			} else {
+				w.invalidate()
+			}
 			return
 		}
 	}
@@ -262,15 +265,13 @@ func (w *Window) setHoverPath(path []*El) bool {
 		for id := range w.hoverIDs {
 			if !ids[id] {
 				changed = true
-				if e := w.byID[id]; e != nil && e.onHover != nil {
-					e.onHover(false)
+				if e := w.byID[id]; e != nil && e.onHover != nil && e.onHover(false) {
 					w.markDirty(frameprof.CauseHover)
 				}
 			}
 		}
 		for _, e := range path {
-			if !w.hoverIDs[e.id] && e.onHover != nil {
-				e.onHover(true)
+			if !w.hoverIDs[e.id] && e.onHover != nil && e.onHover(true) {
 				w.markDirty(frameprof.CauseHover)
 			}
 		}
@@ -496,8 +497,9 @@ func (w *Window) onButtonUp(x, y float32, button int) {
 	}
 	if p.dragging {
 		if e := w.byID[p.drag]; e != nil && e.onDrag != nil {
-			e.onDrag(w.dragEvent(e, p, DragEnd, x, y))
-			w.Update()
+			if e.onDrag(w.dragEvent(e, p, DragEnd, x, y)) {
+				w.Update()
+			}
 		}
 		w.updateHover(x, y)
 		w.queuePointerMove()
@@ -563,8 +565,9 @@ func (w *Window) cancelPress() {
 		if e := w.byID[p.drag]; e != nil && e.onDrag != nil {
 			ev := w.dragEvent(e, p, DragEnd, w.mouseX, w.mouseY)
 			ev.Canceled = true
-			e.onDrag(ev)
-			w.Update()
+			if e.onDrag(ev) {
+				w.Update()
+			}
 		}
 	}
 	w.invalidate()

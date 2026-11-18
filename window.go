@@ -223,10 +223,13 @@ type Window struct {
 	revealKey      string
 	revealRow      int
 	revealInstant  bool
-	revealTop      bool   // a ScrollToRowTop request
-	bottomKey      string // a ScrollToBottom request
-	intoViewKey    string // a ScrollIntoView request
+	revealTop      bool                // a ScrollToRowTop request
+	bottomKey      string              // a ScrollToBottom request
+	scrollKeys     map[string]*elState // keyed scroll containers of the last build
+	intoViewKey    string              // a ScrollIntoView request
 	scrollStepReq  *scrollStepRequest
+	tickers        []ticker
+	tickRun        []ticker // scratch for runTicks
 	memos          map[string]*memoEntry
 	layerRanges    [][2]int // scratch for transformPrims
 	matched        map[string]matchRec
@@ -259,8 +262,10 @@ type Window struct {
 	imageWork       map[imageWorkKey]imageWorkPending
 	capture         *offscreenCapture
 	surfaces        map[uint64]*surfaceEntry
-	invalidSurfaces map[string]bool       // InvalidateSurface keys waiting for the next paint
-	natives         map[embed.Native]bool // child windows of embedded elements, and whether this frame placed them
+	invalidSurfaces map[string]bool // InvalidateSurface keys waiting for the next paint
+	canvases        map[uint64]*canvasEntry
+	pathTextures    map[uint64]*pathTexture // by content; see Painter.drawPath
+	natives         map[embed.Native]bool   // child windows of embedded elements, and whether this frame placed them
 	embedCtx        embed.Context
 	iconTiles       map[iconKey]render.Tile
 	iconGen         int
@@ -280,7 +285,7 @@ type Window struct {
 	hl *headlessState // set for Options.Headless windows
 
 	mu          sync.Mutex
-	posted      []func()
+	posted      []postedCall
 	injectQueue []injected
 	quit        bool
 	closed      atomic.Bool // destroyed; read by Live.Set on any goroutine
@@ -365,9 +370,22 @@ func (w *Window) Update() {
 
 // Post runs f on the UI thread and then rebuilds the view. It is safe from any goroutine.
 // Calls posted to a closed window are discarded.
-func (w *Window) Post(f func()) {
+func (w *Window) Post(f func()) { w.post(f, false) }
+
+// PostQuiet runs f on the UI thread without rebuilding the view, for work
+// that changes nothing the view shows or that redraws through Live values.
+// f calls Update when it does change the view. It is safe from any goroutine
+// and keeps its order among calls to Post.
+func (w *Window) PostQuiet(f func()) { w.post(f, true) }
+
+type postedCall struct {
+	f     func()
+	quiet bool
+}
+
+func (w *Window) post(f func(), quiet bool) {
 	w.mu.Lock()
-	w.posted = append(w.posted, f)
+	w.posted = append(w.posted, postedCall{f, quiet})
 	n := len(w.posted)
 	w.mu.Unlock()
 	if n == 1 && !w.wake() {
@@ -439,6 +457,19 @@ func (w *Window) ScrollIntoView(key string) {
 	w.invalidate()
 }
 
+// ScrollOffset returns the scroll offset of the scroll container with key as
+// it is now, and whether the last build had such a container. Called from
+// View, it finds the containers of the build before. It reads the offset
+// without an OnScroll handler, which would build the view again as it
+// scrolls. Call it on the UI thread.
+func (w *Window) ScrollOffset(key string) (x, y float32, ok bool) {
+	s := w.scrollKeys[key]
+	if s == nil {
+		return 0, 0, false
+	}
+	return s.ScrollX, s.ScrollY, true
+}
+
 // ScrollStep scrolls the innermost vertical scroll container around the
 // element with key by one of its children, at once, when the view is next
 // placed: up shows the child before the first one shown whole, down the one
@@ -465,17 +496,19 @@ func (w *Window) invalidate() {
 
 func (w *Window) runPosted() {
 	w.mu.Lock()
-	fs := w.posted
+	calls := w.posted
 	w.posted = nil
 	w.mu.Unlock()
-	for _, f := range fs {
+	rebuild := false
+	for _, c := range calls {
 		t := time.Now()
-		f()
+		c.f()
 		if frameprof.Slow > 0 {
 			frameprof.LogSlow("posted function", t)
 		}
+		rebuild = rebuild || !c.quiet
 	}
-	if len(fs) > 0 {
+	if rebuild {
 		w.markDirty(frameprof.CausePost)
 		w.invalidate()
 	}
@@ -617,6 +650,7 @@ func (w *Window) onTimer(id uintptr) {
 // release frees what the closed window holds and lets its trees and
 // element state go.
 func (w *Window) release() {
+	w.tickers = nil
 	liveMu.Lock()
 	delete(live, w)
 	liveMu.Unlock()
@@ -627,6 +661,7 @@ func (w *Window) release() {
 		se.target.Release()
 	}
 	w.surfaces = nil
+	w.releasePathTextures()
 	if w.ts != nil {
 		w.ts.Release()
 		w.ts = nil

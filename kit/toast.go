@@ -162,10 +162,11 @@ func (ts *Toaster) arm(it *toast) {
 }
 
 // hold stops the timers while the pointer is over the toasts and restarts
-// them with the time that was left when it leaves.
-func (ts *Toaster) hold(on bool) {
+// them with the time that was left when it leaves. It reports whether that
+// changed, which spreads or stacks the toasts.
+func (ts *Toaster) hold(on bool) bool {
 	if on == ts.paused {
-		return
+		return false
 	}
 	ts.paused = on
 	now := time.Now()
@@ -181,6 +182,7 @@ func (ts *Toaster) hold(on bool) {
 			ts.arm(it)
 		}
 	}
+	return true
 }
 
 // Info shows an informational toast.

@@ -31,6 +31,9 @@ type SidebarProps struct {
 	Count int
 	Key   func(i int) string
 	Row   func(i int) *fairy.El
+	// RowVersion lets the virtual list reuse its rows, as
+	// fairy.El.RowVersion.
+	RowVersion func(i int) (version uint64, ok bool)
 }
 
 // Sidebar is a source list for a SplitView's sidebar: a header, a scrolling
@@ -46,7 +49,11 @@ func Sidebar(p SidebarProps) *fairy.El {
 	list := fairy.Col().Key("kit.sidebar.list").WFull().PadEdges(0, sidebarInset, sidebarInset, sidebarInset).
 		Role(fairy.RoleList).Label(label).FocusGroup().FocusFollows()
 	if p.Row != nil {
-		list.Child(fairy.VirtualListMeasured(p.Count, SidebarRowHeight, p.Key, p.Row).WFull().Grow(1).MinH(0))
+		rows := fairy.VirtualListMeasured(p.Count, SidebarRowHeight, p.Key, p.Row).WFull().Grow(1).MinH(0)
+		if p.RowVersion != nil {
+			rows.RowVersion(p.RowVersion)
+		}
+		list.Child(rows)
 		list.Grow(1).MinH(0)
 	} else {
 		list.Child(p.Items...)

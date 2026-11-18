@@ -276,7 +276,7 @@ func (e *El) a11yRole() Role {
 		return RoleGroup
 	case a != nil && a.label != "":
 		switch {
-		case e.kind == kindImage, e.kind == kindIcon, e.kind == kindSurface, e.embedsMedia():
+		case e.kind == kindImage, e.kind == kindIcon, e.kind == kindSurface, e.kind == kindCanvas, e.embedsMedia():
 			return RoleImage
 		}
 		return RoleGroup

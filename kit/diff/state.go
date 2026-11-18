@@ -134,6 +134,9 @@ type State struct {
 	// them, made again by ensure once dirty.
 	segs  []fileSeg
 	dirty bool
+	// rev counts changes to the files, their modes and revealed ranges, so
+	// that View builds the rows those change again.
+	rev uint64
 }
 
 // NewState returns the state of a diff of files.
@@ -174,6 +177,7 @@ func (s *State) SetFiles(files []FileDiff) {
 	s.hlCache = nil
 	s.heights = map[string]float32{}
 	s.nav, s.dirty = -1, true
+	s.rev++
 }
 
 // Files returns the files of the diff, in order.
@@ -322,14 +326,17 @@ func (s *State) pressLine(file int, at LineRef, shift bool) {
 	s.selection = &sel
 }
 
-// dragTo moves the end of a selection being made by dragging to line at.
-func (s *State) dragTo(file int, at LineRef) {
-	if s.selection != nil && s.selecting && s.selection.File == file && s.selection.End != at {
-		s.unselect = false
-		sel := *s.selection
-		sel.End = at
-		s.selection = &sel
+// dragTo moves the end of a selection being made by dragging to line at,
+// and reports whether it moved.
+func (s *State) dragTo(file int, at LineRef) bool {
+	if s.selection == nil || !s.selecting || s.selection.File != file || s.selection.End == at {
+		return false
 	}
+	s.unselect = false
+	sel := *s.selection
+	sel.End = at
+	s.selection = &sel
+	return true
 }
 
 // releaseLine ends a press on the line numbers and returns the selection
@@ -545,6 +552,7 @@ func (s *State) rowLine(r row, side Side) (int, bool) {
 func (s *State) changed(file int) {
 	s.segs[file].ok = false
 	s.dirty, s.nav = true, -1
+	s.rev++
 }
 
 // ensure joins the files' rows again after a change, laying out those of

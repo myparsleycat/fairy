@@ -25,7 +25,11 @@ func Collapsible(id, title string, open bool, onToggle func(bool), content *fair
 		arrow.Opacity(1)
 	}
 	trigger := fairy.Row(fairy.Text(title).Medium().FontSize(t.SmallSize+1), arrow).Gap(8).Align(fairy.Center).H(32).
-		Radius(t.Radius).Role(fairy.RoleButton).Label(title).Expanded(open).OnHover(func(in bool) { *hover = in })
+		Radius(t.Radius).Role(fairy.RoleButton).Label(title).Expanded(open).OnHover(func(in bool) bool {
+		changed := *hover != in
+		*hover = in
+		return changed
+	})
 	if o.disabled {
 		trigger.Color(t.MutedForeground).Disabled(true)
 	} else {

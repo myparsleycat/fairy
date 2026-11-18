@@ -133,12 +133,15 @@ func multiComboChip(st *popupState, value, label string, disabled bool, remove f
 		return chip
 	}
 	button := IconButton(lucide.X, remove, Ghost, XS, Tooltip(Messages.Remove)).Label(Messages.Remove).Size(18, 18)
-	return chip.PadEdges(0, 1, 0, 6).Child(button).OnHover(func(in bool) {
+	return chip.PadEdges(0, 1, 0, 6).Child(button).OnHover(func(in bool) bool {
 		switch {
-		case in:
+		case in && st.chip != value:
 			st.chip = value
-		case st.chip == value:
+		case !in && st.chip == value:
 			st.chip = ""
+		default:
+			return false
 		}
+		return true
 	})
 }

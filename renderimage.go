@@ -348,6 +348,7 @@ func (c *offscreenCapture) release() {
 		for _, se := range w.surfaces {
 			se.target.Release()
 		}
+		w.releasePathTextures()
 		w.ts.Release()
 		w.r.Release()
 	}

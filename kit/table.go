@@ -5,6 +5,7 @@ import (
 
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/icons/lucide"
+	"github.com/myparsleycat/fairy/internal/fnvhash"
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/motion"
 )
@@ -86,6 +87,12 @@ type TableProps struct {
 	Zebra bool
 	// Label names the table for assistive technology.
 	Label string
+	// RowVersion lets the table reuse the rows it built before instead of
+	// building them again with each build of the view. It returns a version
+	// of what Cell shows in the row, which must change whenever that does;
+	// the table adds the row's selection, cursor and column widths itself.
+	// The table needs an ID or State for it.
+	RowVersion func(row int) uint64
 }
 
 // tableState keeps a table's column widths: the widths set by dragging
@@ -181,6 +188,14 @@ func Table(p TableProps) *fairy.El {
 	}
 	listKey := "kit.table.rows:" + id
 	stripe := alpha(t.Muted, 0.5)
+	// Reused rows keep their handlers, so those read the props of the latest
+	// build through cur.
+	cur := &p
+	reuse := p.RowVersion != nil && id != ""
+	if reuse {
+		cur = fairy.Local[TableProps]("kit.table.props:" + id)
+		*cur = p
+	}
 	body := fairy.VirtualList(p.Rows, rh, func(r int) *fairy.El {
 		row := fairy.Row().H(rh).Align(fairy.Center).BorderEdges(0, 0, 1, 0, t.Border).
 			Animate(motion.Fast).Role(fairy.RoleRow)
@@ -198,13 +213,13 @@ func Table(p TableProps) *fairy.El {
 			}
 			row.OnPointerDown(func(e fairy.PointerEvent) { ts.pressMods = e.Mods }).
 				OnClick(func() {
-					ts.click(r, p.Rows, ts.pressMods, p.RowID)
-					if p.OnSelect != nil {
-						p.OnSelect(id)
+					ts.click(r, cur.Rows, ts.pressMods, cur.RowID)
+					if cur.OnSelect != nil {
+						cur.OnSelect(id)
 					}
 				})
 			if p.OnOpen != nil {
-				row.OnDoubleClick(func() { p.OnOpen(id) })
+				row.OnDoubleClick(func() { cur.OnOpen(id) })
 			}
 		case p.Selected != nil:
 			sel = p.Selected(r)
@@ -219,7 +234,7 @@ func Table(p TableProps) *fairy.El {
 			row.HoverFill(alpha(t.Muted, 0.5))
 		}
 		if ts == nil && p.OnRowClick != nil {
-			row.Cursor(fairy.CursorPointer).OnClick(func() { p.OnRowClick(r) })
+			row.Cursor(fairy.CursorPointer).OnClick(func() { cur.OnRowClick(r) })
 		}
 		for i, c := range p.Columns {
 			cell := fairy.Row(p.Cell(r, i)).Align(fairy.Center).PadXY(8, 0).HFull().Clip().Role(fairy.RoleGridCell)
@@ -228,6 +243,25 @@ func Table(p TableProps) *fairy.El {
 		}
 		return row
 	}).Key(listKey).Grow(1).MinH(0)
+	if reuse {
+		cols := fnvhash.New().Float(rh).Bool(p.Zebra).Bool(p.OnOpen != nil).Bool(p.OnRowClick != nil).
+			Bool(p.Selected != nil).Bool(ts != nil).Uint(uint64(len(p.Columns)))
+		for i, c := range p.Columns {
+			cols = cols.Float(c.Width).Float(c.Grow).Float(c.MinWidth).Float(c.MaxWidth).
+				Uint(uint64(c.Align)).Float(override(i))
+		}
+		body.RowVersion(func(r int) (uint64, bool) {
+			h := cols.Uint(p.RowVersion(r)).Uint(uint64(r))
+			switch {
+			case ts != nil:
+				id := p.RowID(r)
+				h = h.Str(id).Bool(ts.IsSelected(id)).Bool(id == ts.cursor).Bool(ts.Multi)
+			case p.Selected != nil:
+				h = h.Bool(p.Selected(r))
+			}
+			return uint64(h), true
+		})
+	}
 	root := fairy.Col(header, body).Radius(t.RadiusLg()).Border(1, t.Border).Clip().
 		Role(fairy.RoleGrid)
 	if p.Label != "" {
@@ -276,7 +310,7 @@ func resizeHandle(st *tableState, p TableProps, i int, c Column) *fairy.El {
 	}
 	return fairy.Box().W(8).Top(4).Bottom(4).Right(0).Radius(2).Cursor(fairy.CursorResizeEW).
 		HoverFill(t.Border).Role(fairy.RoleSeparator).Label(Messages.ResizeColumn).
-		OnDrag(func(ev fairy.DragEvent) {
+		OnDrag(func(ev fairy.DragEvent) bool {
 			switch ev.Phase {
 			case fairy.DragStart:
 				st.resizeStart = st.widths[i]
@@ -296,11 +330,12 @@ func resizeHandle(st *tableState, p TableProps, i int, c Column) *fairy.El {
 					} else {
 						delete(st.widths, i)
 					}
-					return
+					return true
 				}
 				st.widths[i] = c.clamp(st.dragBase + ev.DX)
 				notify(st.widths[i])
 			}
+			return ev.Phase != fairy.DragStart
 		}).
 		OnDoubleClick(func() {
 			delete(st.widths, i)

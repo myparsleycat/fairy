@@ -29,3 +29,30 @@ func TestHitTestFollowsRotation(t *testing.T) {
 		}
 	}
 }
+
+// ScaleLive moves hit testing with its value without building the view.
+func TestScaleLiveHitTest(t *testing.T) {
+	scale := NewLive[float32](1)
+	builds := 0
+	w := newListWindow(t, func() *El {
+		builds++
+		return Box(Box().Size(20, 20).Left(40).Top(40).Key("box").ScaleLive(scale).OnClick(func() {}))
+	})
+	w.build()
+	w.placeAll()
+	hit := func(x, y float32) bool {
+		e := w.hitTest(x, y)
+		return e != nil && e.key == "box"
+	}
+	if !hit(50, 50) || hit(35, 35) {
+		t.Fatal("unscaled box is not hit where it is laid out")
+	}
+	scale.Set(2)
+	if w.dirty {
+		t.Fatal("Set marked the view for building")
+	}
+	w.placeAll()
+	if !hit(35, 35) || builds != 1 {
+		t.Fatalf("after Set(2): hit at the scaled corner %v with %d builds", hit(35, 35), builds)
+	}
+}

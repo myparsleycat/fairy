@@ -3,7 +3,6 @@
 package fairy
 
 import (
-	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/layout"
 	"github.com/myparsleycat/fairy/motion"
 )
@@ -61,7 +60,7 @@ func (w *Window) virtualRows(e *El) {
 		v.first <= max(int(view/lineH), 0) && min(int((view+n.H)/lineH)+1, lines) <= v.last {
 		return
 	}
-	overscan := n.H / 2
+	overscan := v.overscanFor(n.H)
 	top := view - overscan
 	bottom := e.state.ScrollY + n.H + overscan
 	first := max(int(top/lineH), 0)
@@ -136,7 +135,14 @@ func (w *Window) buildRow(e *El, i int) *El {
 		key = r.keys[i]
 	}
 	w.memoPath = rowMemoPath(e, i, key)
-	c := w.withBuildWindow(func() *El { return v.fn(i) })
+	c := w.withBuildWindow(func() *El {
+		if v.version != nil {
+			if ver, ok := v.version(i); ok {
+				return Memo("", ver, func() *El { return v.fn(i) })
+			}
+		}
+		return v.fn(i)
+	})
 	w.memoPath = path
 	if c == nil {
 		return nil
@@ -283,7 +289,7 @@ func (w *Window) layoutMeasured(e *El, keep bool) bool {
 	innerW := max(n.W-pad.Left-pad.Right, 0)
 	_, by := s.Base()
 	atEnd := e.stickBottom && by >= max(n.ContentH-n.H, 0)-0.5
-	overscan := n.H / 2
+	overscan := v.overscanFor(n.H)
 	view := s.ScrollY - pad.Top
 	first := r.rowAt(view-overscan, v.estimate)
 	bottom := view + n.H + overscan
@@ -369,30 +375,15 @@ func (w *Window) revealMeasured(e *El) {
 // revealSpan moves e's vertical scroll offset at once to show content from
 // top to top+h; see revealTarget.
 func (w *Window) revealSpan(e *El, top, h float32) {
-	w.jumpScrollY(e, w.revealTarget(e, top, h))
-}
-
-// jumpScrollY moves e's vertical scroll offset to y at once.
-func (w *Window) jumpScrollY(e *El, y float32) {
-	if !w.moveScrollY(e, y) {
-		return
-	}
-	s := e.state
-	if e.onScroll != nil {
-		e.onScroll(s.ScrollX, y)
-		w.markDirty(frameprof.CauseScroll)
-	}
+	w.moveScrollY(e, w.revealTarget(e, top, h))
 }
 
 // stepScroll clamps the scroll offset and advances smooth wheel scrolling or a fling.
 func (w *Window) stepScroll(e *El) {
 	s, n := e.state, &e.node
-	moved, moving := s.Step(n.ContentW-n.W, n.ContentH-n.H, w.dt, e.stickBottom, reducedMotion.Load())
+	_, moving := s.Step(n.ContentW-n.W, n.ContentH-n.H, w.dt, e.stickBottom, reducedMotion.Load())
 	if moving {
 		w.animating = true
-	}
-	if moved && e.onScroll != nil {
-		e.onScroll(s.ScrollX, s.ScrollY)
 	}
 }
 
@@ -403,8 +394,8 @@ func (w *Window) revealTarget(e *El, top, h float32) float32 {
 	return e.state.RevealTarget(top, h, n.H, n.ContentH-n.H)
 }
 
-// moveScrollY is jumpScrollY without OnScroll, for offsets the view passes
-// through within a frame. It reports whether the offset changed.
+// moveScrollY moves e's vertical scroll offset to y at once. It reports
+// whether the offset changed; OnScroll hears of it when e is next placed.
 func (w *Window) moveScrollY(e *El, y float32) bool {
 	if !e.state.MoveY(y) {
 		return false

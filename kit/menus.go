@@ -215,7 +215,7 @@ func menuRow(role fairy.Role, icon *svg.Vector, label, right string, s menuRowSt
 // UI does. Moving, not entering, takes it: keys keep the highlight until the
 // pointer moves, and rows shifting under a still pointer do not take it.
 // onHover, if set, also receives e's OnHover.
-func listPointer(st *popupState, e *fairy.El, i int, onHover func(bool)) *fairy.El {
+func listPointer(st *popupState, e *fairy.El, i int, onHover func(bool) bool) *fairy.El {
 	return e.OnPointerMove(func(fairy.PointerEvent) bool {
 		st.byPointer = true
 		if st.highlight == i {
@@ -223,13 +223,16 @@ func listPointer(st *popupState, e *fairy.El, i int, onHover func(bool)) *fairy.
 		}
 		st.highlight = i
 		return true
-	}).OnHover(func(in bool) {
+	}).OnHover(func(in bool) bool {
+		changed := false
 		if !in && st.byPointer && st.highlight == i {
 			st.highlight = -1
+			changed = true
 		}
-		if onHover != nil {
-			onHover(in)
+		if onHover != nil && onHover(in) {
+			changed = true
 		}
+		return changed
 	})
 }
 
@@ -281,10 +284,12 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 		st.sub = append(st.sub[:min(depth, len(st.sub))], i)
 		st.subByKey = byKey
 	}
-	closeBelow := func() {
+	closeBelow := func() bool {
 		if len(st.sub) > depth {
 			st.sub = st.sub[:depth]
+			return true
 		}
+		return false
 	}
 	stepKey := func(submenu bool) func(keyboard.KeyEvent) bool {
 		return func(k keyboard.KeyEvent) bool {
@@ -321,10 +326,8 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 		case it.Heading:
 			rows = append(rows, fairy.Text(it.Label).FontSize(t.SmallSize).Color(t.MutedForeground).Medium().PadXY(6, 4))
 		case it.Content != nil:
-			rows = append(rows, fairy.Box(it.Content).PadXY(6, 4).FocusGroup().Key(key).OnHover(func(in bool) {
-				if in {
-					closeBelow()
-				}
+			rows = append(rows, fairy.Box(it.Content).PadXY(6, 4).FocusGroup().Key(key).OnHover(func(in bool) bool {
+				return in && closeBelow()
 			}))
 		case len(it.Submenu) > 0:
 			open := len(st.sub) > depth && st.sub[depth] == i
@@ -337,10 +340,12 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 			}
 			sub := it.Submenu
 			row.Child(fairy.Icon(lucide.ChevronRight).Size(16, 16)).
-				OnHover(func(in bool) {
+				OnHover(func(in bool) bool {
 					if in && !open {
 						openAt(i, false)
+						return true
 					}
+					return false
 				}).
 				OnKey(func(k keyboard.KeyEvent) bool {
 					if stepKey(true)(k) {
@@ -387,7 +392,7 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 				if it.SubmenuWidth > 0 {
 					panel.W(it.SubmenuWidth)
 				}
-				row.Popover(panel, fairy.PopoverOptions{Side: fairy.SideRight, Gap: 4, OnDismiss: closeBelow})
+				row.Popover(panel, fairy.PopoverOptions{Side: fairy.SideRight, Gap: 4, OnDismiss: func() { closeBelow() }})
 			}
 			rows = append(rows, row)
 		default:
@@ -405,10 +410,8 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 				}
 			}).Key(key)
 			if !it.Disabled {
-				row.OnHover(func(in bool) {
-					if in {
-						closeBelow()
-					}
+				row.OnHover(func(in bool) bool {
+					return in && closeBelow()
 				})
 				if o.step != nil {
 					row.OnKey(stepKey(false))
@@ -713,9 +716,6 @@ const (
 	// arrowTick is how often a scroll arrow under the pointer scrolls its
 	// list by an entry, as Base UI's.
 	arrowTick = 40 * time.Millisecond
-	// arrowStale is how long the timer of a scroll arrow keeps going without
-	// the list being built, as after its window closes.
-	arrowStale = 500 * time.Millisecond
 )
 
 // rowKey is the key of the row for value in the list named list.
@@ -726,13 +726,11 @@ func rowKey(list, value string) string { return list + ":row:" + value }
 // its bottom; they last as long as the list's scroll offset, which a popup
 // closed and opened again within a few builds keeps. arrow is the arrow under
 // the pointer, -1 up or +1 down, and gen tells its scrolling timer when it
-// has been replaced. builtAt is when the list was last built, so the timer
-// stops once it is not.
+// has been replaced.
 type scrollArrows struct {
 	key                      string
 	hiddenAbove, hiddenBelow bool
 	arrow, gen               int
-	builtAt                  time.Time
 }
 
 // withScrollArrows lays an arrow over the top and the bottom edge of list, a
@@ -746,7 +744,6 @@ type scrollArrows struct {
 func withScrollArrows(list *fairy.El, key string, onArrow func() bool) *fairy.El {
 	sa := fairy.Local[scrollArrows](key + ":arrows")
 	sa.key = key
-	sa.builtAt = time.Now()
 	var top, bottom float32
 	if sa.hiddenAbove {
 		list.Child(sa.arrowEl(true, onArrow))
@@ -789,32 +786,59 @@ func (sa *scrollArrows) arrowEl(up bool, onArrow func() bool) *fairy.El {
 			sa.scroll(window, sa.gen)
 		}
 		return changed
-	}).OnHover(func(in bool) {
+	}).OnHover(func(in bool) bool {
 		if !in && sa.arrow == dir {
 			sa.arrow = 0
 			sa.gen++
 		}
+		return false
 	})
 }
 
 // scroll scrolls the list an entry toward sa.arrow after arrowTick, and
 // again after each tick until the arrow with gen is left or leaves the view,
-// the list stops being built or shows its end that way.
+// or the list shows its end that way. Ticks post to the window without
+// building its view, and stop with the window.
 func (sa *scrollArrows) scroll(window *fairy.Window, gen int) {
 	time.AfterFunc(arrowTick, func() {
-		fairy.Go(func() {
+		window.PostQuiet(func() {
 			if sa.arrow == 0 || sa.gen != gen {
 				return
 			}
 			up := sa.arrow < 0
-			if up && !sa.hiddenAbove || !up && !sa.hiddenBelow || time.Since(sa.builtAt) > arrowStale ||
-				!window.ScrollStep(arrowKey(sa.key, up), up) {
+			if up && !sa.hiddenAbove || !up && !sa.hiddenBelow || !window.ScrollStep(arrowKey(sa.key, up), up) {
 				sa.arrow = 0
 				return
 			}
 			sa.scroll(window, gen)
 		})
 	})
+}
+
+// setHovered records whether the pointer is over the row of value, and
+// reports whether that changed.
+func (st *popupState) setHovered(value string, in bool) bool {
+	switch {
+	case in && st.hovered != value:
+		st.hovered = value
+	case !in && st.hovered == value:
+		st.hovered = ""
+	default:
+		return false
+	}
+	return true
+}
+
+// hoverFunc adapts an Item's OnHover, which does not report whether it
+// changed anything, to fairy.El.OnHover; the view is built again after it.
+func hoverFunc(f func(bool)) func(bool) bool {
+	if f == nil {
+		return nil
+	}
+	return func(in bool) bool {
+		f(in)
+		return true
+	}
 }
 
 // dropHighlight clears the highlight of a Select or Combobox list for the
@@ -826,16 +850,10 @@ func (st *popupState) dropHighlight() bool {
 }
 
 func selectRichRow(st *popupState, row *fairy.El, i int, id string, item Item) *fairy.El {
-	row.OnHover(item.OnHover)
+	row.OnHover(hoverFunc(item.OnHover))
 	wrap := fairy.Row(row.Grow(1).MinW(0)).Align(fairy.Center).Role(fairy.RoleNone).
 		FocusReturn("kit.select:" + id)
-	hover := func(in bool) {
-		if in {
-			st.hovered = item.Value
-		} else if st.hovered == item.Value {
-			st.hovered = ""
-		}
-	}
+	hover := func(in bool) bool { return st.setHovered(item.Value, in) }
 	if i >= 0 {
 		listPointer(st, wrap, i, hover)
 	} else {
@@ -863,12 +881,8 @@ func selectRichRow(st *popupState, row *fairy.El, i int, id string, item Item) *
 // fading it in while the pointer is over either of them. Row i stays
 // highlighted while the pointer is on the button.
 func selectActionRow(st *popupState, row *fairy.El, i int, value string, a rowAction) *fairy.El {
-	wrap := listPointer(st, fairy.Row(row.Grow(1).MinW(0)).Align(fairy.Center).Role(fairy.RoleNone), i, func(in bool) {
-		if in {
-			st.hovered = value
-		} else if st.hovered == value {
-			st.hovered = ""
-		}
+	wrap := listPointer(st, fairy.Row(row.Grow(1).MinW(0)).Align(fairy.Center).Role(fairy.RoleNone), i, func(in bool) bool {
+		return st.setHovered(value, in)
 	})
 	button := IconButton(a.icon, func() {
 		st.open, st.hovered = false, ""

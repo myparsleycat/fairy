@@ -283,15 +283,17 @@ func TestWindowChromeHover(t *testing.T) {
 					Box().Key("control").Size(40, 20).Focusable().FocusHighlight(RGB(255, 0, 0)),
 					Box().Key("excluded").Size(40, 20).Left(40).
 						WindowChromeExclude().Focusable().FocusHighlight(RGB(255, 0, 0)),
-				).Size(80, 30).WindowChrome().OnHover(func(in bool) {
+				).Size(80, 30).WindowChrome().OnHover(func(in bool) bool {
 					if in {
 						chromeHovers++
 					}
+					return true
 				}).OnPointerMove(func(PointerEvent) bool { chromeMoves++; return false })).
-					WFull().HFull().OnHover(func(in bool) {
+					WFull().HFull().OnHover(func(in bool) bool {
 					if in {
 						backgroundHovers++
 					}
+					return true
 				}).OnPointerMove(func(PointerEvent) bool { backgroundMoves++; return false })
 				if tc.modal {
 					cx.Overlay(Box(focused).WFull().HFull(), nil)
@@ -647,7 +649,10 @@ type dragLog struct {
 
 func dragTarget(l *dragLog, buttons MouseButtons) *El {
 	return Box().Size(100, 60).DragButtons(buttons).
-		OnDrag(func(d DragEvent) { l.drags = append(l.drags, d) }).
+		OnDrag(func(d DragEvent) bool {
+			l.drags = append(l.drags, d)
+			return true
+		}).
 		OnRightClick(func(PointerEvent) { l.rights++ })
 }
 
@@ -1071,5 +1076,27 @@ func TestTouchLongPress(t *testing.T) {
 	w.onTouchUp(1, 10, 10, time.Unix(1, 0))
 	if rights != 1 || clicks != 0 {
 		t.Fatalf("long press: %d right clicks, %d clicks", rights, clicks)
+	}
+}
+
+// OnDrag and OnHover build the view again only when they report a change.
+func TestDragAndHoverRebuildOnlyWhenChanged(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		var drags, hovers int
+		w := newPointerWindow(t, func() *El {
+			return Col(Box().Size(100, 60).
+				OnDrag(func(DragEvent) bool { drags++; return changed }).
+				OnHover(func(bool) bool { hovers++; return changed }))
+		})
+		w.onMouseMove(10, 10)
+		if hovers != 1 || w.dirty != changed {
+			t.Fatalf("hover returning %v: %d calls, dirty = %v", changed, hovers, w.dirty)
+		}
+		w.onButtonDown(10, 10, 0)
+		w.dirty = false
+		w.onMouseMove(40, 10)
+		if drags == 0 || w.dirty != changed {
+			t.Fatalf("drag returning %v: %d calls, dirty = %v", changed, drags, w.dirty)
+		}
 	}
 }

@@ -214,6 +214,18 @@ func (w *Window) placeTransform(e *El, enterScale float32) {
 			}
 		}
 	}
+	if l := e.live; l != nil {
+		if l.scale != nil {
+			if v := l.scale.read(w); finite(v) && v >= 0 {
+				k = v
+			}
+		}
+		if l.rotate != nil {
+			if v := l.rotate.read(w); finite(v) {
+				rot = v
+			}
+		}
+	}
 	k *= enterScale
 	e.xfK, e.xfRot = k*press, rot
 	if k*press == 1 && rot == 0 && pdx == 0 && pdy == 0 {

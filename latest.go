@@ -15,8 +15,9 @@ import (
 // cancels the context of every earlier one: one still waiting out the
 // debounce never runs, and one running should return early; its answer is
 // dropped either way. The answer of the newest request lands on the UI
-// thread through Go, so windows update once: Value returns it from then on,
-// and the OnLand function runs with it.
+// thread through Go, which updates every window, or through the Post of the
+// window given to SetWindow: Value returns it from then on, and the OnLand
+// function runs with it.
 //
 // Latest is safe for use from any goroutine.
 type Latest[T any] struct {
@@ -37,6 +38,19 @@ type Latest[T any] struct {
 // request before they start, so typing runs one request per pause.
 func NewLatest[T any](debounce time.Duration) *Latest[T] {
 	return &Latest[T]{debounce: debounce, land: Go}
+}
+
+// SetWindow makes answers land through w.Post, so that only w builds its
+// view again instead of every window. Requests started before it land as
+// before. Answers of a window that has closed are dropped, and Pending then
+// stays true. A nil w makes answers land through Go again.
+func (l *Latest[T]) SetWindow(w *Window) {
+	l.mu.Lock()
+	l.land = Go
+	if w != nil {
+		l.land = w.Post
+	}
+	l.mu.Unlock()
 }
 
 // OnLand sets a function that runs on the UI thread with each answer that

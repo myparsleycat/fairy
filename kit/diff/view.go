@@ -9,6 +9,7 @@ import (
 	"github.com/myparsleycat/fairy"
 	"github.com/myparsleycat/fairy/clipboard"
 	"github.com/myparsleycat/fairy/icons/lucide"
+	"github.com/myparsleycat/fairy/internal/fnvhash"
 	"github.com/myparsleycat/fairy/keyboard"
 	"github.com/myparsleycat/fairy/kit"
 	"github.com/myparsleycat/fairy/kit/syntax"
@@ -55,10 +56,17 @@ func View(id string, s *State, p ViewProps) *fairy.El {
 		w.ScrollToRowTop(key, s.reveal)
 		s.reveal = -1
 	}
-	v := &view{s: s, p: p, l: lk}
+	// Reused rows keep their handlers, so they reach the props of the latest
+	// build through the same view.
+	v := fairy.Local[view]("kit.diff.view:" + id)
+	*v = view{s: s, p: p, l: lk, msgs: messagesHash()}
 	list := fairy.VirtualListMeasured(len(s.rows), lineH, func(i int) string { return s.keys[i] }, v.row).
 		Key(key).Grow(1).MinH(0).WFull().
-		OnScroll(func(_, y float32) { s.scrollY = y })
+		RowVersion(v.rowVersion).
+		OnScroll(func(_, y float32) bool {
+			s.scrollY = y
+			return false
+		})
 	return fairy.Col(list).Key(key+".root").Grow(1).MinH(0).
 		Fill(lk.bg).Radius(t.RadiusLg()).Border(1, t.Border).Clip().
 		Focusable().FocusVisibleBorder(t.Ring).FocusRing(3, t.Ring.Alpha(0.5)).
@@ -67,9 +75,22 @@ func View(id string, s *State, p ViewProps) *fairy.El {
 }
 
 type view struct {
-	s *State
-	p ViewProps
-	l look
+	s    *State
+	p    ViewProps
+	l    look
+	msgs uint64 // the kit messages rows show, which change with the language
+}
+
+func messagesHash() uint64 {
+	m := &kit.Messages
+	h := fnvhash.New()
+	for _, s := range [...]string{
+		m.DiffUnchangedLine, m.DiffAddedLine, m.DiffRemovedLine, m.DiffNoNewline,
+		m.DiffShowAll, m.DiffShowBelow, m.DiffShowAbove, m.DiffHiddenLine, m.DiffHiddenLines,
+	} {
+		h = h.Str(s)
+	}
+	return uint64(h)
 }
 
 type tints struct{ line, gutter, word, number, bar, count fairy.Color }
@@ -190,6 +211,19 @@ func (v *view) notify() {
 	if v.p.OnSelect != nil {
 		v.p.OnSelect(v.s.selection)
 	}
+}
+
+// rowVersion is row i's version: it changes with the files, their modes and
+// revealed ranges, and the row's part of the selection. Headers with
+// HeaderActions are built every time, since the app builds their actions.
+func (v *view) rowVersion(i int) (uint64, bool) {
+	s := v.s
+	if s.rows[i].kind == rowFile && v.p.HeaderActions != nil {
+		return 0, false
+	}
+	h := fnvhash.New().Uint(s.rev).Uint(v.msgs).Uint(uint64(i)).
+		Bool(s.rowSelected(i, Old, false)).Bool(s.rowSelected(i, New, false)).Bool(s.rowSelected(i, New, true))
+	return uint64(h), true
 }
 
 // row builds row i and records its laid-out height, so the state maps
@@ -396,13 +430,13 @@ func (v *view) number(i, f, n int, side Side, k LineKind, sel bool, digits int) 
 			s.releaseLine()
 			v.notify()
 		}).
-		OnDrag(func(d fairy.DragEvent) {
+		OnDrag(func(d fairy.DragEvent) bool {
 			switch d.Phase {
 			case fairy.DragMove:
 				to := s.rowFrom(i, d.LocalY)
 				r := s.rows[to]
 				if r.f != f {
-					return
+					return false
 				}
 				// Unified rows hold one side or both: keep to the pressed side
 				// where it can.
@@ -412,17 +446,17 @@ func (v *view) number(i, f, n int, side Side, k LineKind, sel bool, digits int) 
 					side = 1 - at.Side
 					m, ok = s.rowLine(r, side)
 				}
-				if ok {
-					s.dragTo(f, LineRef{side, m})
-				}
+				return ok && s.dragTo(f, LineRef{side, m})
 			case fairy.DragEnd:
 				if d.Canceled {
 					s.cancelLine()
-					return
+					return true
 				}
 				s.releaseLine()
 				v.notify()
+				return true
 			}
+			return false
 		})
 }
 

@@ -105,6 +105,13 @@ func primsBounds(ps []Prim) ([4]float32, bool) {
 			b = [4]float32{lx, ly, hx - lx, hy - ly}
 		}
 		if p.Flags&FlagXform != 0 {
+			if p.Kind == KindRect {
+				// The shader grows the quad by a device pixel; see xform_pixel.
+				if det := float32(math.Abs(float64(p.Xform[0]*p.Xform[3] - p.Xform[1]*p.Xform[2]))); det > 0 {
+					m := 1 / float32(math.Sqrt(float64(det)))
+					b = [4]float32{b[0] - m, b[1] - m, b[2] + 2*m, b[3] + 2*m}
+				}
+			}
 			b = intersect(b, p.Clip2)
 			b = xformBounds(b, p.Xform, p.Xlate)
 		}

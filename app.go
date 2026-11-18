@@ -62,6 +62,13 @@ func Go(f func()) {
 	enqueueAppCall(appCall{run: f}, false)
 }
 
+// GoQuiet is Go without updating any window afterwards, for work that
+// changes nothing the views show, or that updates only the windows it calls
+// Window.Update on.
+func GoQuiet(f func()) {
+	enqueueAppCall(appCall{run: f}, true)
+}
+
 // Do runs f on the UI thread and waits for it to return. On the UI thread it
 // calls f directly. If no UI loop is running, or it exits before f runs, Do
 // returns without calling f.

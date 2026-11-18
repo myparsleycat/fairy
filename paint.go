@@ -36,6 +36,8 @@ func (w *Window) paintScene() bool {
 		ok = w.paintTooltip() && ok
 	}
 	w.sweepSurfaces()
+	w.sweepCanvases()
+	w.sweepPathTextures()
 	w.sweepNatives()
 	w.sweepTextures(w.frame, maxIdleTextureBytes)
 	return ok
@@ -72,8 +74,8 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 	hov := w.hovered(e)
 
 	textColor := inheritedColor
-	if e.tp.color.isSet() {
-		textColor = e.tp.color
+	if e.ownTP.color.isSet() {
+		textColor = e.ownTP.color
 	}
 	if hov && e.hoverText.isSet() {
 		textColor = e.hoverText
@@ -137,7 +139,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		st := e.state
 		fill = vecColor(w.animate(st, animFill, 4, 0.002, colorVec(fill), *m))
 		borderColor = vecColor(w.animate(st, animBorder, 4, 0.002, colorVec(borderColor), *m))
-		if e.tp.color.isSet() || e.hoverText.isSet() {
+		if e.ownTP.color.isSet() || e.hoverText.isSet() {
 			textColor = vecColor(w.animate(st, animText, 4, 0.002, colorVec(textColor), *m))
 		}
 		// Springs and retargeted eases can overshoot the target.
@@ -302,6 +304,8 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 		w.paintArc(e, content, textColor, devClip, opacity)
 	case kindSurface:
 		w.paintSurface(e, content, radii, devClip, opacity)
+	case kindCanvas:
+		ok = w.paintCanvas(e, content, devClip, opacity) && ok
 	case kindEmbed:
 		w.paintEmbed(e, content, radii, devClip, opacity)
 	}

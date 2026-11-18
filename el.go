@@ -26,6 +26,7 @@ const (
 	kindSurface
 	kindEmbed
 	kindArc
+	kindCanvas
 )
 
 // Cursor is a system pointer shape.
@@ -209,6 +210,7 @@ type El struct {
 	fit       Fit
 	surface   func(SurfaceFrame) bool
 	retain    *uint64 // Retain's version; nil redraws the surface every frame
+	canvas    func(*Painter)
 	embed     embed.Element
 	vec       *svg.Vector
 	arc       *arcProps
@@ -219,14 +221,14 @@ type El struct {
 	onDoubleClick func()
 	onRightClick  func(PointerEvent)
 	onPointerDown func(PointerEvent)
-	onHover       func(bool)
+	onHover       func(bool) bool
 	onPointerMove func(PointerEvent) bool
 	onWheel       func(WheelEvent) bool
-	onDrag        func(DragEvent)
+	onDrag        func(DragEvent) bool
 	dragButtons   MouseButtons // 0 means MouseLeft
 	onKey         func(keyboard.KeyEvent) bool
 	onBlur        func()
-	onScroll      func(x, y float32)
+	onScroll      func(x, y float32) bool
 	onScrollEdges func(top, bottom bool)
 	onLayout      func(w, h float32) bool
 	focusable     bool
@@ -720,7 +722,9 @@ func (e *El) OnRightClick(f func(PointerEvent)) *El { e.onRightClick = f; return
 func (e *El) OnPointerDown(f func(PointerEvent)) *El { e.onPointerDown = f; return e }
 
 // OnHover runs when the pointer enters (true) or leaves (false) the element.
-func (e *El) OnHover(f func(bool)) *El { e.onHover = f; return e }
+// Return true when the handler changed what the view shows, so that View
+// runs again. Hover styles such as HoverFill need no handler.
+func (e *El) OnHover(f func(bool) bool) *El { e.onHover = f; return e }
 
 // OnPointerMove reports the pointer's position while it moves over the
 // element with no button held, at most once per frame, as for hover picking
@@ -731,13 +735,17 @@ func (e *El) OnPointerMove(f func(PointerEvent) bool) *El { e.onPointerMove = f;
 
 // OnWheel receives wheel and touchpad scrolling over the element, as for
 // zooming a 3D view about the pointer. The innermost element under the
-// pointer gets it first. Return true when handled: nothing scrolls. Return
-// false to pass it on to the scroll containers and OnWheel handlers outside.
+// pointer gets it first. Return true when handled: nothing scrolls and View
+// runs again. Return false to pass it on to the scroll containers and OnWheel
+// handlers outside; a handler that passes it on but changed what the view
+// shows calls Window.Update.
 func (e *El) OnWheel(f func(WheelEvent) bool) *El { e.onWheel = f; return e }
 
 // OnDrag reports pointer movement while a press that began on the element is held.
-// Only the left button drags unless DragButtons says otherwise.
-func (e *El) OnDrag(f func(DragEvent)) *El { e.onDrag = f; return e }
+// Only the left button drags unless DragButtons says otherwise. Return true
+// when the handler changed what the view shows, so that View runs again; a
+// drag that only moves a Live value, as with OffsetLive, returns false.
+func (e *El) OnDrag(f func(DragEvent) bool) *El { e.onDrag = f; return e }
 
 // DragButtons sets which buttons start OnDrag, as MouseLeft|MouseRight for
 // a 3D view that turns with the left button and pans with the right. The
@@ -764,13 +772,16 @@ func (e *El) OnKey(f func(keyboard.KeyEvent) bool) *El { e.onKey = f; return e }
 // user clicks elsewhere or presses Tab. It does not run when the element leaves the view while focused.
 func (e *El) OnBlur(f func()) *El { e.onBlur = f; return e }
 
-// OnScroll reports the scroll offset of a scroll container when it changes.
-func (e *El) OnScroll(f func(x, y float32)) *El { e.onScroll = f; return e }
+// OnScroll reports the scroll offset of a scroll container when it changes,
+// at most once per change however the offset moved: by wheel, touchpad,
+// scroll bar, glide or a measured list keeping its rows in place. Return true
+// when the handler changed what the view shows, so that View runs again. To
+// read the offset without a handler, use Window.ScrollOffset.
+func (e *El) OnScroll(f func(x, y float32) bool) *El { e.onScroll = f; return e }
 
 // OnScrollEdges reports whether a vertical scroll container shows the top and
 // the bottom of its content, when it is first placed and whenever either
-// changes. Unlike OnScroll, scrolling between the edges does not rebuild the
-// view.
+// changes. View runs again after each report.
 func (e *El) OnScrollEdges(f func(top, bottom bool)) *El { e.onScrollEdges = f; return e }
 
 // OnLayout reports the element's laid-out size when it is first placed and

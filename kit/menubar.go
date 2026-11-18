@@ -64,10 +64,12 @@ func Menubar(id string, menus []MenubarMenu) *fairy.El {
 					open(i, false)
 				}
 			}).
-			OnHover(func(in bool) {
+			OnHover(func(in bool) bool {
 				if in && st.open && st.menu != i {
 					open(i, false)
+					return true
 				}
+				return false
 			}).
 			OnKey(func(k keyboard.KeyEvent) bool {
 				switch {

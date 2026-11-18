@@ -48,7 +48,8 @@ func Surface(draw func(SurfaceFrame) bool) *El {
 	return e
 }
 
-// Retain makes a Surface keep its pixels between paints. The window then
+// Retain makes a Surface keep its pixels, or a Canvas its drawing, between
+// paints; see Canvas for when a canvas draws again. A Surface's window then
 // composites the previous texture and calls draw only when the surface first
 // appears, when its pixel size or scale changes, after the device was
 // recreated, when version differs from the version of the last draw, after
@@ -133,8 +134,8 @@ func (w *Window) sweepSurfaces() {
 	clear(w.invalidSurfaces)
 }
 
-// InvalidateSurface makes the retained Surface with key draw again on the
-// next paint, and asks for that paint. Use it when what the surface shows
+// InvalidateSurface makes the retained Surface or Canvas with key draw again
+// on the next paint, and asks for that paint. Use it when what the surface shows
 // changed without a new Retain version, as when a model finishes loading.
 // Call it on the UI thread; from other goroutines use Post.
 func (w *Window) InvalidateSurface(key string) {

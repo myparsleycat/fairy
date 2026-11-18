@@ -180,12 +180,23 @@ func (w *Window) setScroll(e *El, sx, sy float32) bool {
 	if !e.state.Set(sx, sy, n.ContentW-n.W, n.ContentH-n.H) {
 		return false
 	}
-	if e.onScroll != nil {
-		e.onScroll(e.state.ScrollX, e.state.ScrollY)
-		w.markDirty(frameprof.CauseScroll)
-	}
+	w.reportScroll(e)
 	w.invalidate()
 	return true
+}
+
+// reportScroll passes e's scroll offset to OnScroll when it differs from the
+// one reported last. Offsets change while events are handled and while the
+// tree is placed, several times a frame; each change is reported once.
+func (w *Window) reportScroll(e *El) {
+	s := e.state
+	if e.onScroll == nil || s == nil || e.kind == kindInput || s.ScrollX == s.repX && s.ScrollY == s.repY {
+		return
+	}
+	s.repX, s.repY = s.ScrollX, s.ScrollY
+	if e.onScroll(s.ScrollX, s.ScrollY) {
+		w.markDirty(frameprof.CauseScroll)
+	}
 }
 
 // wheelScroll moves a scroll container's target offset; the offset follows it smoothly.
@@ -277,9 +288,8 @@ func (w *Window) onWheel(x, y, delta float32, hwheel, precise bool) {
 	for e := target; e != nil; e = e.parent {
 		if e.onWheel != nil {
 			ev.LocalX, ev.LocalY, ev.W, ev.H = x-e.absX, y-e.absY, e.w, e.h
-			handled := e.onWheel(ev)
-			w.markDirty(frameprof.CauseWheel)
-			if handled {
+			if e.onWheel(ev) {
+				w.markDirty(frameprof.CauseWheel)
 				break
 			}
 		}
