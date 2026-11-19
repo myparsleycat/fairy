@@ -42,7 +42,12 @@ type MenuItem struct {
 	// SubmenuWidth fixes the width of Submenu when set, as a w class on
 	// shadcn/ui's sub content.
 	SubmenuWidth float32
-	OnClick      func()
+	// Preview builds a panel shown to the right of the item while the pointer
+	// rests on it, such as a picture of what choosing the item does, also when
+	// the item is disabled. It runs only then, on each build, and the panel
+	// takes no pointer input. It is not used with Submenu or Content.
+	Preview func() *fairy.El
+	OnClick func()
 	// Content is shown in place of a row, with a row's padding, for controls
 	// such as a number field. It is not highlighted, and the menu's arrow keys
 	// and type-select pass over it: its controls are a focus group of their
@@ -424,13 +429,35 @@ func menuItems(st *popupState, depth int, items []MenuItem, close func(), o menu
 					f()
 				}
 			}).Key(key)
-			if !it.Disabled {
+			// A preview is kept as this depth's open submenu, so that hovering
+			// another row and closing the menu drop it as they drop a submenu.
+			// A disabled row keeps its OnHover, so it shows its preview too.
+			previewing := it.Preview != nil && len(st.sub) > depth && st.sub[depth] == i
+			if it.Preview != nil || !it.Disabled {
 				row.OnHover(func(in bool) bool {
-					return in && closeBelow()
+					switch {
+					case in && it.Preview != nil:
+						if previewing {
+							return false
+						}
+						openAt(i, false)
+						return true
+					case in:
+						return closeBelow()
+					case previewing:
+						return closeBelow()
+					}
+					return false
 				})
-				if o.step != nil {
-					row.OnKey(stepKey(false))
+			}
+			if previewing {
+				if content := it.Preview(); content != nil {
+					row.Popover(popupSurface(fairy.Box(content).Pad(4), true).PassThrough(),
+						fairy.PopoverOptions{Side: fairy.SideRight, Align: fairy.AlignStart, Gap: 4})
 				}
+			}
+			if !it.Disabled && o.step != nil {
+				row.OnKey(stepKey(false))
 			}
 			if i == first {
 				row.AutoFocus()
