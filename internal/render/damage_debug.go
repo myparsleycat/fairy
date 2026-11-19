@@ -10,11 +10,10 @@ import (
 
 // damageCheck is the state of DamageDebugVerify.
 type damageCheck struct {
-	refs    [2]*Target
-	frames  int  // frames drawn
-	good    int  // frames presented in a row since anything made buffers stale
-	matched int  // buffers found as expected
-	logged  bool // a mismatch was logged
+	ref     *Target // the frame drawn whole
+	frames  int     // frames drawn in part and checked
+	matched int     // frames that matched their full redraw
+	logged  bool    // a mismatch was logged
 }
 
 // SetDamageDebug sets a diagnostic mode of damage tracking.
@@ -45,34 +44,37 @@ func tintPrim(g rectI) Prim {
 	}
 }
 
-// checkBuffer compares the swap chain buffer about to be drawn with the
-// reference drawn for the frame last presented from it, two frames ago.
-func (r *Renderer) checkBuffer() {
+// verifyFrame draws s whole into the reference target and compares it with
+// the frame just drawn in part. Call it outside draw: the reference draw and
+// the readback each take the device lock.
+func (r *Renderer) verifyFrame(s *Scene, clear [4]float32) {
 	c := &r.check
-	if c.good < 2 || c.logged {
+	frame := r.target
+	if frame == nil {
+		frame = r.retained
+	}
+	if frame == nil || c.logged {
 		return
 	}
-	ref := c.refs[c.frames%2]
-	if ref == nil || ref.Width != r.width || ref.Height != r.height {
+	c.frames++
+	if !r.drawReference(s, clear, frame.Format) {
 		return
 	}
-	buf, err := r.swap.buffer()
-	if err != nil {
-		return
-	}
-	got, _, err := r.ctx.ReadPixels(buf)
-	buf.Release()
-	if err != nil {
-		return
-	}
-	want, _, err := r.ctx.ReadPixels(ref.tex)
+	var got, want []byte
+	var err error
+	r.withDevice(func() {
+		if got, _, err = r.ctx.ReadPixels(frame.tex); err != nil {
+			return
+		}
+		want, _, err = r.ctx.ReadPixels(c.ref.tex)
+	})
 	if err != nil {
 		return
 	}
 	if bytes.Equal(got, want) {
 		c.matched++
 		if c.matched == 1 || c.matched%100 == 0 {
-			log.Printf("fairy: damage verify: %d buffers held the frame presented from them", c.matched)
+			log.Printf("fairy: damage verify: %d frames drawn in part matched a full redraw", c.matched)
 		}
 		return
 	}
@@ -86,37 +88,37 @@ func (r *Renderer) checkBuffer() {
 		}
 	}
 	px := first / 4
-	log.Printf("fairy: damage verify: frame %d: back buffer differs from the frame presented from it in %d bytes, first at (%d, %d)",
+	log.Printf("fairy: damage verify: frame %d: drawn in part, it differs from a full redraw in %d bytes, first at (%d, %d)",
 		c.frames, n, px%r.width, px/r.width)
 	c.logged = true
 }
 
-// drawReference draws s whole into the reference target for this frame.
-func (r *Renderer) drawReference(s *Scene, clear [4]float32) {
+// drawReference draws s whole into the reference target and reports whether
+// it did.
+func (r *Renderer) drawReference(s *Scene, clear [4]float32, format uint32) bool {
 	c := &r.check
-	i := c.frames % 2
-	if t := c.refs[i]; t == nil || t.Width != r.width || t.Height != r.height {
+	if t := c.ref; t == nil || t.Width != r.width || t.Height != r.height || t.Format != format {
 		t.Release()
-		t, err := NewTargetFormat(r.ds, r.width, r.height, backBufferFormat)
+		t, err := NewTargetFormat(r.ds, r.width, r.height, format)
 		if err != nil {
-			c.refs[i] = nil
-			return
+			c.ref = nil
+			return false
 		}
-		c.refs[i] = t
+		c.ref = t
 	}
 	rtv, target, on, timer, snapshot, region, stats := r.rtv, r.target, r.damageOn, r.timer, r.snapshot, r.region, r.stats
-	r.rtv, r.target, r.damageOn, r.timer, r.snapshot = c.refs[i].rtv, c.refs[i], false, nil, nil
+	r.target, r.damageOn, r.timer, r.snapshot = c.ref, false, nil, nil
 	err := r.draw(s, clear)
 	r.rtv, r.target, r.damageOn, r.timer, r.snapshot, r.region, r.stats = rtv, target, on, timer, snapshot, region, stats
 	if err != nil {
-		c.refs[i].Release()
-		c.refs[i] = nil
+		c.ref.Release()
+		c.ref = nil
+		return false
 	}
+	return true
 }
 
 func (c *damageCheck) release() {
-	for i := range c.refs {
-		c.refs[i].Release()
-		c.refs[i] = nil
-	}
+	c.ref.Release()
+	c.ref = nil
 }

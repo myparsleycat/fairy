@@ -51,7 +51,13 @@ type Renderer struct {
 	comp       *composition  // DirectComposition tree when the swap chain has alpha
 	target     *Target       // offscreen renderers draw here instead of a swap chain
 	staging    d3d.Texture2D // ReadPixels copies the target through it
-	rtv        d3d.RenderTargetView
+	swapRTV    d3d.RenderTargetView
+	// retained holds a window's frame while damage tracking is on. Frames are
+	// drawn into it in part and copied whole to the swap chain, so no frame
+	// depends on what a swap chain buffer held before it.
+	retained     *Target
+	retainFailed bool                 // the last attempt to make retained failed
+	rtv          d3d.RenderTargetView // the view draw renders into: target's, retained's or swapRTV
 
 	vs         d3d.VertexShader
 	ps         d3d.PixelShader
@@ -80,6 +86,7 @@ type Renderer struct {
 	contrast      float32
 	occluded      bool
 	presented     bool
+	needPresent   bool // the last Present did not return S_OK, so the next frame presents even if unchanged
 
 	// With damage tracking, a frame redraws only the part of the target that
 	// differs from the frame before; region is that part for the frame being
@@ -91,7 +98,7 @@ type Renderer struct {
 	debugDamage DamageDebug
 	shownTint   rectSet    // the rects tinted last frame by DamageDebugShow
 	pass        rectI      // the rect the current pass draws in, when not full
-	dirty       []d3d.Rect // region.rects of a frame drawn in part, cleared and presented
+	dirty       []d3d.Rect // region.rects of a frame drawn in part, for ClearView
 	check       damageCheck
 }
 
@@ -194,7 +201,6 @@ func (r *Renderer) createSwapChain(transparent bool) error {
 		return err
 	}
 	r.dmg.invalidate(DamageFirst)
-	r.check.good = 0
 	return nil
 }
 
@@ -213,8 +219,8 @@ func (r *Renderer) SetTransparent(on bool) error {
 	r.ds.Lock()
 	defer r.ds.Unlock()
 	r.ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
-	r.rtv.Release()
-	r.rtv = d3d.RenderTargetView{}
+	r.swapRTV.Release()
+	r.swapRTV, r.rtv = d3d.RenderTargetView{}, d3d.RenderTargetView{}
 	r.comp.release()
 	r.comp = nil
 	r.swap.release()
@@ -236,7 +242,7 @@ func (r *Renderer) createTarget() error {
 		return err
 	}
 	defer buf.Release()
-	r.rtv, err = r.dev.CreateRenderTargetView(buf, nil)
+	r.swapRTV, err = r.dev.CreateRenderTargetView(buf, nil)
 	return err
 }
 
@@ -395,8 +401,10 @@ func (r *Renderer) Resize(width, height int) error {
 		return r.resizeTarget(width, height)
 	}
 	r.ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
-	r.rtv.Release()
-	r.rtv = d3d.RenderTargetView{}
+	r.swapRTV.Release()
+	r.swapRTV, r.rtv = d3d.RenderTargetView{}, d3d.RenderTargetView{}
+	r.retained.Release()
+	r.retained = nil
 	r.ctx.Flush()
 	err := r.swap.resizeBuffers(bufferCount, uint32(width), uint32(height), backBufferFormat, 0)
 	if err == nil {
@@ -412,7 +420,6 @@ func (r *Renderer) Resize(width, height int) error {
 		return err
 	}
 	r.width, r.height = width, height
-	r.check.good = 0
 	return nil
 }
 
@@ -434,7 +441,7 @@ func (r *Renderer) resizeTarget(width, height int) error {
 }
 
 // HasTarget reports whether the renderer can draw; false after a failed Resize.
-func (r *Renderer) HasTarget() bool { return r.rtv.P != nil }
+func (r *Renderer) HasTarget() bool { return r.target != nil || r.swapRTV.P != nil }
 
 // errNoTarget reports a Draw while a failed Resize left no render target.
 var errNoTarget = errors.New("render: no render target")
@@ -442,14 +449,10 @@ var errNoTarget = errors.New("render: no render target")
 // Draw renders the scene and presents it, or leaves it in the offscreen target.
 func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 	r.stats.GPU, r.stats.GPUFrame, r.stats.GPUValid = 0, 0, false
-	if r.rtv.P == nil {
+	if !r.HasTarget() {
 		return errNoTarget
 	}
 	r.submission++
-	verify := r.debugDamage == DamageDebugVerify && r.damageOn && r.target == nil
-	if verify {
-		r.withDevice(r.checkBuffer)
-	}
 	t0 := win.Ticks()
 	if err := r.draw(s, clear); err != nil {
 		r.dmg.invalidate(DamageInvalidate)
@@ -466,44 +469,26 @@ func (r *Renderer) Draw(s *Scene, clear [4]float32) error {
 	r.stats.Record = t1 - t0
 	r.stats.Present = 0
 	r.presented = false
+	if r.debugDamage == DamageDebugVerify && r.damageOn && !r.region.full && len(r.region.rects) > 0 {
+		r.verifyFrame(s, clear)
+	}
+	// Frames drawn in part go to the offscreen target or the retained
+	// texture, which hold them whatever Present does.
+	r.dmg.commit()
 	if r.target != nil {
 		if r.ds.Lost() {
 			return ErrDeviceLost
 		}
-		r.dmg.commit()
 		return nil
 	}
-	if r.damageOn && !r.region.full && len(r.region.rects) == 0 {
-		// The buffers already hold this frame.
-		r.dmg.commit()
+	if !r.presents() {
 		return nil
 	}
 	r.presented = true
-	var dirty []d3d.Rect
-	if r.damageOn && !r.region.full {
-		dirty = r.dirty
-	}
-	if verify {
-		r.drawReference(s, clear)
-	}
-	hr := r.swap.present1(1, 0, dirty)
+	hr := r.swap.present1(1, 0)
 	r.stats.Present = win.Ticks() - t1
-	if verify {
-		r.check.frames++
-		r.check.good++
-		if hr != 0 {
-			r.check.good = 0
-		}
-	}
 	r.occluded = uint32(hr) == dxgiStatusOccluded
-	// Dirty rects leave the rest of the buffer to the runtime's copy from the
-	// last presented one, so a frame that was not presented in full as asked
-	// leaves nothing to compare the next one with.
-	if hr == 0 {
-		r.dmg.commit()
-	} else {
-		r.dmg.invalidate(DamageInvalidate)
-	}
+	r.needPresent = hr != 0
 	if hr.Failed() {
 		if uint32(hr) == d3d.DXGI_ERROR_DEVICE_REMOVED || uint32(hr) == d3d.DXGI_ERROR_DEVICE_RESET {
 			r.ds.MarkLost()
@@ -531,6 +516,9 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 		} else {
 			r.stats.GPU, r.stats.GPUFrame, r.stats.GPUValid = sample.duration, sample.frame, sample.valid
 		}
+	}
+	if err := r.bindFrame(); err != nil {
+		return err
 	}
 	ctx.OMSetRenderTargets([]d3d.RenderTargetView{r.rtv}, d3d.DepthStencilView{})
 	timer, slot := r.timer, -1
@@ -634,9 +622,20 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 		}
 	}
 
+	ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
 	if slot >= 0 {
 		timer.finish(slot)
 		slot = -1
+	}
+	// Left out of GPU timing with Present, as SetGPUTiming documents. A
+	// snapshot reads the swap chain buffer, so it gets the frame too.
+	if r.drawsRetained() && (r.presents() || r.snapshot != nil) {
+		buf, err := r.swap.buffer()
+		if err != nil {
+			return err
+		}
+		ctx.CopyResource(buf, r.retained.tex)
+		buf.Release()
 	}
 	if f := r.snapshot; f != nil {
 		r.snapshot = nil
@@ -644,8 +643,66 @@ func (r *Renderer) draw(s *Scene, clear [4]float32) error {
 			f(img)
 		}
 	}
-	ctx.OMSetRenderTargets(nil, d3d.DepthStencilView{})
 	return nil
+}
+
+// bindFrame picks the view this frame is drawn into. A window keeps its frame
+// in the retained texture while damage tracking is on. A frame for which that
+// texture cannot be made is drawn whole into the swap chain, and the next
+// frame tries again.
+func (r *Renderer) bindFrame() error {
+	switch {
+	case r.target != nil:
+		r.rtv = r.target.rtv
+		return nil
+	case r.damageOn:
+		if t := r.retained; t == nil || t.Width != r.width || t.Height != r.height {
+			r.retained.Release()
+			r.retained = nil
+			t, err := NewTargetFormat(r.ds, r.width, r.height, backBufferFormat)
+			if err != nil {
+				if d3d.DeviceLost(err) || r.ds.Lost() {
+					return err
+				}
+				if !r.retainFailed {
+					log.Printf("fairy: drawing frames whole: retained frame: %v", err)
+				}
+				r.retainFailed = true
+				r.dmg.invalidate(DamageInvalidate)
+				r.rtv = r.swapRTV
+				return nil
+			}
+			r.retained, r.retainFailed = t, false
+			// A new texture holds no frame to draw over.
+			if r.dmg.havePrev {
+				r.dmg.invalidate(DamageInvalidate)
+			}
+		}
+		r.rtv = r.retained.rtv
+		return nil
+	default:
+		r.retained.Release()
+		r.retained = nil
+		r.rtv = r.swapRTV
+		return nil
+	}
+}
+
+func (r *Renderer) drawsRetained() bool { return r.retained != nil && r.rtv == r.retained.rtv }
+
+// Trim frees the frame a window keeps between draws; the next frame is drawn
+// whole.
+func (r *Renderer) Trim() {
+	r.retained.Release()
+	r.retained = nil
+	r.dmg.invalidate(DamageInvalidate)
+}
+
+// presents reports whether the frame just drawn goes to the screen: a window
+// whose damage tracking found no change keeps showing the last frame, unless
+// its last Present did not return S_OK.
+func (r *Renderer) presents() bool {
+	return !r.damageOn || r.region.full || len(r.region.rects) > 0 || r.needPresent
 }
 
 // planRegion works out which part of the target this frame draws.
@@ -653,12 +710,6 @@ func (r *Renderer) planRegion(s *Scene, top []int, clear [4]float32) {
 	r.region = damageResult{full: true, reason: DamageOff}
 	if r.damageOn {
 		r.region = r.dmg.compute(s, r.plan[:len(s.Layers)], top, r.width, r.height, clear, r.Atlas.Generation)
-		switch {
-		case r.region.full:
-		case r.snapshot != nil && r.target == nil:
-			// A swap chain buffer holds an older frame outside the region.
-			r.region = damageResult{full: true, reason: DamageSnapshot}
-		}
 	}
 	r.stats.DamageReason = ""
 	r.stats.Damage = image.Rect(0, 0, r.width, r.height)
@@ -704,11 +755,14 @@ func (r *Renderer) withDevice(f func()) {
 	f()
 }
 
-// backBuffer returns the texture the window draws into, and a function
+// backBuffer returns the texture the frame is drawn into, and a function
 // that lets it go.
 func (r *Renderer) backBuffer() (d3d.Texture2D, func()) {
-	if r.target != nil {
+	switch {
+	case r.target != nil:
 		return r.target.tex, func() {}
+	case r.drawsRetained():
+		return r.retained.tex, func() {}
 	}
 	buf, err := r.swap.buffer()
 	if err != nil {
@@ -718,7 +772,8 @@ func (r *Renderer) backBuffer() (d3d.Texture2D, func()) {
 }
 
 // SetGPUTiming enables asynchronous timing of renderer commands, excluding
-// Present, readback and work submitted by the app before Draw. Call between draws.
+// Present, the copy of the retained frame into the swap chain, readback and
+// work submitted by the app before Draw. Call between draws.
 func (r *Renderer) SetGPUTiming(enabled bool) {
 	if r.timer != nil {
 		r.timer.release()
@@ -786,11 +841,9 @@ func (r *Renderer) Release() {
 	r.ps.Release()
 	r.vs.Release()
 	r.staging.Release()
-	if r.target != nil {
-		r.target.Release()
-	} else {
-		r.rtv.Release()
-	}
+	r.target.Release()
+	r.retained.Release()
+	r.swapRTV.Release()
 	r.comp.release()
 	r.swap.release()
 	if r.ds != nil {

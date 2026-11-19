@@ -13,7 +13,6 @@ const (
 	DamageClear      = "clear"
 	DamageAtlas      = "atlas"
 	DamageInvalidate = "invalidate"
-	DamageSnapshot   = "snapshot"
 	DamageLarge      = "large"
 	DamageOff        = "off"
 )

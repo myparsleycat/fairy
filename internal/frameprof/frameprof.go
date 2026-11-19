@@ -57,8 +57,8 @@ var (
 	}()
 	// damage is FAIRY_DEBUG_DAMAGE: full turns damage tracking off, so every
 	// frame is drawn whole; show tints the part of each frame that was
-	// redrawn; verify logs when a window's buffer does not hold the frame
-	// presented from it.
+	// redrawn; verify logs when a frame drawn in part differs from the same
+	// frame drawn whole.
 	damage = os.Getenv("FAIRY_DEBUG_DAMAGE")
 )
 

@@ -3,7 +3,6 @@
 package render
 
 import (
-	"runtime"
 	"unsafe"
 
 	"github.com/myparsleycat/fairy/d3d"
@@ -87,18 +86,10 @@ type presentParameters struct {
 	ScrollOffset    unsafe.Pointer
 }
 
-// present1 presents with IDXGISwapChain1::Present1. With dirty rects, every
-// pixel inside them must have been drawn this frame and none outside them;
-// the runtime copies the rest from the previous buffer. No rects presents the
-// whole buffer.
-func (s swapChain) present1(sync, flags uint32, dirty []d3d.Rect) com.HRESULT {
+// present1 presents the whole buffer with IDXGISwapChain1::Present1.
+func (s swapChain) present1(sync, flags uint32) com.HRESULT {
 	var p presentParameters
-	if len(dirty) > 0 {
-		p.DirtyRectsCount, p.DirtyRects = uint32(len(dirty)), &dirty[0]
-	}
-	hr := com.HR(s.p, 22, uintptr(sync), uintptr(flags), uintptr(unsafe.Pointer(&p)))
-	runtime.KeepAlive(dirty)
-	return hr
+	return com.HR(s.p, 22, uintptr(sync), uintptr(flags), uintptr(unsafe.Pointer(&p)))
 }
 
 func (s swapChain) buffer() (d3d.Texture2D, error) {

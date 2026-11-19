@@ -383,7 +383,9 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		if wp == win.SIZE_MINIMIZED {
 			// Pixels stay in memory, so the textures upload again on restore.
 			w.releaseTextures()
-			w.redrawWhole()
+			if w.r != nil {
+				w.r.Trim()
+			}
 			return 0
 		}
 		w.onResize(int(win.LOWORD(lp)), int(win.HIWORD(lp)))
