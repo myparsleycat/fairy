@@ -1,11 +1,8 @@
 package fairy
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"runtime"
 	"syscall"
 	"testing"
@@ -93,16 +90,14 @@ func TestMainQuitDestroysOpenWindow(t *testing.T) {
 func TestAppWindowIsTopLevel(t *testing.T) {
 	// Message-only windows cannot be enumerated and get no broadcasts, such
 	// as TaskbarCreated.
-	app.instanceID = fmt.Sprintf("test.%d", os.Getpid())
-	defer func() { app.instanceID = "" }()
-	var hwnd, found win.HWND
+	var hwnd win.HWND
 	var listed bool
 	enum := syscall.NewCallback(func(h win.HWND, _ uintptr) uintptr {
 		listed = listed || h == hwnd
 		return 1
 	})
 	err := Main(func() error {
-		hwnd, found = app.hwnd, findInstanceWindow(app.instanceID)
+		hwnd = app.hwnd
 		xwin.EnumWindows(enum, nil)
 		return nil
 	})
@@ -111,48 +106,6 @@ func TestAppWindowIsTopLevel(t *testing.T) {
 	}
 	if !listed {
 		t.Error("the app window is not a top-level window")
-	}
-	if found != hwnd {
-		t.Errorf("instance lookup found %#x, want the app window %#x", found, hwnd)
-	}
-}
-
-const holdInstanceEnv = "FAIRY_TEST_HOLD_INSTANCE"
-
-// TestSingleInstanceTakesOverAfterFirstExits covers a first instance that never reaches Main, as one still starting
-// up or already shutting down: a further start waits for it instead of failing, and runs as the first instance once
-// it has exited.
-func TestSingleInstanceTakesOverAfterFirstExits(t *testing.T) {
-	if id := os.Getenv(holdInstanceEnv); id != "" {
-		first, err := SingleInstance(id, nil)
-		fmt.Println("held", first, err)
-		time.Sleep(time.Second)
-		os.Exit(0)
-	}
-
-	id := fmt.Sprintf("test.takeover.%d", os.Getpid())
-	child := exec.Command(os.Args[0], "-test.run=^TestSingleInstanceTakesOverAfterFirstExits$")
-	child.Env = append(os.Environ(), holdInstanceEnv+"="+id)
-	out, err := child.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := child.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = child.Wait() }()
-	line, err := bufio.NewReader(out).ReadString('\n')
-	if err != nil || line != "held true <nil>\n" {
-		t.Fatalf("child = %q, %v", line, err)
-	}
-
-	defer func() {
-		win.CloseHandle(app.mutex)
-		app.mutex, app.instanceID, app.onLaunch = 0, "", nil
-	}()
-	first, err := SingleInstance(id, nil)
-	if err != nil || !first {
-		t.Fatalf("SingleInstance after the first instance exited = %v, %v", first, err)
 	}
 }
 

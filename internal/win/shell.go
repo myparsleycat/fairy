@@ -336,10 +336,15 @@ func GetCurrentThreadId() uint32 {
 }
 
 // CreateMutex creates or opens a named mutex. existed reports whether another
-// process created it first.
-func CreateMutex(name string) (h HANDLE, existed bool, err error) {
+// process created it first. With owned, the calling thread owns a mutex it
+// creates; an existing one is opened without ownership.
+func CreateMutex(name string, owned bool) (h HANDLE, existed bool, err error) {
 	p, _ := syscall.UTF16PtrFromString(name)
-	r, _, e := pCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(p)))
+	var initialOwner uintptr
+	if owned {
+		initialOwner = 1
+	}
+	r, _, e := pCreateMutexW.Call(0, initialOwner, uintptr(unsafe.Pointer(p)))
 	if r == 0 {
 		return 0, false, e
 	}

@@ -68,7 +68,7 @@ if err != nil {
 }
 ```
 
-A further start waits up to 30 seconds while the first instance is starting up or shutting down, and runs as the first instance if that one exits meanwhile.
+The first instance takes further starts from `SingleInstance` on, also before `Main` runs; `onLaunch` receives them once `Main` starts, and they are lost if it never does. A start that arrives before `Main` brings the first instance's topmost visible window, such as a startup dialog, to the front. After `Main` returns, a further start waits up to 30 seconds and runs as the first instance if that one exits meanwhile. A first instance that ends without its UI, for example to show a startup error, calls `fairy.ReleaseSingleInstance()` first so later starts do not wait for it.
 
 `OnSessionEnd` registers cleanup for sign-out, restart and shutdown. It runs on the UI thread, and Windows may end the process as soon as it returns, before `Main` returns.
 

@@ -24,8 +24,6 @@ var app struct {
 	calls []appCall
 	quiet []appCall // like calls, but no window updates afterwards
 
-	onLaunch func(Launch)
-
 	onSessionEnd func() // guarded by mu
 }
 

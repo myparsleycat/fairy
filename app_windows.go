@@ -1,21 +1,17 @@
 package fairy
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"runtime"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	xwin "golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/myparsleycat/fairy/internal/apphost"
-	"github.com/myparsleycat/fairy/internal/com"
 	"github.com/myparsleycat/fairy/internal/frameprof"
 	"github.com/myparsleycat/fairy/internal/win"
 )
@@ -29,9 +25,7 @@ import (
 // message-only because those get no broadcasts, such as TaskbarCreated, and
 // cannot own the foreground, which tray menus need.
 type appPlat struct {
-	hwnd       win.HWND
-	instanceID string
-	mutex      win.HANDLE
+	hwnd win.HWND
 }
 
 func init() { apphost.HWND = func() win.HWND { return app.hwnd } }
@@ -72,7 +66,10 @@ func Main(start func() error) error {
 	if err := createAppWindow(); err != nil {
 		return err
 	}
+	instance.accepting.Store(true)
 	defer func() {
+		// Launches that arrive from here on wait for this process to exit or release its claim.
+		instance.accepting.Store(false)
 		app.mu.Lock()
 		app.closing = true
 		close(app.done)
@@ -113,12 +110,15 @@ func Main(start func() error) error {
 
 // Quit ends Main. It may be called from any goroutine.
 func Quit() {
+	// A launch taken from here on would run on a UI loop that is about to end.
+	instance.accepting.Store(false)
 	Go(func() { win.PostQuitMessage(0) })
 }
 
 // quitIfIdle ends Main once no window and no tray icon is left.
 func quitIfIdle() {
 	if !app.closing && len(windows) == 0 && apphost.Holds() == 0 {
+		instance.accepting.Store(false)
 		win.PostQuitMessage(0)
 	}
 }
@@ -130,21 +130,22 @@ func updateWindows() {
 	}
 }
 
-func createAppWindow() error {
-	class := "nahida.fairy.app"
-	if app.instanceID != "" {
-		class = instanceClass(app.instanceID)
-	}
+// createHiddenWindow creates a hidden top-level tool window of a class it registers on first use.
+func createHiddenWindow(class string, proc uintptr) (win.HWND, error) {
 	cls, _ := syscall.UTF16PtrFromString(class)
 	wc := win.WNDCLASSEXW{
 		Size:      uint32(unsafe.Sizeof(win.WNDCLASSEXW{})),
-		WndProc:   appProcPtr,
+		WndProc:   proc,
 		Instance:  win.GetModuleHandle(),
 		ClassName: cls,
 	}
-	win.RegisterClassEx(&wc) // already registered after a previous Main
+	win.RegisterClassEx(&wc) // fails harmlessly once the class is registered
 	const wsExToolWindow = 0x80
-	hwnd, err := win.CreateWindowEx(wsExToolWindow, cls, cls, win.WS_POPUP, 0, 0, 0, 0, 0, 0, win.GetModuleHandle(), 0)
+	return win.CreateWindowEx(wsExToolWindow, cls, cls, win.WS_POPUP, 0, 0, 0, 0, 0, 0, win.GetModuleHandle(), 0)
+}
+
+func createAppWindow() error {
+	hwnd, err := createHiddenWindow("nahida.fairy.app", appProcPtr)
 	if err != nil {
 		return fmt.Errorf("fairy: app window: %w", err)
 	}
@@ -170,18 +171,6 @@ func appProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 	case msgAppQuiet:
 		runQuietCalls()
 		return 0
-	case win.WM_COPYDATA:
-		cds := (*win.COPYDATASTRUCT)(com.Ptr(lp))
-		if cds.Data == launchMagic && app.onLaunch != nil {
-			var l Launch
-			if json.Unmarshal(unsafe.Slice((*byte)(com.Ptr(cds.Ptr)), cds.Size), &l) == nil {
-				// Reply first so the sending process can exit, then handle it.
-				f := app.onLaunch
-				Go(func() { f(l) })
-			}
-			return 1
-		}
-		return 0
 	case win.WM_CLOSE:
 		// Sent to top-level windows by taskkill and installers; the app window
 		// lives until Main returns.
@@ -199,67 +188,6 @@ func appProc(hwnd win.HWND, msg uint32, wp, lp uintptr) uintptr {
 		return h(wp, lp)
 	}
 	return win.DefWindowProc(hwnd, msg, wp, lp)
-}
-
-const launchMagic = 0x6775696c // "guil"
-
-func instanceClass(id string) string { return "nahida.fairy.instance." + id }
-
-func findInstanceWindow(id string) win.HWND { return win.FindWindowByClass(instanceClass(id)) }
-
-// instanceWait bounds how long a further process waits for the first one. The first process has no instance window
-// while it starts up before Main and while it shuts down after Main returns.
-const instanceWait = 30 * time.Second
-
-// SingleInstance makes the program run once per user session. Call it before
-// Main. In the first process it returns true, and onLaunch later receives the
-// arguments of every further start on the UI thread. In a further process it
-// forwards the launch to the first one, allows it to take the foreground, and
-// returns false; the caller should then exit. A further process waits while the
-// first one is not running Main, and returns true in its place once it has exited.
-func SingleInstance(id string, onLaunch func(Launch)) (bool, error) {
-	if id == "" {
-		return false, errors.New("fairy: SingleInstance needs an id")
-	}
-	name := `Local\nahida.fairy.` + id
-	h, existed, err := win.CreateMutex(name)
-	if err != nil {
-		return false, fmt.Errorf("fairy: single instance mutex: %w", err)
-	}
-	dir, _ := os.Getwd()
-	data, _ := json.Marshal(Launch{Args: os.Args, Dir: dir})
-	deadline := time.Now().Add(instanceWait)
-	for existed {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return false, errors.New("fairy: the running instance did not answer")
-		}
-		if target := findInstanceWindow(id); target != 0 {
-			win.AllowSetForegroundWindow(win.WindowProcessID(target))
-			timeoutMS := uint32((remaining + time.Millisecond - 1) / time.Millisecond)
-			cds := win.COPYDATASTRUCT{Data: launchMagic, Size: uint32(len(data)), Ptr: uintptr(unsafe.Pointer(&data[0]))}
-			reply, ok := win.SendMessageTimeout(target, win.WM_COPYDATA, 0, unsafe.Pointer(&cds), timeoutMS)
-			runtime.KeepAlive(data)
-			if ok && reply != 0 {
-				return false, nil
-			}
-		} else {
-			// The mutex is gone once the first process has exited, since this handle was the only other one.
-			win.CloseHandle(h)
-			h, existed, err = win.CreateMutex(name)
-			if err != nil {
-				return false, fmt.Errorf("fairy: single instance mutex: %w", err)
-			}
-			if !existed {
-				break
-			}
-		}
-		time.Sleep(min(100*time.Millisecond, time.Until(deadline)))
-	}
-	app.mutex = h
-	app.instanceID = id
-	app.onLaunch = onLaunch
-	return true, nil
 }
 
 var systemDark atomic.Bool
