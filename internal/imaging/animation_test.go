@@ -204,6 +204,7 @@ func TestWebPAnimatedLossyAlpha(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	expandVP8Range(frame)
 	canvas := image.NewNRGBA(image.Rect(0, 0, c.Width, c.Height))
 	draw.Draw(canvas, canvas.Bounds(), frame, frame.Bounds().Min, draw.Src)
 	want := resize(canvas, bound, 0)

@@ -187,7 +187,46 @@ func decodeWebPFrame(data []byte, w, h int) (image.Image, error) {
 	if c.Width != w || c.Height != h {
 		return nil, errors.New("fairy: WebP frame size differs from its bitstream")
 	}
-	return webp.Decode(r)
+	img, err := webp.Decode(r)
+	if err != nil {
+		return nil, err
+	}
+	expandVP8Range(img)
+	return img, nil
+}
+
+// vp8LumaRange and vp8ChromaRange map BT.601 limited-range levels to full range.
+var vp8LumaRange, vp8ChromaRange = func() (luma, chroma [256]uint8) {
+	for i := range 256 {
+		luma[i] = uint8(min(max(math.Round(float64(i-16)*255/219), 0), 255))
+		chroma[i] = uint8(min(max(math.Round(float64(i-128)*255/224+128), 0), 255))
+	}
+	return luma, chroma
+}()
+
+// expandVP8Range rewrites a lossy WebP's planes in place from VP8's BT.601 limited range, which image/color would
+// read as full-range JFIF and turn white into 235 and black into 16, to full range, so that the standard conversion
+// gives libwebp's colours. The planes stay YCbCr, which resampling reads row by row. Levels are rounded to 8 bits,
+// and chroma outside 16 to 240 is clipped.
+func expandVP8Range(img image.Image) {
+	var ycc *image.YCbCr
+	switch src := img.(type) {
+	case *image.YCbCr:
+		ycc = src
+	case *image.NYCbCrA:
+		ycc = &src.YCbCr
+	default:
+		return
+	}
+	for i, v := range ycc.Y {
+		ycc.Y[i] = vp8LumaRange[v]
+	}
+	for i, v := range ycc.Cb {
+		ycc.Cb[i] = vp8ChromaRange[v]
+	}
+	for i, v := range ycc.Cr {
+		ycc.Cr[i] = vp8ChromaRange[v]
+	}
 }
 
 func webpFrameReader(alpha, bits riffChunk, w, h int) (io.Reader, error) {

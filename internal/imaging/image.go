@@ -178,12 +178,15 @@ func (in Input) decode(bound Bound, keepBytes, animBytes int64) (*Bitmap, error)
 			animErr = err
 		}
 	}
-	src, _, err := image.Decode(bytes.NewReader(in.data))
+	src, format, err := image.Decode(bytes.NewReader(in.data))
 	if err != nil {
 		if animErr != nil {
 			return nil, animErr
 		}
 		return nil, err
+	}
+	if format == "webp" {
+		expandVP8Range(src)
 	}
 	return resize(src, in.srcBound(bound), in.meta.orient), nil
 }

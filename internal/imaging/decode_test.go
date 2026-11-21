@@ -92,7 +92,7 @@ func TestImageDecodeKeepsStillPixels(t *testing.T) {
 				}
 				if bound == (Bound{}) {
 					if !bytes.Equal(got.Pixels, want.Pixels) {
-						t.Fatal("natural size: pixels differ from Go's decoder")
+						t.Fatal("natural size: pixels differ from the reference decode")
 					}
 				} else if p := compositePSNR(got.Pixels, want.Pixels); p < 40 {
 					t.Fatalf("bound %+v: PSNR against x/image/draw is %.1f dB", bound, p)
@@ -104,9 +104,12 @@ func TestImageDecodeKeepsStillPixels(t *testing.T) {
 
 func referenceStill(t *testing.T, data []byte, bound Bound) *Bitmap {
 	t.Helper()
-	src, _, err := image.Decode(bytes.NewReader(data))
+	src, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if format == "webp" {
+		expandVP8Range(src)
 	}
 	b := src.Bounds()
 	if dw, dh := bound.Size(b.Dx(), b.Dy()); dw != b.Dx() || dh != b.Dy() {
