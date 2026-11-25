@@ -42,6 +42,27 @@ func (w *Window) hasNativeWindow() bool { return w.hwnd != 0 }
 // the window is gone.
 func (w *Window) wake() bool { return win.PostMessage(w.hwnd, msgWake, 0, 0) }
 
+// paintWaiting draws the other visible windows that wait for a frame.
+// GetMessage hands out WM_PAINT for one window at a time, always the same one
+// first, so a window that animates without pause would keep the others from
+// drawing at all.
+func paintWaiting(painted *Window) {
+	var waiting []*Window
+	for _, o := range windows {
+		if o != painted && o.needPaint && o.hl == nil && o.IsVisible() {
+			waiting = append(waiting, o)
+		}
+	}
+	for _, o := range waiting {
+		// A frame drawn before may have closed the window.
+		if windows[o.hwnd] != o || !o.needPaint {
+			continue
+		}
+		win.ValidateRect(o.hwnd)
+		o.renderFrame()
+	}
+}
+
 // requestPaint asks for the next frame: a WM_PAINT, or a scheduled frame for
 // a headless window.
 func (w *Window) requestPaint() {
@@ -358,6 +379,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		// Validate first: a frame that keeps animating invalidates again.
 		win.ValidateRect(w.hwnd)
 		w.renderFrame()
+		paintWaiting(w)
 		return 0
 	case win.WM_ERASEBKGND:
 		return 1

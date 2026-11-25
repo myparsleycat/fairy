@@ -129,3 +129,33 @@ func TestOnSessionEndRunsOnlyWhenTheSessionEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAnimatingWindowsAllDraw(t *testing.T) {
+	var counts [2]int
+	err := Main(func() error {
+		for i := range counts {
+			_, err := NewWindow(Options{
+				Title: fmt.Sprintf("animating %d", i), Width: 200, Height: 150,
+				View: func(*Cx) *El {
+					return Surface(func(SurfaceFrame) bool {
+						counts[i]++
+						return true
+					}).WFull().HFull()
+				},
+			})
+			if err != nil {
+				return err
+			}
+		}
+		time.AfterFunc(time.Second, Quit)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows hands out WM_PAINT to the same window first, which once kept
+	// the other animating window from ever drawing again.
+	if counts[0] < 10 || counts[1] < 10 {
+		t.Fatalf("frames drawn in a second = %v, want both windows animating", counts)
+	}
+}
