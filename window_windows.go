@@ -63,6 +63,35 @@ func paintWaiting(painted *Window) {
 	}
 }
 
+// maxTimersPerPaint bounds the timer messages dispatchDueTimers takes for one
+// window, so a timer shorter than a frame cannot hold the paint handler.
+const maxTimersPerPaint = 8
+
+// dispatchDueTimers runs the due timers of every Fairy window and its child
+// windows. GetMessage generates WM_TIMER only while no WM_PAINT waits, so a
+// window that animates without pause would keep the timers of the others,
+// such as a spinner's next frame or the caret blink, from firing. A
+// PeekMessage filtered to WM_TIMER returns them regardless.
+func dispatchDueTimers() {
+	var m win.MSG
+	for hwnd := range windows {
+		for range maxTimersPerPaint {
+			// A timer handler may have closed the window.
+			if windows[hwnd] == nil || !win.PeekMessage(&m, hwnd, win.WM_TIMER, win.WM_TIMER, win.PM_REMOVE) {
+				break
+			}
+			if m.Hwnd == hwnd && m.WParam == timerTouch {
+				// A long press runs the app's click handlers, which must not
+				// run inside a paint handler, so the main loop takes it. The
+				// filter would return the posted copy again.
+				win.PostMessage(m.Hwnd, m.Message, m.WParam, m.LParam)
+				break
+			}
+			win.DispatchMessage(&m)
+		}
+	}
+}
+
 // requestPaint asks for the next frame: a WM_PAINT, or a scheduled frame for
 // a headless window.
 func (w *Window) requestPaint() {
@@ -380,6 +409,7 @@ func (w *Window) handle(msg uint32, wp, lp uintptr) uintptr {
 		win.ValidateRect(w.hwnd)
 		w.renderFrame()
 		paintWaiting(w)
+		dispatchDueTimers()
 		return 0
 	case win.WM_ERASEBKGND:
 		return 1

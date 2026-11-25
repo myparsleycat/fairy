@@ -159,3 +159,36 @@ func TestAnimatingWindowsAllDraw(t *testing.T) {
 		t.Fatalf("frames drawn in a second = %v, want both windows animating", counts)
 	}
 }
+
+func TestTimersFireWhileAnotherWindowAnimates(t *testing.T) {
+	var spinner *Window
+	err := Main(func() error {
+		_, err := NewWindow(Options{
+			Title: "animating", Width: 200, Height: 150,
+			View: func(*Cx) *El {
+				return Surface(func(SurfaceFrame) bool { return true }).WFull().HFull()
+			},
+		})
+		if err != nil {
+			return err
+		}
+		spinner, err = NewWindow(Options{
+			Title: "spinner", Width: 200, Height: 150,
+			View: func(*Cx) *El { return Spinner().Size(48, 48) },
+		})
+		if err != nil {
+			return err
+		}
+		time.AfterFunc(time.Second, Quit)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A spinner asks for its next frame with a timer. WM_TIMER comes only
+	// when no WM_PAINT waits, which a window animating without pause always
+	// leaves behind, so the spinner once stopped after its first frame.
+	if spinner.frame < 10 {
+		t.Fatalf("spinner frames drawn in a second = %d, want it animating", spinner.frame)
+	}
+}
