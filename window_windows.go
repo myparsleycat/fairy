@@ -944,13 +944,13 @@ func (w *Window) newRenderer() (r *render.Renderer, err error) {
 	if w.hl != nil {
 		return render.NewOffscreenFormat(w.width, w.height, d3d.FORMAT_R8G8B8A8_UNORM)
 	}
-	composition := w.opts.DynamicBackdrop || w.backdrop != BackdropNone
+	composition := w.opts.Transparent || w.opts.DynamicBackdrop || w.backdrop != BackdropNone
 	r, err = render.New(uintptr(w.hwnd), w.width, w.height, composition)
 	if err == nil || !composition {
 		return r, err
 	}
 
-	log.Printf("fairy: window backdrop off: %v", err)
+	log.Printf("fairy: window transparency and backdrop off: %v", err)
 	w.opts.DynamicBackdrop = false
 	if w.backdrop != BackdropNone {
 		w.applyBackdrop(BackdropNone)

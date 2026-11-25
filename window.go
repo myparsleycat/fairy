@@ -47,6 +47,12 @@ type Options struct {
 	// when the backdrop is turned off, so the old frame does not stay visible.
 	// It has no effect where backdrops are not supported.
 	DynamicBackdrop bool
+	// Transparent makes the window clear to transparent instead of
+	// Background and carries the frame's alpha to the desktop through
+	// DirectComposition, so whatever lies below the window shows wherever
+	// elements leave it uncovered or translucent. When the transparent swap
+	// chain cannot be made, the window clears to Background.
+	Transparent bool
 	// Headless makes a window that is not on screen, to draw the UI inside
 	// another program such as a game. It renders into an offscreen texture
 	// whenever the view changes, at most about 60 frames per second, and

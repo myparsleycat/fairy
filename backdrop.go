@@ -32,7 +32,7 @@ func (w *Window) SetBackdrop(b Backdrop) error {
 		return errBackdrop
 	}
 	on := b != BackdropNone
-	if w.r != nil && !w.opts.DynamicBackdrop {
+	if w.r != nil && !w.opts.DynamicBackdrop && !w.opts.Transparent {
 		if err := w.r.SetTransparent(on); err != nil {
 			w.applyBackdrop(BackdropNone)
 			w.backdrop = BackdropNone
@@ -55,7 +55,7 @@ func (w *Window) clearColor() [4]float32 {
 	if w.hl != nil {
 		return [4]float32{}
 	}
-	if w.backdrop != BackdropNone && w.r != nil && w.r.Transparent() {
+	if (w.backdrop != BackdropNone || w.opts.Transparent) && w.r != nil && w.r.Transparent() {
 		return [4]float32{}
 	}
 	return w.opts.Background.arr(1)
