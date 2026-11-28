@@ -21,7 +21,8 @@ func Icon(v *svg.Vector) *El {
 
 // Spinner is a busy indicator: an open ring in the text color, drawn like the
 // Lucide loader-circle icon, that turns once a second while it is on screen.
-// Size it with Size; it defaults to the icon size.
+// Size it with Size; it defaults to the icon size. The ring is 20/24 of the
+// size across, and Stroke sets its line width.
 func Spinner() *El { return newEl(kindSpinner) }
 
 type arcProps struct {
@@ -48,11 +49,15 @@ func Arc(start, sweep float32) *El {
 	return e
 }
 
-// Stroke sets an Arc's line width in pixels. It defaults to an eighth of
-// the arc's size.
+// Stroke sets the line width in pixels of an Arc, where it defaults to an
+// eighth of the arc's size, or of a Spinner, where it defaults to a twelfth
+// of the spinner's size.
 func (e *El) Stroke(px float32) *El {
-	if e.arc != nil {
+	switch {
+	case e.arc != nil:
 		e.arc.stroke = max(px, 0)
+	case e.kind == kindSpinner:
+		e.arc = &arcProps{stroke: max(px, 0)}
 	}
 	return e
 }
@@ -155,15 +160,15 @@ func (w *Window) paintArc(e *El, box geom.Rect, color Color, clip [4]float32, op
 // a stroke of 2 in a 24-unit box: an arc of radius 9 from 3 o'clock clockwise
 // to 0.1π, turned once per second like CSS animate-spin. It asks for frames at
 // up to 60 per second rather than animating, so a spinner left on screen does
-// not repaint the window at the full refresh rate.
-func (w *Window) paintSpinner(box geom.Rect, color Color, clip [4]float32, opacity float32) {
+// not repaint the window at the full refresh rate. A Stroke width replaces the
+// line width and keeps the ring's outer edge in place.
+func (w *Window) paintSpinner(e *El, box geom.Rect, color Color, clip [4]float32, opacity float32) {
 	size := min(box.W, box.H)
 	if size <= 0 {
 		return
 	}
 	const (
 		extent = 20.0 / 24 // diameter plus stroke
-		stroke = 2.0 / 24
 		start  = math.Pi / 2
 		sweep  = 1.6 * math.Pi
 		step   = time.Second / 60
@@ -172,11 +177,15 @@ func (w *Window) paintSpinner(box geom.Rect, color Color, clip [4]float32, opaci
 	since := now.Sub(pulseEpoch)
 	turn := float64(since%time.Second) / float64(time.Second)
 	s, d := w.scale, size*extent
+	stroke := size * 2 / 24
+	if e.arc != nil && e.arc.stroke > 0 {
+		stroke = min(e.arc.stroke, d/2)
+	}
 	w.scene.Add(render.Prim{
 		Bounds: [4]float32{(box.X + (box.W-d)/2) * s, (box.Y + (box.H-d)/2) * s, d * s, d * s},
 		Clip:   clip,
 		Color:  color.arr(opacity),
-		Params: [4]float32{float32(start + 2*math.Pi*turn), sweep, size * stroke * s, 1},
+		Params: [4]float32{float32(start + 2*math.Pi*turn), sweep, stroke * s, 1},
 		Kind:   render.KindArc,
 	})
 	w.frameAt(now.Add(step - since%step))

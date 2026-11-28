@@ -315,7 +315,7 @@ func (e *El) BorderColorLive(l *Live[Color]) *El { e.liveProps().border = l; ret
 
 // SweepLive sets an Arc's sweep from l, in radians.
 func (e *El) SweepLive(l *Live[float32]) *El {
-	if e.arc != nil {
+	if e.kind == kindArc {
 		e.liveProps().sweep = l
 	}
 	return e

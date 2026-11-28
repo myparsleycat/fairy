@@ -299,7 +299,7 @@ func (w *Window) paint(e *El, opacity float32, inheritedColor Color) bool {
 	case kindIcon:
 		ok = w.paintIcon(e, content, textColor, devClip, opacity) && ok
 	case kindSpinner:
-		w.paintSpinner(content, textColor, devClip, opacity)
+		w.paintSpinner(e, content, textColor, devClip, opacity)
 	case kindArc:
 		w.paintArc(e, content, textColor, devClip, opacity)
 	case kindSurface:

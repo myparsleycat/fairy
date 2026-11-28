@@ -457,34 +457,56 @@ func Progress(value float64, opts ...Option) *fairy.El {
 // fills clockwise from 12 o'clock to value (0 to 1) over a Border track,
 // sweeping to a new value as Progress moves. The line is 2 pixels at every
 // size, like a Lucide icon's stroke, unless set with the StrokeWidth option.
-// The fill takes the element's color, MutedForeground unless set with Color;
-// the Label option names what is progressing.
+// The fill takes the element's color, MutedForeground unless set with Color.
+// Icon adds a centered icon, and Label names what is progressing.
 func ProgressCircle(value float64, size float32, opts ...Option) *fairy.El {
 	o := build(opts)
 	if size <= 0 {
 		size = 16
 	}
-	stroke := o.strokeWidth
-	if stroke <= 0 {
-		stroke = 2
-	}
+	stroke := ringStroke(o.strokeWidth)
 	v := min(max(value, 0), 1)
-	ring := func(sweep float32) *fairy.El {
-		return fairy.Arc(0, sweep).Stroke(stroke).Absolute().Inset(0)
-	}
-	e := fairy.Box(
-		ring(2*math.Pi).Color(current.Border),
-		ring(float32(v*2*math.Pi)).RoundCaps().Animate(motion.Fast),
-	).Size(size, size).Shrink(0).Color(current.MutedForeground).
-		Role(fairy.RoleProgressBar).RangeValue(math.Round(v*100), 0, 100, 1, nil)
-	if o.label != "" {
-		e.Label(o.label)
-	}
-	return e
+	fill := fairy.Arc(0, float32(v*2*math.Pi)).Stroke(stroke).RoundCaps().Animate(motion.Fast).Inset(0)
+	return circleIndicator(size, stroke, o.icon, fill).Label(o.label).
+		RangeValue(math.Round(v*100), 0, 100, 1, nil)
 }
 
 // Spinner is a busy indicator in the surrounding text color.
 func Spinner(size float32) *fairy.El { return fairy.Spinner().Size(size, size) }
+
+// IconSpinner shows indeterminate progress with a rotating ring around icon.
+// Size is the outside diameter in pixels (16 when size is not positive).
+// The line is 2 pixels at every size unless set with the StrokeWidth option,
+// matching ProgressCircle. The ring takes the element's color,
+// MutedForeground unless set with Color. Label names what is progressing.
+func IconSpinner(icon *svg.Vector, size float32, opts ...Option) *fairy.El {
+	o := build(opts)
+	if size <= 0 {
+		size = 16
+	}
+	stroke := ringStroke(o.strokeWidth)
+	// fairy.Spinner draws its ring 20/24 of its size across.
+	spinnerSize := size * 24 / 20
+	fill := fairy.Spinner().Size(spinnerSize, spinnerSize).Stroke(stroke).Inset((size - spinnerSize) / 2)
+	return circleIndicator(size, stroke, icon, fill).Label(o.label)
+}
+
+func ringStroke(px float32) float32 {
+	if px <= 0 {
+		return 2
+	}
+	return px
+}
+
+func circleIndicator(size, stroke float32, icon *svg.Vector, fill *fairy.El) *fairy.El {
+	e := fairy.Box(fairy.Arc(0, 2*math.Pi).Stroke(stroke).Color(current.Border).Inset(0), fill).
+		Size(size, size).Shrink(0).Center().Color(current.MutedForeground).Role(fairy.RoleProgressBar)
+	// Half the size, shrunk to two thirds of the opening inside a thick ring.
+	if s := min(size/2, (size-2*stroke)*2/3); icon != nil && s > 0 {
+		e.Child(fairy.Icon(icon).Size(s, s).Color(current.Foreground))
+	}
+	return e
+}
 
 // Skeleton is a placeholder block that pulses while content loads; size it
 // with W and H.

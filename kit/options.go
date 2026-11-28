@@ -135,7 +135,7 @@ func WithVariant(v Variant) Option { return func(o *options) { o.variant, o.vari
 // WithSize sets the size of a control.
 func WithSize(s Size) Option { return func(o *options) { o.size = s } }
 
-// Icon puts an icon before the label.
+// Icon puts an icon before the label, or in the center of a ProgressCircle.
 func Icon(v *svg.Vector) Option { return func(o *options) { o.icon = v } }
 
 // IconRight puts an icon after the label.
@@ -211,8 +211,9 @@ func Width(w float32) Option { return func(o *options) { o.width = w } }
 // DropdownMenu, below the room beside the trigger. The rows scroll.
 func MaxHeight(h float32) Option { return func(o *options) { o.maxHeight = h } }
 
-// StrokeWidth sets the line width of a ProgressCircle in pixels, in place of
-// its 2-pixel default. A width that is not positive keeps the default.
+// StrokeWidth sets the line width of a ProgressCircle or IconSpinner in
+// pixels, in place of its 2-pixel default. A width that is not positive keeps
+// the default.
 func StrokeWidth(px float32) Option { return func(o *options) { o.strokeWidth = px } }
 
 // AlignEnd lines a DropdownMenu's end edge up with its trigger's, as
